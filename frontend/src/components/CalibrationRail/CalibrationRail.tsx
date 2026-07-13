@@ -7,6 +7,12 @@ type CalibrationRailProps = {
   tolerance: number;
   fxNeutral?: number;
   planned?: number;
+  targetText?: string;
+  actualText?: string;
+  fxNeutralText?: string;
+  plannedText?: string;
+  deviationText?: string;
+  toleranceValueText?: string;
 };
 
 type MarkerKind = "actual" | "fxNeutral" | "planned";
@@ -39,23 +45,24 @@ function overflowSide(value: number, target: number) {
   return undefined;
 }
 
-function toleranceDescription(inputTolerance: number, displayedTolerance: number) {
+function toleranceDescription(inputTolerance: number, displayedTolerance: number, inputText?: string) {
   const displayed = displayedTolerance.toFixed(1);
+  const input = inputText ?? inputTolerance.toFixed(1);
   if (inputTolerance > HALF_RANGE) {
-    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${inputTolerance.toFixed(1)} 个百分点超出可见刻度，已按正负 ${displayed} 个百分点显示`;
+    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${input} 个百分点超出可见刻度，已按正负 ${displayed} 个百分点显示`;
   }
   if (inputTolerance < 0) {
-    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${inputTolerance.toFixed(1)} 个百分点已按 ${displayed} 个百分点显示`;
+    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${input} 个百分点已按 ${displayed} 个百分点显示`;
   }
-  return `允许偏离目标正负 ${displayed} 个百分点`;
+  return `允许偏离目标正负 ${input} 个百分点`;
 }
 
-function Marker({ kind, value, target }: { kind: MarkerKind; value: number; target: number }) {
+function Marker({ kind, value, target, valueText }: { kind: MarkerKind; value: number; target: number; valueText?: string }) {
   const side = overflowSide(value, target);
   const label = markerLabels[kind];
   const testId = kind === "fxNeutral" ? "fx-neutral-marker" : `${kind}-marker`;
   const overflowLabel = side
-    ? `${label}占比超出${side === "left" ? "左" : "右"}侧刻度，真实值 ${formatPercent(value)}`
+    ? `${label}占比超出${side === "left" ? "左" : "右"}侧刻度，真实值 ${valueText ?? formatPercent(value)}`
     : undefined;
 
   return (
@@ -78,9 +85,15 @@ export function CalibrationRail({
   tolerance,
   fxNeutral,
   planned,
+  targetText,
+  actualText,
+  fxNeutralText,
+  plannedText,
+  deviationText,
+  toleranceValueText,
 }: CalibrationRailProps) {
   const toleranceWidth = Math.min(HALF_RANGE, Math.max(0, tolerance));
-  const toleranceText = toleranceDescription(tolerance, toleranceWidth);
+  const toleranceText = toleranceDescription(tolerance, toleranceWidth, toleranceValueText);
   const bandLeft = markerPosition(target - toleranceWidth, target);
   const bandRight = markerPosition(target + toleranceWidth, target);
 
@@ -89,9 +102,9 @@ export function CalibrationRail({
       <header className={styles.header}>
         <div>
           <h3>{assetName}</h3>
-          <span className={styles.targetText}>目标 {formatPercent(target)}</span>
+          <span className={styles.targetText}>目标 {targetText ?? formatPercent(target)}</span>
         </div>
-        <strong className={styles.deviation}>{formatDeviation(actual - target)}</strong>
+        <strong className={styles.deviation}>{deviationText ?? formatDeviation(actual - target)}</strong>
       </header>
 
       <div className={styles.scaleLabels} aria-hidden="true">
@@ -108,25 +121,25 @@ export function CalibrationRail({
           data-testid="tolerance-band"
         />
         <span className={styles.targetLine} aria-hidden="true" />
-        <Marker kind="actual" value={actual} target={target} />
-        {fxNeutral === undefined ? null : <Marker kind="fxNeutral" value={fxNeutral} target={target} />}
-        {planned === undefined ? null : <Marker kind="planned" value={planned} target={target} />}
+        <Marker kind="actual" value={actual} target={target} valueText={actualText} />
+        {fxNeutral === undefined ? null : <Marker kind="fxNeutral" value={fxNeutral} target={target} valueText={fxNeutralText} />}
+        {planned === undefined ? null : <Marker kind="planned" value={planned} target={target} valueText={plannedText} />}
       </div>
 
       <p className={styles.toleranceDescription}>{toleranceText}</p>
 
       <div className={styles.values} aria-label="校准值">
         <div className={styles.valueActual}>
-          <span aria-hidden="true" />实际 {formatPercent(actual)}
+          <span aria-hidden="true" />实际 {actualText ?? formatPercent(actual)}
         </div>
         {fxNeutral === undefined ? null : (
           <div className={styles.valueFx}>
-            <span aria-hidden="true" />剔汇率 {formatPercent(fxNeutral)}
+            <span aria-hidden="true" />剔汇率 {fxNeutralText ?? formatPercent(fxNeutral)}
           </div>
         )}
         {planned === undefined ? null : (
           <div className={styles.valuePlanned}>
-            <span aria-hidden="true" />计划 {formatPercent(planned)}
+            <span aria-hidden="true" />计划 {plannedText ?? formatPercent(planned)}
           </div>
         )}
       </div>

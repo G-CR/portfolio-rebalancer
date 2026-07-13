@@ -2,7 +2,7 @@ import axe from "axe-core";
 import { screen } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 
-import { portfolioAnalyticsKey } from "../src/features/analytics/api";
+import { portfolioAnalyticsKey } from "../src/api/queryKeys";
 import { DashboardPage } from "../src/pages/DashboardPage";
 import { PnlPage } from "../src/pages/PnlPage";
 import { portfolioFixture } from "./fixtures";

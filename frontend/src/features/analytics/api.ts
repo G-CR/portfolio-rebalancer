@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiRequest } from "../../api/client";
+import { portfolioAnalyticsKey } from "../../api/queryKeys";
 import type { PortfolioAnalytics } from "../../api/types";
 
-export const portfolioAnalyticsKey = ["portfolio-analytics"] as const;
+export { portfolioAnalyticsKey } from "../../api/queryKeys";
 
 export function usePortfolioAnalytics() {
   return useQuery({

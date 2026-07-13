@@ -134,6 +134,7 @@ export interface PortfolioIncompleteItem {
 }
 
 export type HoldingCreate = Omit<Holding, "id" | "is_active" | "version">;
+export type HoldingUpdate = Partial<HoldingCreate>;
 
 export interface HoldingDefaults {
   fee_currency: string;

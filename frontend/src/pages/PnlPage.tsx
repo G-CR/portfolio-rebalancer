@@ -4,7 +4,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 
 import { ApiError } from "../api/client";
 import type { PortfolioIncompleteItem } from "../api/types";
-import { formatAmount, formatPercent, formatSignedAmount } from "../features/analytics/format";
+import { decimalNumber, decimalSign, formatAmount, formatPercent, formatSignedAmount } from "../features/analytics/format";
 import { usePortfolioAnalytics } from "../features/analytics/api";
 import styles from "./PnlPage.module.css";
 import { PageError } from "./PageState";
@@ -12,8 +12,14 @@ import { PageError } from "./PageState";
 type View = "cny" | "trade";
 
 function pnlState(value: string) {
-  const numeric = Number(value);
-  return { label: numeric < 0 ? "亏损" : numeric > 0 ? "盈利" : "持平", className: numeric < 0 ? styles.negative : numeric > 0 ? styles.positive : styles.neutral };
+  const sign = decimalSign(value);
+  return { label: sign < 0 ? "亏损" : sign > 0 ? "盈利" : "持平", className: sign < 0 ? styles.negative : sign > 0 ? styles.positive : styles.neutral };
+}
+
+function formatSignedCurrency(value: string, currency: string) {
+  const formatted = formatSignedAmount(value);
+  if (!/^[+−±]/.test(formatted)) return `${currency} ${formatted}`;
+  return `${formatted[0]} ${currency} ${formatted.slice(1)}`;
 }
 
 export function PnlPage() {
@@ -31,16 +37,18 @@ export function PnlPage() {
   const data = portfolio.data;
   if (data.decision.status === "setup") return <section className={styles.empty}><strong>尚无持仓盈亏</strong><p>添加持仓与有效市场数据后，这里将显示当前浮动盈亏。</p></section>;
 
-  const chartData = data.asset_classes.map((item) => ({ name: item.name, price: Number(item.price_effect), fx: Number(item.fx_effect) }));
+  const chartData = data.asset_classes.map((item) => ({
+    name: item.name,
+    price: decimalNumber(item.price_effect),
+    fx: decimalNumber(item.fx_effect),
+    priceText: formatSignedAmount(item.price_effect),
+    fxText: formatSignedAmount(item.fx_effect),
+  }));
   const totalPnlState = pnlState(data.unrealized_pnl);
   return (
     <section className={styles.page} aria-labelledby="pnl-title">
       <header className={styles.header}>
         <div><p>P&amp;L ANALYSIS</p><h2 id="pnl-title">盈亏分析</h2><span>当前持仓，不含已实现盈亏</span></div>
-        <div className={styles.segmented} role="group" aria-label="金额口径">
-          <button type="button" aria-pressed={view === "cny"} onClick={() => setView("cny")}>人民币</button>
-          <button type="button" aria-pressed={view === "trade"} onClick={() => setView("trade")}>交易币种</button>
-        </div>
       </header>
       <dl className={styles.metrics}>
         <div><dt>总成本</dt><dd>{formatAmount(data.cost_cny, 2)}<small>CNY</small></dd></div>
@@ -55,15 +63,25 @@ export function PnlPage() {
               <CartesianGrid stroke="var(--color-rule)" vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 10 }} />
               <YAxis tick={{ fontSize: 9 }} width={54} />
-              <Tooltip formatter={(value) => Number(value).toLocaleString("zh-CN")} />
+              <Tooltip formatter={(_value, name, item) => name === "价格影响" ? item.payload.priceText : item.payload.fxText} />
               <Bar dataKey="price" name="价格影响" fill="var(--color-actual)" stackId="pnl" />
               <Bar dataKey="fx" name="汇率影响" fill="var(--color-fx)" stackId="pnl" />
             </BarChart>
           </ResponsiveContainer>
         </div>
       </section>
+      <div className={styles.detailsHeading}>
+        <h3 id="pnl-details-title">持仓明细</h3>
+        <div className={styles.detailControls}>
+          <span>明细币种</span>
+          <div className={styles.segmented} role="group" aria-label="持仓明细币种">
+            <button type="button" aria-pressed={view === "cny"} onClick={() => setView("cny")}>人民币</button>
+            <button type="button" aria-pressed={view === "trade"} onClick={() => setView("trade")}>交易币种</button>
+          </div>
+        </div>
+      </div>
       <div className={styles.tableWrap}>
-        <table className={styles.table}>
+        <table className={styles.table} aria-labelledby="pnl-details-title">
           <thead><tr><th scope="col">标的 / 类别</th><th scope="col">成本</th><th scope="col">{view === "cny" ? "人民币市值" : "交易币种市值"}</th><th scope="col">浮动盈亏</th><th scope="col">收益率</th><th scope="col">价格影响</th><th scope="col">汇率影响</th></tr></thead>
           <tbody>{data.holdings.map((item) => {
             const assetClass = data.asset_classes.find((candidate) => candidate.id === item.asset_class_id);
@@ -72,8 +90,8 @@ export function PnlPage() {
             const market = view === "trade" ? item.market_value_trade_currency : item.market_value_cny;
             const pnl = view === "trade" ? item.unrealized_pnl_trade_currency : item.unrealized_pnl;
             const state = pnlState(pnl);
-            const amount = view === "trade" ? `${Number(pnl) >= 0 ? "+ " : "− "}${prefix}${formatAmount(String(Math.abs(Number(pnl))), 2)}` : formatSignedAmount(pnl);
-            return <tr key={item.holding_id}><td><strong>{item.symbol}</strong><span>{assetClass?.name}</span></td><td>{prefix}{formatAmount(cost, 2)}</td><td>{prefix}{formatAmount(market, 2)}</td><td><span className={`${styles.pnlValue} ${state.className}`}><small>{state.label}</small><span>{amount}</span></span></td><td>{formatPercent(item.unrealized_return, 2)}</td><td>{view === "trade" ? `${prefix}${formatSignedAmount(item.unrealized_pnl_trade_currency)}` : formatSignedAmount(item.price_effect)}</td><td>{view === "trade" ? "不适用" : formatSignedAmount(item.fx_effect)}</td></tr>;
+            const amount = view === "trade" ? formatSignedCurrency(pnl, item.trade_currency) : formatSignedAmount(pnl);
+            return <tr key={item.holding_id}><td><strong>{item.symbol}</strong><span>{assetClass?.name}</span></td><td>{prefix}{formatAmount(cost, 2)}</td><td>{prefix}{formatAmount(market, 2)}</td><td><span className={`${styles.pnlValue} ${state.className}`}><small>{state.label}</small><span>{amount}</span></span></td><td>{formatPercent(item.unrealized_return, 2)}</td><td>{view === "trade" ? formatSignedCurrency(item.unrealized_pnl_trade_currency, item.trade_currency) : formatSignedAmount(item.price_effect)}</td><td>{view === "trade" ? "不适用" : formatSignedAmount(item.fx_effect)}</td></tr>;
           })}</tbody>
         </table>
       </div>

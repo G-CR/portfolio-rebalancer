@@ -36,6 +36,29 @@ describe("DashboardPage", () => {
     expect(screen.getByText("590.42")).toBeInTheDocument();
   });
 
+  it("formats calibration percentage labels from exact decimal strings", async () => {
+    const exact = {
+      ...portfolioFixture,
+      tolerance: "0.0015",
+      asset_classes: portfolioFixture.asset_classes.map((item, index) => index === 0 ? {
+        ...item,
+        target_weight: "0.0015",
+        actual_weight: "0.0025",
+        fx_neutral_weight: "0.0035",
+        drift: "0.0010",
+      } : item),
+    };
+    renderWithProviders(<DashboardPage />, {
+      handlers: [http.get("/api/analytics/portfolio", () => HttpResponse.json(exact))],
+    });
+
+    expect(await screen.findByText("允许偏离 ±0.2pp")).toBeInTheDocument();
+    expect(screen.getByText("目标 0.2%")).toBeInTheDocument();
+    expect(screen.getByText("实际 0.3%")).toBeInTheDocument();
+    expect(screen.getByText("剔汇率 0.4%")).toBeInTheDocument();
+    expect(screen.getByText("+0.1pp")).toBeInTheDocument();
+  });
+
   it("presents a structured incomplete state with retry", async () => {
     renderWithProviders(<DashboardPage />, {
       handlers: [http.get("/api/analytics/portfolio", () => HttpResponse.json({ detail: {

@@ -20,6 +20,10 @@
 .sectionHeading h3 { margin-top: 2px; font-size: 14px; }
 .sectionHeading > span { color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
 .chart { width: 100%; height: 230px; margin-top: var(--space-3); }
+.detailsHeading { display: flex; min-height: 52px; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-2) var(--space-7); border-bottom: 1px solid var(--color-rule); }
+.detailsHeading h3 { margin: 0; font-size: 14px; }
+.detailControls { display: flex; align-items: center; gap: var(--space-3); }
+.detailControls > span { color: var(--color-muted); font-size: 10px; }
 .tableWrap { overflow-x: auto; }
 .table { width: 100%; min-width: 900px; border-collapse: collapse; table-layout: fixed; }
 .table th { height: 38px; padding: 0 var(--space-4); border-bottom: 1px solid var(--color-rule); color: var(--color-muted); font-size: 10px; text-align: right; }
@@ -43,4 +47,4 @@
 .incomplete ul { max-width: 520px; padding: 0; border-top: 1px solid var(--color-rule); list-style: none; }
 .incomplete li { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); font-family: var(--font-data); }
 .incomplete button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 36px; margin-top: var(--space-3); padding: 0 var(--space-3); border: 1px solid var(--color-actual); border-radius: 2px; background: var(--color-actual); color: white; cursor: pointer; }
-@media (max-width: 760px) { .header { align-items: stretch; flex-direction: column; padding: var(--space-4); } .segmented { width: 100%; } .metrics { grid-template-columns: 1fr; } .metrics div { border-right: 0; border-bottom: 1px solid var(--color-rule); padding-inline: var(--space-4); } .chartSection { padding: var(--space-4); } .footer { padding-inline: var(--space-4); } }
+@media (max-width: 760px) { .header { align-items: stretch; flex-direction: column; padding: var(--space-4); } .detailsHeading { align-items: stretch; flex-direction: column; padding: var(--space-3) var(--space-4); } .detailControls { justify-content: space-between; } .segmented { width: min(250px, 100%); } .metrics { grid-template-columns: 1fr; } .metrics div { border-right: 0; border-bottom: 1px solid var(--color-rule); padding-inline: var(--space-4); } .chartSection { padding: var(--space-4); } .footer { padding-inline: var(--space-4); } }

@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import type { PortfolioIncompleteItem } from "../api/types";
 import { CalibrationRail } from "../components/CalibrationRail/CalibrationRail";
 import { DecisionBanner } from "../features/analytics/DecisionBanner";
-import { formatDataTime, formatDecimal, statusLabel } from "../features/analytics/format";
+import { decimalNumber, formatDataTime, formatDecimal, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
 import { PnlBreakdown } from "../features/analytics/PnlBreakdown";
 import { PortfolioMetrics } from "../features/analytics/PortfolioMetrics";
 import { usePortfolioAnalytics } from "../features/analytics/api";
@@ -53,9 +53,21 @@ export function DashboardPage() {
       <DecisionBanner decision={data.decision} />
       <PortfolioMetrics portfolio={data} />
       <section className={styles.rails} aria-labelledby="allocation-title">
-        <div className={styles.sectionHeading}><div><p>ALLOCATION CALIBRATION</p><h2 id="allocation-title">资产配置校准</h2></div><span>允许偏离 ±{(Number(data.tolerance) * 100).toFixed(1)}pp</span></div>
+        <div className={styles.sectionHeading}><div><p>ALLOCATION CALIBRATION</p><h2 id="allocation-title">资产配置校准</h2></div><span>允许偏离 ±{formatPercentagePoints(data.tolerance)}</span></div>
         <div className={styles.railGrid}>
-          {data.asset_classes.map((item) => <CalibrationRail key={item.id} assetName={item.name} target={Number(item.target_weight) * 100} actual={Number(item.actual_weight) * 100} fxNeutral={Number(item.fx_neutral_weight) * 100} tolerance={Number(data.tolerance) * 100} />)}
+          {data.asset_classes.map((item) => <CalibrationRail
+            key={item.id}
+            assetName={item.name}
+            target={decimalNumber(item.target_weight) * 100}
+            actual={decimalNumber(item.actual_weight) * 100}
+            fxNeutral={decimalNumber(item.fx_neutral_weight) * 100}
+            tolerance={decimalNumber(data.tolerance) * 100}
+            targetText={formatPercent(item.target_weight)}
+            actualText={formatPercent(item.actual_weight)}
+            fxNeutralText={formatPercent(item.fx_neutral_weight)}
+            deviationText={formatSignedPercentagePoints(item.drift)}
+            toleranceValueText={formatPercentagePoints(data.tolerance).replace(/pp$/, "")}
+          />)}
         </div>
       </section>
       <PnlBreakdown portfolio={data} />

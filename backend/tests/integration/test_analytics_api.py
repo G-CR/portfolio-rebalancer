@@ -86,6 +86,113 @@ async def test_empty_portfolio_returns_setup_state(api_client) -> None:
     assert payload["data_inputs"] == []
 
 
+async def test_zero_quantity_holding_without_quote_returns_setup_but_remains_in_crud(
+    api_client,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[2]["id"]
+    holding = await _create_holding(
+        api_client,
+        asset_class_id,
+        symbol="ZERO",
+        account_name="zero account",
+        market="US",
+        trade_currency="USD",
+        quantity="0",
+    )
+
+    response = await api_client.get("/api/analytics/portfolio")
+    holdings_response = await api_client.get("/api/holdings")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"]["status"] == "setup"
+    assert response.json()["holdings"] == []
+    assert response.json()["data_inputs"] == []
+    assert [item["id"] for item in holdings_response.json()] == [holding["id"]]
+
+
+async def test_zero_quantity_holding_with_quote_still_returns_setup(
+    api_client,
+    db_session,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    await _create_holding(
+        api_client,
+        asset_class_id,
+        symbol="ZERO-CNY",
+        account_name="zero quoted account",
+        quantity="0",
+    )
+    await _add_quote(db_session, data_type="price", symbol="ZERO-CNY", value="10")
+    await db_session.commit()
+
+    response = await api_client.get("/api/analytics/portfolio")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"]["status"] == "setup"
+    assert response.json()["holdings"] == []
+    assert response.json()["data_inputs"] == []
+
+
+async def test_positive_position_with_zero_total_market_value_returns_setup(
+    api_client,
+    db_session,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    await _create_holding(
+        api_client,
+        asset_class_id,
+        symbol="ZERO-VALUE",
+        account_name="zero value account",
+        quantity="2",
+    )
+    await _add_quote(db_session, data_type="price", symbol="ZERO-VALUE", value="0")
+    await db_session.commit()
+
+    response = await api_client.get("/api/analytics/portfolio")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"]["status"] == "setup"
+    assert response.json()["asset_classes"] == []
+    assert response.json()["holdings"] == []
+
+
+async def test_mixed_portfolio_excludes_zero_quantity_holding_from_inputs_and_positions(
+    api_client,
+    db_session,
+) -> None:
+    asset_classes = (await api_client.get("/api/asset-classes")).json()
+    zero_holding = await _create_holding(
+        api_client,
+        asset_classes[2]["id"],
+        symbol="ZERO-USD",
+        account_name="zero USD account",
+        market="US",
+        trade_currency="USD",
+        quantity="0",
+    )
+    positive_holding = await _create_holding(
+        api_client,
+        asset_classes[0]["id"],
+        symbol="POSITIVE",
+        account_name="positive account",
+        quantity="2",
+    )
+    await _add_quote(db_session, data_type="price", symbol="POSITIVE", value="5")
+    await db_session.commit()
+
+    response = await api_client.get("/api/analytics/portfolio")
+    holdings_response = await api_client.get("/api/holdings")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["holding_id"] for item in payload["holdings"]] == [positive_holding["id"]]
+    assert [item["key"] for item in payload["data_inputs"]] == ["fx:CNY/CNY", "price:POSITIVE"]
+    assert {item["id"] for item in holdings_response.json()} == {
+        zero_holding["id"],
+        positive_holding["id"],
+    }
+
+
 async def test_portfolio_aggregates_positions_with_exact_weights_and_pnl_identity(
     api_client,
     db_session,

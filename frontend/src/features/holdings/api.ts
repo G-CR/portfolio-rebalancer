@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, apiRequest, jsonBody } from "../../api/client";
+import { portfolioAnalyticsKey } from "../../api/queryKeys";
 import type {
   ConfirmAdjustmentRequest,
   CorrectionPayload,
@@ -8,6 +9,7 @@ import type {
   CostAdjustmentPreview,
   Holding,
   HoldingCreate,
+  HoldingUpdate,
   PurchasePayload,
   RestorePayload,
   SellPayload,
@@ -44,7 +46,10 @@ export function useCreateHolding() {
       method: "POST",
       body: jsonBody(payload),
     }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+    },
   });
 }
 
@@ -54,7 +59,25 @@ export function useArchiveHolding() {
     mutationFn: (holdingId: string) => apiRequest<Holding>(`/api/holdings/${holdingId}/archive`, {
       method: "POST",
     }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+    },
+  });
+}
+
+export function useUpdateHolding() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ holdingId, payload }: { holdingId: string; payload: HoldingUpdate }) =>
+      apiRequest<Holding>(`/api/holdings/${holdingId}`, {
+        method: "PATCH",
+        body: jsonBody(payload),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+    },
   });
 }
 
@@ -108,11 +131,13 @@ export function useConfirmAdjustment<TPayload>(holdingId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(holdingId) });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
     },
     onError: (error) => {
       if (!isStaleCostPreview(error)) return;
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(holdingId) });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
     },
   });
 }

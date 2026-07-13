@@ -39,6 +39,7 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
                 and_(
                     Holding.asset_class_id == AssetClass.id,
                     Holding.is_active.is_(True),
+                    Holding.quantity > _ZERO,
                 ),
             )
             .where(AssetClass.is_active.is_(True))
@@ -141,6 +142,9 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
                     ),
                 )
             )
+
+        if totals["market_value_cny"] == _ZERO:
+            return _setup_response(tolerance)
 
         actual_weights = _exact_weights(
             [aggregate[item.id]["market_value_cny"] for item in asset_classes],

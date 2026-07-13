@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
+import { portfolioAnalyticsKey } from "../../api/queryKeys";
 import type { AssetClass, AssetClassUpdate } from "../../api/types";
 import { holdingsQueryRoot } from "../holdings/api";
 
@@ -24,6 +25,7 @@ export function useSaveAssetClasses() {
       queryClient.setQueryData(assetClassesQueryKey, items);
       void queryClient.invalidateQueries({ queryKey: assetClassesQueryKey });
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
     },
   });
 }
