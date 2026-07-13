@@ -1,7 +1,13 @@
+import React from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { AppShell } from "../components/AppShell/AppShell";
+import { AssetClassesPage } from "../pages/AssetClassesPage";
+import { HoldingsPage } from "../pages/HoldingsPage";
 import { APP_ROUTES } from "./navigation";
+
+// The production container currently compiles JSX in classic mode.
+(globalThis as typeof globalThis & { React?: typeof React }).React ??= React;
 
 function RouteWorkspace({
   title,
@@ -38,11 +44,18 @@ const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
-    children: APP_ROUTES.map((route) => ({
-      index: route.path === "/" ? true : undefined,
-      path: route.path === "/" ? undefined : route.path.slice(1),
-      element: <RouteWorkspace title={route.label} description={route.description} />,
-    })),
+    children: APP_ROUTES.map((route) => {
+      const element = route.path === "/allocation"
+        ? <AssetClassesPage />
+        : route.path === "/holdings"
+          ? <HoldingsPage />
+          : <RouteWorkspace title={route.label} description={route.description} />;
+      return {
+        index: route.path === "/" ? true : undefined,
+        path: route.path === "/" ? undefined : route.path.slice(1),
+        element,
+      };
+    }),
   },
 ]);
 

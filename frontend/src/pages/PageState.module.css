@@ -1,0 +1,11 @@
+.state {
+  min-height: 280px;
+  padding: var(--space-7);
+  border-top: 2px solid var(--color-ink);
+  background: var(--color-surface);
+  color: var(--color-muted);
+}
+
+.error {
+  color: var(--color-fx);
+}
