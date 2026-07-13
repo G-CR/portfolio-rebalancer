@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28,<1",
+    "hypothesis>=6.156.6",
     "pytest>=8.4,<9",
     "pytest-asyncio>=1.1,<2",
 ]
