@@ -31,6 +31,12 @@ engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, poolclass=NullPoo
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _dispose_test_engine() -> AsyncIterator[None]:
+    yield
+    await engine.dispose()
+
+
 async def _truncate_business_tables(session: AsyncSession) -> None:
     rows = await session.execute(
         text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")

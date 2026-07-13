@@ -26,7 +26,7 @@ services:
       timeout: 3s
       retries: 10
     volumes:
-      - secret_data:/app/secrets
+      - secret_data:/run/portfolio-secrets
 
   worker:
     build:
@@ -37,7 +37,7 @@ services:
       api:
         condition: service_healthy
     volumes:
-      - secret_data:/app/secrets
+      - secret_data:/run/portfolio-secrets
 
   db:
     image: postgres:17-alpine
