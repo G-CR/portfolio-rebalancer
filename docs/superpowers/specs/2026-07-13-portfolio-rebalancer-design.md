@@ -7,7 +7,7 @@
 | 项目名称 | Portfolio Rebalancer |
 | 文档版本 | V1.1 |
 | 日期 | 2026-07-13 |
-| 状态 | 待用户审阅 |
+| 状态 | 已确认 |
 | 部署方式 | Docker Desktop，本机访问 |
 | 默认时区 | Asia/Shanghai |
 
