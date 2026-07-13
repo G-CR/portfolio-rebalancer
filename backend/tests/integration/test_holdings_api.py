@@ -1,4 +1,11 @@
+import asyncio
+
+from httpx import Response
 import pytest
+from sqlalchemy import select
+
+from app.db.models import Holding
+from app.services import holdings as holdings_service
 
 
 @pytest.fixture
@@ -183,6 +190,80 @@ async def test_patch_holding_move_preferred_between_asset_classes(api_client) ->
     assert target_preferred_after["is_rebalance_preferred"] is False
 
 
+async def test_concurrent_opposite_preferred_moves_do_not_deadlock(
+    api_client, monkeypatch
+) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    first_class_id = classes[0]["id"]
+    second_class_id = classes[1]["id"]
+    first = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(first_class_id, symbol="SPY"),
+        )
+    ).json()
+    second = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                second_class_id,
+                symbol="QQQ",
+                name="Invesco QQQ Trust",
+                account_name="纳指账户",
+            ),
+        )
+    ).json()
+
+    original_get_active_holding = holdings_service._get_active_holding
+    both_source_rows_locked = asyncio.Event()
+    counter_lock = asyncio.Lock()
+    locked_source_count = 0
+
+    async def synchronize_after_source_lock(*args, **kwargs):
+        nonlocal locked_source_count
+        holding = await original_get_active_holding(*args, **kwargs)
+        async with counter_lock:
+            locked_source_count += 1
+            if locked_source_count == 2:
+                both_source_rows_locked.set()
+        try:
+            await asyncio.wait_for(both_source_rows_locked.wait(), timeout=1)
+        except TimeoutError:
+            pass
+        return holding
+
+    monkeypatch.setattr(
+        holdings_service,
+        "_get_active_holding",
+        synchronize_after_source_lock,
+    )
+
+    results = await asyncio.gather(
+        api_client.patch(
+            f"/api/holdings/{first['id']}",
+            json={"asset_class_id": second_class_id},
+        ),
+        api_client.patch(
+            f"/api/holdings/{second['id']}",
+            json={"asset_class_id": first_class_id},
+        ),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(result, Response) for result in results)
+    assert [result.status_code for result in results if isinstance(result, Response)] == [
+        200,
+        200,
+    ]
+
+    holdings = (await api_client.get("/api/holdings")).json()
+    for asset_class_id in (first_class_id, second_class_id):
+        class_holdings = [
+            item for item in holdings if item["asset_class_id"] == asset_class_id
+        ]
+        assert sum(item["is_rebalance_preferred"] for item in class_holdings) == 1
+
+
 async def test_create_holding_rejects_negative_numeric_fields_with_structured_error(
     api_client, asset_class_id
 ) -> None:
@@ -237,3 +318,63 @@ async def test_archive_zero_quantity_hiding_from_active_list(
     assert response.json()["id"] == holding_id
     assert response.json()["is_active"] is False
     assert (await api_client.get("/api/holdings")).json() == []
+
+
+async def test_archive_then_recreate_same_symbol_and_account(
+    api_client, asset_class_id, db_session
+) -> None:
+    payload = _holding_payload(asset_class_id, quantity="0")
+    archived = await api_client.post("/api/holdings", json=payload)
+    archived_id = archived.json()["id"]
+    archive_response = await api_client.post(
+        f"/api/holdings/{archived_id}/archive"
+    )
+
+    recreated = await api_client.post("/api/holdings", json=payload)
+
+    assert archive_response.status_code == 200
+    assert recreated.status_code == 201
+    assert recreated.json()["id"] != archived_id
+
+    rows = list(
+        await db_session.scalars(
+            select(Holding)
+            .where(
+                Holding.symbol == payload["symbol"],
+                Holding.account_name == payload["account_name"],
+            )
+            .order_by(Holding.created_at.asc())
+        )
+    )
+    assert [(str(row.id), row.is_active) for row in rows] == [
+        (archived_id, False),
+        (recreated.json()["id"], True),
+    ]
+
+
+async def test_duplicate_active_symbol_and_account_returns_structured_conflict(
+    api_client, asset_class_id
+) -> None:
+    payload = _holding_payload(asset_class_id)
+    first = await api_client.post("/api/holdings", json=payload)
+
+    duplicate = await api_client.post("/api/holdings", json=payload)
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "HOLDING_ALREADY_EXISTS"
+    assert len((await api_client.get("/api/holdings")).json()) == 1
+
+
+async def test_create_holding_missing_field_uses_fastapi_validation_detail(
+    api_client, asset_class_id
+) -> None:
+    payload = _holding_payload(asset_class_id)
+    del payload["symbol"]
+
+    response = await api_client.post("/api/holdings", json=payload)
+
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+    assert response.json()["detail"][0]["type"] == "missing"
+    assert response.json()["detail"][0]["loc"] == ["body", "symbol"]

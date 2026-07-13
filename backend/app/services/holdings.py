@@ -24,6 +24,7 @@ async def list_holdings(session: AsyncSession) -> list[Holding]:
 
 
 async def create_holding(session: AsyncSession, payload: HoldingCreate) -> Holding:
+    await _lock_active_asset_classes(session)
     await _get_active_asset_class(session, payload.asset_class_id)
     existing_holdings = await _get_active_holdings_for_asset_class(
         session,
@@ -63,6 +64,7 @@ async def create_holding(session: AsyncSession, payload: HoldingCreate) -> Holdi
 async def update_holding(
     session: AsyncSession, holding_id: UUID, payload: HoldingUpdate
 ) -> Holding:
+    await _lock_active_asset_classes(session)
     holding = await _get_active_holding(session, holding_id, lock=True)
     previous_asset_class_id = holding.asset_class_id
     updates = {
@@ -132,6 +134,7 @@ async def update_holding(
 
 
 async def archive_holding(session: AsyncSession, holding_id: UUID) -> Holding:
+    await _lock_active_asset_classes(session)
     holding = await _get_active_holding(session, holding_id, lock=True)
     if holding.quantity != 0:
         raise ServiceError(
@@ -146,6 +149,19 @@ async def archive_holding(session: AsyncSession, holding_id: UUID) -> Holding:
     await _enforce_preferred_holding(session, holding.asset_class_id)
     await session.flush()
     return holding
+
+
+async def _lock_active_asset_classes(session: AsyncSession) -> None:
+    # Holding writes can affect preferred rows in multiple classes. Locking the
+    # small active class set first gives every write path one global lock order.
+    list(
+        await session.scalars(
+            select(AssetClass.id)
+            .where(AssetClass.is_active.is_(True))
+            .order_by(AssetClass.id.asc())
+            .with_for_update()
+        )
+    )
 
 
 async def _get_active_asset_class(

@@ -67,7 +67,13 @@ class AssetClass(Base):
 class Holding(Base):
     __tablename__ = "holdings"
     __table_args__ = (
-        UniqueConstraint("symbol", "account_name", name="uq_holdings_symbol_account_name"),
+        Index(
+            "uq_holdings_active_symbol_account_name",
+            "symbol",
+            "account_name",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
         Index(
             "uq_holdings_active_preferred_asset_class",
             "asset_class_id",

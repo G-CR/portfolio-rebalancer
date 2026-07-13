@@ -36,7 +36,7 @@ async def replace_asset_classes(
         await session.scalars(
             select(AssetClass)
             .where(AssetClass.is_active.is_(True))
-            .order_by(AssetClass.display_order.asc(), AssetClass.created_at.asc())
+            .order_by(AssetClass.id.asc())
             .with_for_update()
         )
     )
@@ -57,6 +57,18 @@ async def replace_asset_classes(
             "ASSET_CLASS_NAME_CONFLICT",
             "Active asset class names must be unique.",
         )
+
+    for item in updates:
+        if item.target_weight < 0 or item.target_weight > 1:
+            raise ServiceError(
+                422,
+                "TARGET_WEIGHT_OUT_OF_RANGE",
+                "Each target weight must be between 0 and 1 inclusive.",
+                {
+                    "asset_class_id": str(item.id),
+                    "target_weight": format(item.target_weight, "f"),
+                },
+            )
 
     actual_total = sum((item.target_weight for item in updates), start=Decimal("0"))
     if actual_total != Decimal("1"):

@@ -42,6 +42,42 @@ async def test_asset_class_update_rejects_total_other_than_one(api_client) -> No
     assert after == classes
 
 
+async def test_asset_class_update_rejects_negative_target_weight_atomically(
+    api_client,
+) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    payload = [
+        {**item, "target_weight": "-0.10000000" if index == 0 else item["target_weight"]}
+        for index, item in enumerate(classes)
+    ]
+
+    response = await api_client.put("/api/asset-classes", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "TARGET_WEIGHT_OUT_OF_RANGE"
+    assert response.json()["detail"]["asset_class_id"] == classes[0]["id"]
+    assert response.json()["detail"]["target_weight"] == "-0.10000000"
+    assert (await api_client.get("/api/asset-classes")).json() == classes
+
+
+async def test_asset_class_update_rejects_target_weight_above_one_atomically(
+    api_client,
+) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    payload = [
+        {**item, "target_weight": "1.10000000" if index == 0 else item["target_weight"]}
+        for index, item in enumerate(classes)
+    ]
+
+    response = await api_client.put("/api/asset-classes", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "TARGET_WEIGHT_OUT_OF_RANGE"
+    assert response.json()["detail"]["asset_class_id"] == classes[0]["id"]
+    assert response.json()["detail"]["target_weight"] == "1.10000000"
+    assert (await api_client.get("/api/asset-classes")).json() == classes
+
+
 async def test_asset_class_update_replaces_all_rows(api_client) -> None:
     classes = (await api_client.get("/api/asset-classes")).json()
     payload = [

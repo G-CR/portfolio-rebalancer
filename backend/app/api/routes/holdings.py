@@ -73,7 +73,10 @@ async def _run_write(
 
 def _integrity_error_detail(exc: IntegrityError) -> dict[str, object] | None:
     message = str(exc.orig)
-    if "uq_holdings_symbol_account_name" in message:
+    if (
+        "uq_holdings_active_symbol_account_name" in message
+        or "uq_holdings_symbol_account_name" in message
+    ):
         return {
             "status_code": 409,
             "detail": {
