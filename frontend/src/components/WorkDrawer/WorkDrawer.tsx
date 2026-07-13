@@ -1,5 +1,8 @@
 import { X } from "lucide-react";
-import { useEffect, useRef, type PropsWithChildren } from "react";
+import { useEffect, useId, useRef, type PropsWithChildren } from "react";
+import { createPortal } from "react-dom";
+
+import { canRestoreFocus, isTopDrawer, registerDrawer } from "./drawerStack";
 
 type WorkDrawerProps = PropsWithChildren<{
   open: boolean;
@@ -8,16 +11,11 @@ type WorkDrawerProps = PropsWithChildren<{
   footer?: React.ReactNode;
 }>;
 
-const focusableSelector = [
-  "button:not([disabled])",
-  "a[href]",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "[tabindex]:not([tabindex='-1'])",
-].join(",");
-
 export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawerProps) {
+  const reactId = useId();
+  const drawerId = `work-drawer-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const titleId = `${drawerId}-title`;
+  const layerRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -29,61 +27,58 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
   useEffect(() => {
     if (!open) return;
     previousFocus.current = document.activeElement as HTMLElement | null;
-    const previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const layer = layerRef.current;
     const drawer = drawerRef.current;
-    const firstFocusable = drawer?.querySelector<HTMLElement>(focusableSelector);
-    firstFocusable?.focus();
+    if (!layer || !drawer) return;
 
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab" || !drawer) return;
-      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector));
-      const first = focusable[0];
-      const last = focusable.at(-1);
-      if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
+    const unregister = registerDrawer({
+      id: drawerId,
+      layer,
+      panel: drawer,
+      close: () => onCloseRef.current(),
+    });
 
-    document.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousBodyOverflow;
-      previousFocus.current?.focus();
+      unregister();
+      if (canRestoreFocus(previousFocus.current)) previousFocus.current?.focus();
     };
-  }, [open]);
+  }, [drawerId, open]);
 
   if (!open) return null;
 
-  return (
-    <div className="work-drawer-layer">
-      <div className="work-drawer-backdrop" aria-hidden="true" onClick={onClose} />
+  return createPortal(
+    <div ref={layerRef} className="work-drawer-layer" data-work-drawer-layer={drawerId}>
+      <div
+        className="work-drawer-backdrop"
+        aria-hidden="true"
+        onClick={() => {
+          if (isTopDrawer(drawerId)) onCloseRef.current();
+        }}
+      />
       <section
         ref={drawerRef}
         className="work-drawer"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="work-drawer-title"
+        aria-labelledby={titleId}
       >
         <header className="work-drawer__header">
-          <h2 id="work-drawer-title">{title}</h2>
-          <button className="work-drawer__close" type="button" aria-label="关闭工作抽屉" onClick={onClose}>
+          <h2 id={titleId}>{title}</h2>
+          <button
+            className="work-drawer__close"
+            type="button"
+            aria-label="关闭工作抽屉"
+            onClick={() => {
+              if (isTopDrawer(drawerId)) onCloseRef.current();
+            }}
+          >
             <X size={18} aria-hidden="true" />
           </button>
         </header>
         <div className="work-drawer__body">{children}</div>
         {footer ? <footer className="work-drawer__footer">{footer}</footer> : null}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
