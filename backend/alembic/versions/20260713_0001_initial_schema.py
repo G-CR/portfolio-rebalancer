@@ -73,6 +73,7 @@ def upgrade() -> None:
             "source",
             "market_time",
             name="uq_market_data_source_key",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

@@ -4,9 +4,9 @@ from collections.abc import AsyncIterator
 from httpx import ASGITransport, AsyncClient
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
-from app.db.session import SessionFactory
 from app.main import app
 
 BUSINESS_TABLES = (
@@ -22,6 +22,13 @@ BUSINESS_TABLES = (
     "holdings",
     "asset_classes",
 )
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://portfolio:portfolio@db:5432/portfolio",
+)
+engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, poolclass=NullPool)
+SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _truncate_business_tables(session: AsyncSession) -> None:

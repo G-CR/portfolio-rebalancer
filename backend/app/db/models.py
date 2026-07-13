@@ -96,6 +96,7 @@ class Holding(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    __mapper_args__ = {"version_id_col": version}
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -152,6 +153,7 @@ class MarketData(Base):
             "source",
             "market_time",
             name="uq_market_data_source_key",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
