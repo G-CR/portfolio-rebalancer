@@ -12,7 +12,7 @@ services:
     build:
       context: ./backend
       target: development
-    command: uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: sh -c "uv run alembic upgrade head && uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"
     depends_on:
       db:
         condition: service_healthy
@@ -34,7 +34,7 @@ services:
       target: development
     command: sleep infinity
     depends_on:
-      db:
+      api:
         condition: service_healthy
     volumes:
       - secret_data:/app/secrets
