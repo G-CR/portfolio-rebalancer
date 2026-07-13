@@ -6,6 +6,7 @@ from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
+from alembic.util import CommandError
 import pytest
 from sqlalchemy import select
 from sqlalchemy import text
@@ -191,3 +192,96 @@ async def test_upgrade_from_0001_normalizes_settings_singleton() -> None:
             assert settings[0].allow_fx is True
     finally:
         await _run_alembic_upgrade("head")
+
+
+async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes(
+    db_session,
+) -> None:
+    asset_class = AssetClass(
+        name="Equity",
+        target_weight=Decimal("1"),
+        display_order=1,
+    )
+    archived = Holding(
+        asset_class=asset_class,
+        symbol="SPY",
+        name="Archived SPDR S&P 500 ETF",
+        market="NYSEARCA",
+        account_name="Brokerage",
+        trade_currency="USD",
+        quantity=Decimal("0"),
+        average_cost_price=Decimal("500"),
+        cost_fx_to_cny=Decimal("7.2"),
+        baseline_fx_to_cny=Decimal("7.2"),
+        lot_size=Decimal("1"),
+        quantity_precision=0,
+        is_rebalance_preferred=False,
+        is_active=False,
+    )
+    recreated = Holding(
+        asset_class=asset_class,
+        symbol="SPY",
+        name="Recreated SPDR S&P 500 ETF",
+        market="NYSEARCA",
+        account_name="Brokerage",
+        trade_currency="USD",
+        quantity=Decimal("10"),
+        average_cost_price=Decimal("510"),
+        cost_fx_to_cny=Decimal("7.1"),
+        baseline_fx_to_cny=Decimal("7.2"),
+        lot_size=Decimal("1"),
+        quantity_precision=0,
+        is_rebalance_preferred=True,
+    )
+    db_session.add_all([archived, recreated])
+    await db_session.commit()
+
+    with pytest.raises(
+        CommandError,
+        match="cannot downgrade 20260713_0003 without discarding holding history",
+    ):
+        await _run_alembic_downgrade("20260713_0002")
+
+    revision = await db_session.scalar(text("SELECT version_num FROM alembic_version"))
+    active_identity_index = await db_session.scalar(
+        text(
+            """
+            SELECT indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = 'holdings'
+              AND indexname = 'uq_holdings_active_symbol_account_name'
+            """
+        )
+    )
+    old_constraint_count = await db_session.scalar(
+        text(
+            """
+            SELECT count(*)
+            FROM pg_constraint
+            WHERE conname = 'uq_holdings_symbol_account_name'
+            """
+        )
+    )
+    rows = (
+        await db_session.execute(
+            text(
+                """
+                SELECT id, name, is_active
+                FROM holdings
+                WHERE id IN (:archived_id, :recreated_id)
+                ORDER BY is_active ASC
+                """
+            ),
+            {"archived_id": archived.id, "recreated_id": recreated.id},
+        )
+    ).mappings().all()
+
+    assert revision == "20260713_0003"
+    assert active_identity_index is not None
+    assert "WHERE is_active" in active_identity_index
+    assert old_constraint_count == 0
+    assert [(row["name"], row["is_active"]) for row in rows] == [
+        ("Archived SPDR S&P 500 ETF", False),
+        ("Recreated SPDR S&P 500 ETF", True),
+    ]
