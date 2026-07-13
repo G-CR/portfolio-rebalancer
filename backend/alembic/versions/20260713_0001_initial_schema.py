@@ -16,7 +16,6 @@ branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
 money_precision = sa.Numeric(28, 12)
-default_settings_id = "00000000-0000-0000-0000-000000000001"
 
 
 def upgrade() -> None:
@@ -129,12 +128,7 @@ def upgrade() -> None:
 
     op.create_table(
         "settings",
-        sa.Column(
-            "id",
-            sa.Uuid(),
-            nullable=False,
-            server_default=sa.text(f"'{default_settings_id}'::uuid"),
-        ),
+        sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("refresh_hour", sa.Integer(), nullable=False),
         sa.Column("refresh_minute", sa.Integer(), nullable=False),
         sa.Column("provider_priority", sa.JSON(), nullable=False),
@@ -153,10 +147,6 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
-        ),
-        sa.CheckConstraint(
-            f"id = '{default_settings_id}'::uuid",
-            name="ck_settings_singleton_id",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_settings")),
     )

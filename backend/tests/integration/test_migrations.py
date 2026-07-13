@@ -1,11 +1,39 @@
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+from uuid import UUID
 
+from alembic import command
+from alembic.config import Config
 import pytest
+from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
-from app.db.models import AssetClass, Holding, MarketData
+from app.db.models import AssetClass, DEFAULT_SETTINGS_ID, Holding, MarketData, Setting
+
+
+MIGRATION_TEST_ENGINE = create_async_engine(
+    "postgresql+asyncpg://portfolio:portfolio@db:5432/portfolio",
+    pool_pre_ping=True,
+    poolclass=NullPool,
+)
+MigrationSessionFactory = async_sessionmaker(MIGRATION_TEST_ENGINE, expire_on_commit=False)
+
+
+def _alembic_config() -> Config:
+    return Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+
+
+async def _run_alembic_upgrade(revision: str) -> None:
+    await asyncio.to_thread(command.upgrade, _alembic_config(), revision)
+
+
+async def _run_alembic_downgrade(revision: str) -> None:
+    await asyncio.to_thread(command.downgrade, _alembic_config(), revision)
 
 
 async def test_initial_migration_creates_core_tables(db_session) -> None:
@@ -91,3 +119,75 @@ async def test_market_data_duplicate_null_time_key_is_rejected(db_session) -> No
         await db_session.commit()
 
     await db_session.rollback()
+
+
+async def test_upgrade_from_0001_normalizes_settings_singleton() -> None:
+    chosen_id = UUID("00000000-0000-0000-0000-0000000000aa")
+    extra_id = UUID("00000000-0000-0000-0000-0000000000bb")
+
+    try:
+        await _run_alembic_downgrade("20260713_0001")
+
+        async with MigrationSessionFactory() as session:
+            await session.execute(text("TRUNCATE TABLE settings CASCADE"))
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO settings (
+                        id,
+                        refresh_hour,
+                        refresh_minute,
+                        provider_priority,
+                        default_tolerance,
+                        minimum_trade_amount_cny,
+                        allow_sell,
+                        allow_fx,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES
+                    (
+                        :chosen_id,
+                        9,
+                        15,
+                        '["chosen"]'::json,
+                        0.031250000000,
+                        888.123456789012,
+                        false,
+                        true,
+                        TIMESTAMPTZ '2026-07-13 01:00:00+00',
+                        TIMESTAMPTZ '2026-07-13 01:05:00+00'
+                    ),
+                    (
+                        :extra_id,
+                        10,
+                        45,
+                        '["extra"]'::json,
+                        0.050000000000,
+                        999.000000000000,
+                        true,
+                        false,
+                        TIMESTAMPTZ '2026-07-13 02:00:00+00',
+                        TIMESTAMPTZ '2026-07-13 02:05:00+00'
+                    )
+                    """
+                ),
+                {"chosen_id": chosen_id, "extra_id": extra_id},
+            )
+            await session.commit()
+
+        await _run_alembic_upgrade("head")
+
+        async with MigrationSessionFactory() as session:
+            settings = list(await session.scalars(select(Setting)))
+
+            assert len(settings) == 1
+            assert settings[0].id == DEFAULT_SETTINGS_ID
+            assert (settings[0].refresh_hour, settings[0].refresh_minute) == (9, 15)
+            assert settings[0].provider_priority == ["chosen"]
+            assert settings[0].default_tolerance == Decimal("0.031250000000")
+            assert settings[0].minimum_trade_amount_cny == Decimal("888.123456789012")
+            assert settings[0].allow_sell is False
+            assert settings[0].allow_fx is True
+    finally:
+        await _run_alembic_upgrade("head")

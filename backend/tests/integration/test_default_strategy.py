@@ -106,6 +106,21 @@ async def test_default_strategy_concurrent_seed_is_idempotent(db_session) -> Non
     ]
 
 
+async def test_seed_default_strategy_respects_caller_rollback(db_session) -> None:
+    with pytest.raises(RuntimeError, match="rollback"):
+        async with db_session.begin():
+            await seed_default_strategy(db_session)
+            raise RuntimeError("rollback")
+
+    asset_class_count = await db_session.scalar(
+        select(func.count()).select_from(AssetClass)
+    )
+    settings_count = await db_session.scalar(select(func.count()).select_from(Setting))
+
+    assert asset_class_count == 0
+    assert settings_count == 0
+
+
 async def test_settings_singleton_rejects_non_default_id(db_session) -> None:
     db_session.add(
         Setting(
