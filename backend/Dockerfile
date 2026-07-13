@@ -18,7 +18,7 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY tests ./tests
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "uv run alembic upgrade head && exec uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"]
 
 FROM base AS runtime
 
@@ -30,4 +30,4 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "uv run alembic upgrade head && exec uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"]
