@@ -173,6 +173,10 @@ class RestorePreviewRequest(BaseModel):
     note: str | None = None
 
 
+class RestoreConfirmPayload(RestorePreviewRequest):
+    adjustment_id: UUID
+
+
 class CostAdjustmentConfirmRequest(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 

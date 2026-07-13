@@ -1,6 +1,7 @@
 from decimal import Decimal
 from uuid import UUID
 
+import pytest
 from sqlalchemy import select
 
 from app.db.models import CostAdjustment, Holding, HoldingDefault
@@ -208,6 +209,81 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
     assert rows == []
 
 
+@pytest.mark.parametrize(
+    ("operation", "payload", "expected_fields"),
+    [
+        ("purchase", {"quantity": "1"}, {"payload.price", "payload.fx"}),
+        (
+            "sell",
+            {"quantity": "1", "price": "500", "fx": "7.1"},
+            {"payload.price", "payload.fx"},
+        ),
+        (
+            "manual_correction",
+            {
+                "quantity": "not-a-number",
+                "average_cost_price": "480",
+                "cost_fx_to_cny": "7.10",
+                "note": "对齐券商月结单",
+            },
+            {"payload.quantity"},
+        ),
+    ],
+)
+async def test_confirm_rejects_malformed_operation_payload_with_structured_errors(
+    api_client,
+    db_session,
+    operation: str,
+    payload: dict[str, object],
+    expected_fields: set[str],
+) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/confirm",
+        json={
+            "expected_version": spy_holding["version"],
+            "operation": operation,
+            "payload": payload,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "INVALID_COST_ADJUSTMENT_PAYLOAD"
+    assert detail["message"] == "Cost adjustment payload is invalid for the operation."
+    assert {error["field"] for error in detail["errors"]} == expected_fields
+
+    holding = await db_session.scalar(
+        select(Holding).where(Holding.id == UUID(spy_holding["id"]))
+    )
+    assert holding is not None
+    assert holding.version == 1
+    assert list(await db_session.scalars(select(CostAdjustment))) == []
+
+
+async def test_stale_version_wins_over_malformed_confirm_payload(api_client, db_session) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+    patch = await api_client.patch(
+        f"/api/holdings/{spy_holding['id']}",
+        json={"quantity": "11"},
+    )
+    assert patch.status_code == 200
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/confirm",
+        json={
+            "expected_version": spy_holding["version"],
+            "operation": "purchase",
+            "payload": {"quantity": "not-a-number"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "STALE_COST_PREVIEW"
+    assert list(await db_session.scalars(select(CostAdjustment))) == []
+
+
 async def test_sell_confirm_preserves_average_cost_and_cost_fx(api_client, db_session) -> None:
     spy_holding = await _create_spy_holding(api_client)
 
@@ -371,3 +447,52 @@ async def test_manual_correction_requires_reason_and_restore_creates_append_only
         Decimal(final_history.json()["items"][-1]["after"]["average_cost_price"])
         == holding.average_cost_price
     )
+
+
+async def test_history_preserves_stored_decimals_after_quantity_precision_changes(
+    api_client,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[2]["id"]
+    create = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(
+            asset_class_id,
+            quantity="10.1234",
+            quantity_precision=4,
+        ),
+    )
+    assert create.status_code == 201
+    holding = create.json()
+
+    preview = await api_client.post(
+        f"/api/cost-adjustments/{holding['id']}/preview-sell",
+        json={"quantity": "0.1001"},
+    )
+    assert preview.status_code == 200
+    confirm = await api_client.post(
+        f"/api/cost-adjustments/{holding['id']}/confirm",
+        json={
+            "expected_version": preview.json()["holding_version"],
+            "operation": "sell",
+            "payload": {"quantity": "0.1001"},
+        },
+    )
+    assert confirm.status_code == 200
+
+    history_before = await api_client.get(f"/api/cost-adjustments/{holding['id']}")
+    assert history_before.status_code == 200
+    stored_before = history_before.json()["items"][0]["before"]
+    stored_after = history_before.json()["items"][0]["after"]
+    assert stored_before["quantity"] == "10.1234"
+    assert stored_after["quantity"] == "10.0233"
+
+    precision_patch = await api_client.patch(
+        f"/api/holdings/{holding['id']}",
+        json={"quantity_precision": 0},
+    )
+    assert precision_patch.status_code == 200
+
+    history_after = await api_client.get(f"/api/cost-adjustments/{holding['id']}")
+    assert history_after.status_code == 200
+    assert history_after.json()["items"][0]["before"] == stored_before
+    assert history_after.json()["items"][0]["after"] == stored_after

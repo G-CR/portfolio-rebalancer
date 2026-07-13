@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TypeVar
 from uuid import UUID
 
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +21,7 @@ from app.schemas.cost_adjustment import (
     HoldingDefaultsResponse,
     ManualCorrectionPreviewRequest,
     PurchasePreviewRequest,
+    RestoreConfirmPayload,
     RestorePreviewRequest,
     SellPreviewRequest,
 )
@@ -28,6 +31,7 @@ _CNY = "CNY"
 _ZERO = Decimal("0")
 _CENT = Decimal("0.01")
 _STORAGE_SCALE = Decimal("0.000000000001")
+_OperationPayload = TypeVar("_OperationPayload", bound=BaseModel)
 
 
 @dataclass(frozen=True)
@@ -76,21 +80,19 @@ async def get_adjustment_context(
             CostAdjustmentHistoryItemResponse(
                 id=item.id,
                 operation_type=item.operation_type,
-                before=_basis_response(
+                before=_history_basis_response(
                     CostBasis(
                         quantity=item.before_quantity,
                         average_price=item.before_average_cost_price,
                         cost_fx=item.before_cost_fx_to_cny,
-                    ),
-                    holding.quantity_precision,
+                    )
                 ),
-                after=_basis_response(
+                after=_history_basis_response(
                     CostBasis(
                         quantity=item.after_quantity,
                         average_price=item.after_average_cost_price,
                         cost_fx=item.after_cost_fx_to_cny,
-                    ),
-                    holding.quantity_precision,
+                    )
                 ),
                 input_summary=item.input_summary,
                 note=item.note,
@@ -201,18 +203,28 @@ async def _preview_for_confirmation(
 ) -> PreviewResult:
     if request.operation == "purchase":
         defaults = await _get_holding_defaults(session, holding.id)
-        payload = PurchasePreviewRequest.model_validate(request.payload)
+        payload = _validate_operation_payload(PurchasePreviewRequest, request.payload)
         return _preview_purchase_from_holding(holding, defaults, payload)
     if request.operation == "sell":
-        payload = SellPreviewRequest.model_validate(request.payload)
+        payload = _validate_operation_payload(SellPreviewRequest, request.payload)
         return _preview_sell_from_holding(holding, payload)
     if request.operation == "manual_correction":
-        payload = ManualCorrectionPreviewRequest.model_validate(request.payload)
+        payload = _validate_operation_payload(
+            ManualCorrectionPreviewRequest,
+            request.payload,
+        )
         return _preview_correction_from_holding(holding, payload)
     if request.operation == "restore":
-        adjustment_id = _require_uuid(request.payload.get("adjustment_id"), "adjustment_id")
-        payload = RestorePreviewRequest.model_validate(request.payload)
-        adjustment = await _get_cost_adjustment(session, holding.id, adjustment_id)
+        confirm_payload = _validate_operation_payload(
+            RestoreConfirmPayload,
+            request.payload,
+        )
+        payload = RestorePreviewRequest(note=confirm_payload.note)
+        adjustment = await _get_cost_adjustment(
+            session,
+            holding.id,
+            confirm_payload.adjustment_id,
+        )
         return _preview_restore_from_holding(holding, adjustment, payload)
     raise ServiceError(422, "UNSUPPORTED_COST_OPERATION", "Unsupported cost operation.")
 
@@ -479,6 +491,38 @@ def _basis_response(value: CostBasis, quantity_precision: int) -> CostBasisState
     )
 
 
+def _history_basis_response(value: CostBasis) -> CostBasisStateResponse:
+    return CostBasisStateResponse(
+        quantity=_trim_decimal(value.quantity),
+        average_cost_price=_price_decimal(value.average_price),
+        cost_fx_to_cny=_trim_decimal(value.cost_fx),
+        total_cost_cny=_money_decimal(value.total_cost_cny),
+    )
+
+
+def _validate_operation_payload(
+    model: type[_OperationPayload],
+    payload: dict[str, object],
+) -> _OperationPayload:
+    try:
+        return model.model_validate(payload, extra="forbid")
+    except ValidationError as exc:
+        errors = [
+            {
+                "field": ".".join(("payload", *(str(part) for part in error["loc"]))),
+                "message": error["msg"],
+                "type": error["type"],
+            }
+            for error in exc.errors()
+        ]
+        raise ServiceError(
+            422,
+            "INVALID_COST_ADJUSTMENT_PAYLOAD",
+            "Cost adjustment payload is invalid for the operation.",
+            {"errors": errors},
+        ) from exc
+
+
 def _defaults_response(defaults: HoldingDefault | None) -> HoldingDefaultsResponse | None:
     if defaults is None:
         return None
@@ -589,27 +633,6 @@ def _normalized_optional_note(note: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
-
-
-def _require_uuid(value: object, field_name: str) -> UUID:
-    if isinstance(value, UUID):
-        return value
-    if isinstance(value, str):
-        try:
-            return UUID(value)
-        except ValueError as exc:
-            raise ServiceError(
-                422,
-                "INVALID_UUID_FIELD",
-                f"{field_name} must be a valid UUID.",
-                {"field": field_name},
-            ) from exc
-    raise ServiceError(
-        422,
-        "INVALID_UUID_FIELD",
-        f"{field_name} must be a valid UUID.",
-        {"field": field_name},
-    )
 
 
 def _trim_decimal(value: Decimal) -> str:
