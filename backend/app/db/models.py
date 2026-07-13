@@ -231,7 +231,11 @@ class CostAdjustment(Base):
     after_cost_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     input_summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
 
     holding: Mapped[Holding] = relationship(back_populates="cost_adjustments")
 
