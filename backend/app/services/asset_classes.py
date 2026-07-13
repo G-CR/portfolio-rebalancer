@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import select
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AssetClass, DEFAULT_SETTINGS_ID, Setting
+from app.schemas.asset_class import AssetClassUpdate
+from app.services.errors import ServiceError
 
 DEFAULT_ASSET_CLASSES: tuple[tuple[str, Decimal], ...] = (
     ("红利低波", Decimal("0.20000000")),
@@ -25,6 +27,48 @@ async def list_asset_classes(session: AsyncSession) -> list[AssetClass]:
         .order_by(AssetClass.display_order.asc(), AssetClass.created_at.asc())
     )
     return list(result)
+
+
+async def replace_asset_classes(
+    session: AsyncSession, updates: list[AssetClassUpdate]
+) -> list[AssetClass]:
+    active_rows = list(
+        await session.scalars(
+            select(AssetClass)
+            .where(AssetClass.is_active.is_(True))
+            .order_by(AssetClass.display_order.asc(), AssetClass.created_at.asc())
+            .with_for_update()
+        )
+    )
+
+    if len(active_rows) != len(updates) or {
+        item.id for item in active_rows
+    } != {item.id for item in updates}:
+        raise ServiceError(
+            422,
+            "ASSET_CLASS_SET_MISMATCH",
+            "Payload must include every active asset class exactly once.",
+        )
+
+    actual_total = sum((item.target_weight for item in updates), start=Decimal("0"))
+    if actual_total != Decimal("1"):
+        raise ServiceError(
+            422,
+            "TARGET_WEIGHT_TOTAL_INVALID",
+            "Active target weights must total exactly 1.",
+            {"actual_total": format(actual_total, "f")},
+        )
+
+    updates_by_id = {item.id: item for item in updates}
+    for row in active_rows:
+        payload = updates_by_id[row.id]
+        row.name = payload.name
+        row.target_weight = payload.target_weight
+        row.display_order = payload.display_order
+        row.notes = payload.notes
+
+    await session.flush()
+    return await list_asset_classes(session)
 
 
 async def seed_default_strategy(session: AsyncSession) -> None:

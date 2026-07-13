@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.main import app
+from app.db.session import engine as app_engine
 
 BUSINESS_TABLES = (
     "snapshot_items",
@@ -70,8 +71,10 @@ async def db_session(_reset_database: None) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def api_client(_reset_database: None) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url=os.getenv("API_BASE_URL", "http://testserver"),
-    ) as client:
-        yield client
+    await app_engine.dispose()
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url=os.getenv("API_BASE_URL", "http://testserver"),
+        ) as client:
+            yield client
