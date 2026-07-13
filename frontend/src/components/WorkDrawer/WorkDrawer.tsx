@@ -20,10 +20,17 @@ const focusableSelector = [
 export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawerProps) {
   const drawerRef = useRef<HTMLElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     previousFocus.current = document.activeElement as HTMLElement | null;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const drawer = drawerRef.current;
     const firstFocusable = drawer?.querySelector<HTMLElement>(focusableSelector);
     firstFocusable?.focus();
@@ -31,7 +38,7 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !drawer) return;
@@ -51,9 +58,10 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
       previousFocus.current?.focus();
     };
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) return null;
 

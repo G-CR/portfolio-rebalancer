@@ -54,4 +54,26 @@ describe("CalibrationRail", () => {
     expect(screen.getByTestId("fx-neutral-marker")).toHaveStyle({ left: "0%" });
     expect(screen.getByTestId("planned-marker")).toHaveStyle({ left: "100%" });
   });
+
+  it("clamps an oversized tolerance to the visible scale and discloses the input", () => {
+    render(
+      <CalibrationRail assetName="标普 500" target={30} actual={30} tolerance={6} />,
+    );
+
+    const description = "允许偏离目标正负 4.0 个百分点；输入值 6.0 个百分点超出可见刻度，已按正负 4.0 个百分点显示";
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(screen.getByTestId("tolerance-band")).toHaveAccessibleName(description);
+    expect(screen.getByTestId("tolerance-band")).toHaveStyle({ left: "0%", width: "100%" });
+  });
+
+  it("normalizes a negative tolerance to zero and discloses the normalization", () => {
+    render(
+      <CalibrationRail assetName="标普 500" target={30} actual={30} tolerance={-2} />,
+    );
+
+    const description = "允许偏离目标正负 0.0 个百分点；输入值 -2.0 个百分点已按 0.0 个百分点显示";
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(screen.getByTestId("tolerance-band")).toHaveAccessibleName(description);
+    expect(screen.getByTestId("tolerance-band")).toHaveStyle({ left: "50%", width: "0%" });
+  });
 });

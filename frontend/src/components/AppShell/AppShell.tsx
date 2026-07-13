@@ -1,46 +1,139 @@
 import { Menu, RefreshCw, Save, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { APP_ROUTES } from "../../app/navigation";
 import styles from "./AppShell.module.css";
 
+const MOBILE_NAVIGATION_QUERY = "(max-width: 760px)";
+const focusableSelector = [
+  "button:not([disabled])",
+  "a[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
 function currentRoute(pathname: string) {
   return APP_ROUTES.find((route) => route.path === pathname) ?? APP_ROUTES[0];
 }
 
-export function AppShell() {
-  const location = useLocation();
-  const [navigationOpen, setNavigationOpen] = useState(false);
-  const route = currentRoute(location.pathname);
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() =>
+    typeof window === "undefined" || typeof window.matchMedia !== "function"
+      ? false
+      : window.matchMedia(query).matches,
+  );
 
   useEffect(() => {
-    if (!navigationOpen) return;
+    const mediaQuery = window.matchMedia(query);
+    const updateMatch = (event: MediaQueryListEvent) => setMatches(event.matches);
+    setMatches(mediaQuery.matches);
+    mediaQuery.addEventListener("change", updateMatch);
+    return () => mediaQuery.removeEventListener("change", updateMatch);
+  }, [query]);
 
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setNavigationOpen(false);
+  return matches;
+}
+
+export function AppShell() {
+  const location = useLocation();
+  const isMobileNavigation = useMediaQuery(MOBILE_NAVIGATION_QUERY);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const navigationRef = useRef<HTMLElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocus = useRef(true);
+  const route = currentRoute(location.pathname);
+  const modalNavigationOpen = isMobileNavigation && navigationOpen;
+
+  const closeNavigation = useCallback((restoreFocus = true) => {
+    restoreMenuFocus.current = restoreFocus;
+    setNavigationOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!modalNavigationOpen) return;
+
+    const navigation = navigationRef.current;
+    navigation?.querySelector<HTMLElement>("nav a[href]")?.focus();
+
+    function containNavigationFocus(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeNavigation();
+        return;
+      }
+      if (event.key !== "Tab" || !navigation) return;
+
+      const focusable = Array.from(
+        navigation.querySelectorAll<HTMLElement>(focusableSelector),
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (!navigation.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      }
     }
 
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [navigationOpen]);
+    document.addEventListener("keydown", containNavigationFocus);
+    return () => {
+      document.removeEventListener("keydown", containNavigationFocus);
+      const remainsMobile = window.matchMedia(MOBILE_NAVIGATION_QUERY).matches;
+      if (restoreMenuFocus.current && remainsMobile) menuTriggerRef.current?.focus();
+    };
+  }, [closeNavigation, modalNavigationOpen]);
+
+  useEffect(() => {
+    if (!isMobileNavigation && navigationOpen) {
+      navigationRef.current?.querySelector<HTMLElement>("nav a[href]")?.focus();
+      closeNavigation(false);
+    }
+  }, [closeNavigation, isMobileNavigation, navigationOpen]);
 
   return (
     <div className={styles.shell}>
-      <button
-        className={styles.backdrop}
-        type="button"
-        aria-label="关闭导航"
-        aria-hidden={!navigationOpen}
-        tabIndex={navigationOpen ? 0 : -1}
-        data-open={navigationOpen}
-        onClick={() => setNavigationOpen(false)}
-      />
+      {modalNavigationOpen ? (
+        <button
+          className={styles.backdrop}
+          type="button"
+          aria-hidden="true"
+          tabIndex={-1}
+          data-open="true"
+          onClick={() => closeNavigation()}
+        />
+      ) : null}
 
-      <aside className={styles.sidebar} data-open={navigationOpen} aria-label="主导航">
+      <aside
+        ref={navigationRef}
+        className={styles.sidebar}
+        data-open={modalNavigationOpen}
+        aria-label="主导航"
+        role={modalNavigationOpen ? "dialog" : undefined}
+        aria-modal={modalNavigationOpen ? true : undefined}
+      >
         <div className={styles.brand}>
           <span className={styles.brandMark} aria-hidden="true">±</span>
           <span className={styles.brandText}>组合校准台</span>
+          {modalNavigationOpen ? (
+            <button
+              className={styles.mobileCloseButton}
+              type="button"
+              aria-label="关闭导航"
+              onClick={() => closeNavigation()}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
         <nav className={styles.navigation}>
           {APP_ROUTES.map(({ path, label, icon: Icon }) => (
@@ -53,7 +146,7 @@ export function AppShell() {
               className={({ isActive }) =>
                 `${styles.navigationLink} ${isActive ? styles.navigationLinkActive : ""}`
               }
-              onClick={() => setNavigationOpen(false)}
+              onClick={() => closeNavigation()}
             >
               <Icon size={17} strokeWidth={1.8} aria-hidden="true" />
               <span>{label}</span>
@@ -69,16 +162,25 @@ export function AppShell() {
         </div>
       </aside>
 
-      <header className={styles.topbar}>
+      <header
+        className={styles.topbar}
+        aria-hidden={modalNavigationOpen ? true : undefined}
+        inert={modalNavigationOpen ? true : undefined}
+      >
         <div className={styles.titleGroup}>
           <button
+            ref={menuTriggerRef}
             className={styles.menuButton}
             type="button"
-            aria-label={navigationOpen ? "关闭导航" : "打开导航"}
-            aria-expanded={navigationOpen}
-            onClick={() => setNavigationOpen((open) => !open)}
+            aria-label="打开导航"
+            aria-expanded={modalNavigationOpen}
+            onClick={() => {
+              if (!isMobileNavigation) return;
+              restoreMenuFocus.current = true;
+              setNavigationOpen(true);
+            }}
           >
-            {navigationOpen ? <X size={19} /> : <Menu size={19} />}
+            <Menu size={19} aria-hidden="true" />
           </button>
           <div>
             <p className={styles.context}>核心资产池</p>
@@ -101,7 +203,11 @@ export function AppShell() {
         </div>
       </header>
 
-      <main className={styles.main}>
+      <main
+        className={styles.main}
+        aria-hidden={modalNavigationOpen ? true : undefined}
+        inert={modalNavigationOpen ? true : undefined}
+      >
         <Outlet />
       </main>
     </div>

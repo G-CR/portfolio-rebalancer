@@ -39,6 +39,17 @@ function overflowSide(value: number, target: number) {
   return undefined;
 }
 
+function toleranceDescription(inputTolerance: number, displayedTolerance: number) {
+  const displayed = displayedTolerance.toFixed(1);
+  if (inputTolerance > HALF_RANGE) {
+    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${inputTolerance.toFixed(1)} 个百分点超出可见刻度，已按正负 ${displayed} 个百分点显示`;
+  }
+  if (inputTolerance < 0) {
+    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${inputTolerance.toFixed(1)} 个百分点已按 ${displayed} 个百分点显示`;
+  }
+  return `允许偏离目标正负 ${displayed} 个百分点`;
+}
+
 function Marker({ kind, value, target }: { kind: MarkerKind; value: number; target: number }) {
   const side = overflowSide(value, target);
   const label = markerLabels[kind];
@@ -69,6 +80,7 @@ export function CalibrationRail({
   planned,
 }: CalibrationRailProps) {
   const toleranceWidth = Math.min(HALF_RANGE, Math.max(0, tolerance));
+  const toleranceText = toleranceDescription(tolerance, toleranceWidth);
   const bandLeft = markerPosition(target - toleranceWidth, target);
   const bandRight = markerPosition(target + toleranceWidth, target);
 
@@ -91,13 +103,16 @@ export function CalibrationRail({
         <span
           className={styles.toleranceBand}
           style={{ left: `${bandLeft}%`, width: `${bandRight - bandLeft}%` }}
-          aria-label={`允许偏离目标正负 ${tolerance.toFixed(1)} 个百分点`}
+          aria-label={toleranceText}
+          data-testid="tolerance-band"
         />
         <span className={styles.targetLine} aria-hidden="true" />
         <Marker kind="actual" value={actual} target={target} />
         {fxNeutral === undefined ? null : <Marker kind="fxNeutral" value={fxNeutral} target={target} />}
         {planned === undefined ? null : <Marker kind="planned" value={planned} target={target} />}
       </div>
+
+      <p className={styles.toleranceDescription}>{toleranceText}</p>
 
       <div className={styles.values} aria-label="校准值">
         <div className={styles.valueActual}>

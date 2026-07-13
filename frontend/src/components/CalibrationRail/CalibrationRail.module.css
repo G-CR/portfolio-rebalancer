@@ -73,8 +73,16 @@
   z-index: 1;
   top: 8px;
   height: 11px;
-  border: 1px solid rgb(181 139 42 / 38%);
-  background: rgb(181 139 42 / 16%);
+  border: 1px solid rgb(146 109 25 / 42%);
+  background: rgb(146 109 25 / 16%);
+}
+
+.toleranceDescription {
+  margin: 0;
+  color: var(--color-ink);
+  font-family: var(--font-data);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .targetLine {
