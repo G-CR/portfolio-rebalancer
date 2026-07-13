@@ -21,8 +21,13 @@ class _SessionScope:
         return None
 
 
+class _FakeSession:
+    def begin(self) -> _SessionScope:
+        return _SessionScope(None)
+
+
 def test_lifespan_disposes_engine_on_shutdown(monkeypatch) -> None:
-    session = object()
+    session = _FakeSession()
     dispose = AsyncMock()
     seed_default_strategy = AsyncMock()
     monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose))
@@ -47,7 +52,7 @@ def test_lifespan_disposes_engine_on_shutdown(monkeypatch) -> None:
 
 
 def test_lifespan_seeds_default_strategy_on_startup(monkeypatch) -> None:
-    session = object()
+    session = _FakeSession()
     dispose = AsyncMock()
     seed_default_strategy = AsyncMock()
     monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose))
@@ -68,6 +73,31 @@ def test_lifespan_seeds_default_strategy_on_startup(monkeypatch) -> None:
         pass
 
     seed_default_strategy.assert_awaited_once_with(session)
+
+
+def test_lifespan_disposes_engine_when_seeding_raises(monkeypatch) -> None:
+    session = _FakeSession()
+    dispose = AsyncMock()
+    seed_default_strategy = AsyncMock(side_effect=RuntimeError("seed failed"))
+    monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose))
+    monkeypatch.setattr(
+        main_module,
+        "SessionFactory",
+        lambda: _SessionScope(session),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "seed_default_strategy",
+        seed_default_strategy,
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="seed failed"):
+        with TestClient(main_module.app):
+            pass
+
+    dispose.assert_awaited_once()
 
 
 def test_compose_secret_mount_matches_settings() -> None:

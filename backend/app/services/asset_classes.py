@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AssetClass, Setting
+from app.db.models import AssetClass, DEFAULT_SETTINGS_ID, Setting
 
 DEFAULT_ASSET_CLASSES: tuple[tuple[str, Decimal], ...] = (
     ("红利低波", Decimal("0.20000000")),
@@ -26,38 +28,38 @@ async def list_asset_classes(session: AsyncSession) -> list[AssetClass]:
 
 
 async def seed_default_strategy(session: AsyncSession) -> None:
-    asset_class_exists = (
-        await session.scalar(select(AssetClass.id).limit(1))
-    ) is not None
-    settings_exists = (await session.scalar(select(Setting.id).limit(1))) is not None
-
-    if not asset_class_exists:
-        session.add_all(
+    await session.execute(
+        insert(AssetClass)
+        .values(
             [
-            AssetClass(
-                name=name,
-                target_weight=target_weight,
-                display_order=index,
-            )
-            for index, (name, target_weight) in enumerate(
-                DEFAULT_ASSET_CLASSES,
-                start=1,
-            )
+                {
+                    "name": name,
+                    "target_weight": target_weight,
+                    "display_order": index,
+                }
+                for index, (name, target_weight) in enumerate(
+                    DEFAULT_ASSET_CLASSES,
+                    start=1,
+                )
             ]
         )
-
-    if not settings_exists:
-        session.add(
-            Setting(
-                refresh_hour=8,
-                refresh_minute=0,
-                provider_priority=[],
-                default_tolerance=Decimal("0.02000000"),
-                minimum_trade_amount_cny=Decimal("500.00000000"),
-                allow_sell=True,
-                allow_fx=True,
-            )
+        .on_conflict_do_nothing(
+            index_elements=[AssetClass.name],
+            index_where=text("is_active"),
         )
+    )
 
-    if not asset_class_exists or not settings_exists:
-        await session.commit()
+    await session.execute(
+        insert(Setting)
+        .values(
+            id=DEFAULT_SETTINGS_ID,
+            refresh_hour=8,
+            refresh_minute=0,
+            provider_priority=[],
+            default_tolerance=Decimal("0.02000000"),
+            minimum_trade_amount_cny=Decimal("500.00000000"),
+            allow_sell=True,
+            allow_fx=True,
+        )
+        .on_conflict_do_nothing(index_elements=[Setting.id])
+    )

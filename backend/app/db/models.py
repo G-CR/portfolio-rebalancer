@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -23,6 +24,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 MONEY_PRECISION = Numeric(28, 12)
+DEFAULT_SETTINGS_ID = UUID("00000000-0000-0000-0000-000000000001")
+DEFAULT_SETTINGS_ID_SQL = f"'{DEFAULT_SETTINGS_ID}'::uuid"
 
 
 def utcnow() -> datetime:
@@ -312,8 +315,18 @@ class RebalancePlan(Base):
 
 class Setting(Base):
     __tablename__ = "settings"
+    __table_args__ = (
+        CheckConstraint(
+            f"id = {DEFAULT_SETTINGS_ID_SQL}",
+            name="ck_settings_singleton_id",
+        ),
+    )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=DEFAULT_SETTINGS_ID,
+        server_default=text(DEFAULT_SETTINGS_ID_SQL),
+    )
     refresh_hour: Mapped[int] = mapped_column(Integer, nullable=False)
     refresh_minute: Mapped[int] = mapped_column(Integer, nullable=False)
     provider_priority: Mapped[list[str]] = mapped_column(JSON, nullable=False)

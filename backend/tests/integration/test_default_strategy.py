@@ -1,15 +1,24 @@
+import asyncio
 from decimal import Decimal
+from uuid import uuid4
 
+import pytest
+from sqlalchemy import func
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.models import AssetClass
+from app.db.models import DEFAULT_SETTINGS_ID
 from app.db.models import Setting
+from app.db.session import SessionFactory
 from app.services.asset_classes import list_asset_classes, seed_default_strategy
 
 
 async def test_default_strategy_is_seeded_once(db_session) -> None:
-    await seed_default_strategy(db_session)
-    await seed_default_strategy(db_session)
+    async with db_session.begin():
+        await seed_default_strategy(db_session)
+    async with db_session.begin():
+        await seed_default_strategy(db_session)
     items = await list_asset_classes(db_session)
 
     assert [(item.name, item.target_weight) for item in items] == [
@@ -22,11 +31,13 @@ async def test_default_strategy_is_seeded_once(db_session) -> None:
 
 
 async def test_default_strategy_seeds_default_settings(db_session) -> None:
-    await seed_default_strategy(db_session)
+    async with db_session.begin():
+        await seed_default_strategy(db_session)
 
     setting = await db_session.scalar(select(Setting))
 
     assert setting is not None
+    assert setting.id == DEFAULT_SETTINGS_ID
     assert (setting.refresh_hour, setting.refresh_minute) == (8, 0)
     assert setting.default_tolerance == Decimal("0.02000000")
     assert setting.minimum_trade_amount_cny == Decimal("500.00000000")
@@ -61,3 +72,55 @@ async def test_non_default_12_decimal_values_are_not_truncated(db_session) -> No
     ]
     assert format(setting.default_tolerance, "f") == "0.123456789012"
     assert format(setting.minimum_trade_amount_cny, "f") == "500.123456789012"
+
+
+async def test_default_strategy_concurrent_seed_is_idempotent(db_session) -> None:
+    start = asyncio.Event()
+
+    async def seed_in_independent_session() -> None:
+        async with SessionFactory() as session:
+            await start.wait()
+            async with session.begin():
+                await seed_default_strategy(session)
+
+    first = asyncio.create_task(seed_in_independent_session())
+    second = asyncio.create_task(seed_in_independent_session())
+    await asyncio.sleep(0)
+    start.set()
+    await asyncio.gather(first, second)
+
+    asset_class_count = await db_session.scalar(
+        select(func.count()).select_from(AssetClass)
+    )
+    settings_count = await db_session.scalar(select(func.count()).select_from(Setting))
+    items = await list_asset_classes(db_session)
+
+    assert asset_class_count == 5
+    assert settings_count == 1
+    assert [item.name for item in items] == [
+        "红利低波",
+        "红利质量",
+        "标普 500",
+        "纳斯达克 100",
+        "黄金",
+    ]
+
+
+async def test_settings_singleton_rejects_non_default_id(db_session) -> None:
+    db_session.add(
+        Setting(
+            id=uuid4(),
+            refresh_hour=8,
+            refresh_minute=0,
+            provider_priority=[],
+            default_tolerance=Decimal("0.02000000"),
+            minimum_trade_amount_cny=Decimal("500.00000000"),
+            allow_sell=True,
+            allow_fx=True,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+
+    await db_session.rollback()

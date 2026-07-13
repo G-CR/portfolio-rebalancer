@@ -11,10 +11,10 @@ from app.services.asset_classes import seed_default_strategy
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    async with SessionFactory() as session:
-        await seed_default_strategy(session)
-
     try:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await seed_default_strategy(session)
         yield
     finally:
         await engine.dispose()
