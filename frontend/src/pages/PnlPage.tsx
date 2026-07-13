@@ -1,10 +1,11 @@
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 
 import { ApiError } from "../api/client";
 import type { PortfolioIncompleteItem } from "../api/types";
-import { decimalNumber, decimalSign, formatAmount, formatPercent, formatSignedAmount } from "../features/analytics/format";
+import { normalizeDecimalSeries } from "../features/analytics/chartScale";
+import { decimalSign, formatAmount, formatPercent, formatSignedAmount } from "../features/analytics/format";
 import { usePortfolioAnalytics } from "../features/analytics/api";
 import styles from "./PnlPage.module.css";
 import { PageError } from "./PageState";
@@ -37,12 +38,13 @@ export function PnlPage() {
   const data = portfolio.data;
   if (data.decision.status === "setup") return <section className={styles.empty}><strong>尚无持仓盈亏</strong><p>添加持仓与有效市场数据后，这里将显示当前浮动盈亏。</p></section>;
 
-  const chartData = data.asset_classes.map((item) => ({
+  const chartGeometry = normalizeDecimalSeries(data.asset_classes.flatMap((item) => [item.price_effect, item.fx_effect]));
+  const chartData = data.asset_classes.map((item, index) => ({
     name: item.name,
-    price: decimalNumber(item.price_effect),
-    fx: decimalNumber(item.fx_effect),
-    priceText: formatSignedAmount(item.price_effect),
-    fxText: formatSignedAmount(item.fx_effect),
+    price: chartGeometry[index * 2].scaled,
+    fx: chartGeometry[index * 2 + 1].scaled,
+    priceOriginal: item.price_effect,
+    fxOriginal: item.fx_effect,
   }));
   const totalPnlState = pnlState(data.unrealized_pnl);
   return (
@@ -62,8 +64,7 @@ export function PnlPage() {
             <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
               <CartesianGrid stroke="var(--color-rule)" vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-              <YAxis tick={{ fontSize: 9 }} width={54} />
-              <Tooltip formatter={(_value, name, item) => name === "价格影响" ? item.payload.priceText : item.payload.fxText} />
+              <Tooltip formatter={(_value, name, item) => formatSignedAmount(name === "价格影响" ? item.payload.priceOriginal : item.payload.fxOriginal)} />
               <Bar dataKey="price" name="价格影响" fill="var(--color-actual)" stackId="pnl" />
               <Bar dataKey="fx" name="汇率影响" fill="var(--color-fx)" stackId="pnl" />
             </BarChart>

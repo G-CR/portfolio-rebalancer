@@ -1,10 +1,10 @@
 import type { PortfolioAnalytics } from "../../api/types";
+import { proportionDecimalSeries } from "./chartScale";
 import { formatPercent, formatSignedAmount } from "./format";
 import styles from "./Analytics.module.css";
 
 export function PnlBreakdown({ portfolio }: { portfolio: PortfolioAnalytics }) {
-  const totalMagnitude = Math.abs(Number(portfolio.price_effect)) + Math.abs(Number(portfolio.fx_effect)) || 1;
-  const priceWidth = Math.abs(Number(portfolio.price_effect)) / totalMagnitude * 100;
+  const [priceGeometry, fxGeometry] = proportionDecimalSeries([portfolio.price_effect, portfolio.fx_effect]);
   return (
     <section className={styles.pnl} aria-labelledby="pnl-breakdown-title">
       <div className={styles.sectionHeading}>
@@ -12,8 +12,8 @@ export function PnlBreakdown({ portfolio }: { portfolio: PortfolioAnalytics }) {
         <span>海外资产占比 {formatPercent(portfolio.overseas_weight)}</span>
       </div>
       <div className={styles.pnlBar} aria-hidden="true">
-        <span className={styles.priceBar} style={{ width: `${priceWidth}%` }} />
-        <span className={styles.fxBar} style={{ width: `${100 - priceWidth}%` }} />
+        <span className={styles.priceBar} style={{ width: `${priceGeometry.scaled}%` }} />
+        <span className={styles.fxBar} style={{ width: `${fxGeometry.scaled}%` }} />
       </div>
       <dl className={styles.pnlValues}>
         <div><dt><span className={styles.priceKey} />价格影响</dt><dd>{formatSignedAmount(portfolio.price_effect)}</dd></div>

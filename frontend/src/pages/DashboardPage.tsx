@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import type { PortfolioIncompleteItem } from "../api/types";
 import { CalibrationRail } from "../components/CalibrationRail/CalibrationRail";
 import { DecisionBanner } from "../features/analytics/DecisionBanner";
-import { decimalNumber, formatDataTime, formatDecimal, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
+import { boundedRatioPercent, formatDataTime, formatDecimal, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
 import { PnlBreakdown } from "../features/analytics/PnlBreakdown";
 import { PortfolioMetrics } from "../features/analytics/PortfolioMetrics";
 import { usePortfolioAnalytics } from "../features/analytics/api";
@@ -58,10 +58,10 @@ export function DashboardPage() {
           {data.asset_classes.map((item) => <CalibrationRail
             key={item.id}
             assetName={item.name}
-            target={decimalNumber(item.target_weight) * 100}
-            actual={decimalNumber(item.actual_weight) * 100}
-            fxNeutral={decimalNumber(item.fx_neutral_weight) * 100}
-            tolerance={decimalNumber(data.tolerance) * 100}
+            target={boundedRatioPercent(item.target_weight)}
+            actual={boundedRatioPercent(item.actual_weight)}
+            fxNeutral={boundedRatioPercent(item.fx_neutral_weight)}
+            tolerance={boundedRatioPercent(data.tolerance)}
             targetText={formatPercent(item.target_weight)}
             actualText={formatPercent(item.actual_weight)}
             fxNeutralText={formatPercent(item.fx_neutral_weight)}

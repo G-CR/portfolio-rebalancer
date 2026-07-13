@@ -1,6 +1,6 @@
-export function decimalNumber(value: string) {
+export function boundedRatioPercent(value: string) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) && Math.abs(parsed) <= 1 ? parsed * 100 : 0;
 }
 
 type ParsedDecimal = {
