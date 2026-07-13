@@ -32,7 +32,7 @@ services:
     build:
       context: ./backend
       target: development
-    command: sleep infinity
+    command: uv run python -m app.worker
     depends_on:
       api:
         condition: service_healthy
