@@ -4,7 +4,7 @@ from app.schemas.common import DecimalString
 
 
 class PositionAnalysisResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, from_attributes=True)
 
     cost_cny: DecimalString
     market_value_cny: DecimalString

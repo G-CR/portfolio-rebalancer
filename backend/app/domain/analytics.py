@@ -2,6 +2,16 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 
+def _require_nonnegative(name: str, value: Decimal) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be nonnegative")
+
+
+def _require_positive(name: str, value: Decimal) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+
+
 @dataclass(frozen=True)
 class PositionInput:
     quantity: Decimal
@@ -10,6 +20,14 @@ class PositionInput:
     cost_fx: Decimal
     current_fx: Decimal
     baseline_fx: Decimal
+
+    def __post_init__(self) -> None:
+        _require_nonnegative("quantity", self.quantity)
+        _require_nonnegative("cost_price", self.cost_price)
+        _require_nonnegative("current_price", self.current_price)
+        _require_positive("cost_fx", self.cost_fx)
+        _require_positive("current_fx", self.current_fx)
+        _require_positive("baseline_fx", self.baseline_fx)
 
 
 @dataclass(frozen=True)
@@ -31,7 +49,7 @@ def analyze_position(value: PositionInput) -> PositionAnalysis:
     fx_effect = market_value_cny - (
         value.quantity * value.current_price * value.cost_fx
     )
-    unrealized_pnl = market_value_cny - cost_cny
+    unrealized_pnl = price_effect + fx_effect
 
     return PositionAnalysis(
         cost_cny=cost_cny,
