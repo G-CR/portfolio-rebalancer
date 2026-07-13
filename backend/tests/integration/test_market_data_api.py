@@ -81,6 +81,144 @@ class _FakeRegistry:
         raise RuntimeError("timeout while refreshing USD/CNY\ntraceback hidden")
 
 
+class _FailingRegistry:
+    async def fetch_price(
+        self,
+        symbol: str,
+        *,
+        market: str,
+        preferred_source: str | None = None,
+        provider_priority: list[str] | None = None,
+    ) -> MarketQuote:
+        raise RuntimeError(f"timeout while refreshing {symbol}\nsecret detail")
+
+    async def fetch_fx(
+        self,
+        base: str,
+        quote: str,
+        *,
+        preferred_source: str | None = None,
+        provider_priority: list[str] | None = None,
+    ) -> MarketQuote:
+        raise RuntimeError(f"timeout while refreshing {base}/{quote}\nsecret detail")
+
+
+async def test_first_refresh_failure_is_reported_without_an_effective_value(
+    api_client,
+    monkeypatch,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, symbol="SPY", account_name="Broker 1"),
+    )
+    monkeypatch.setattr(
+        market_data_service,
+        "get_provider_registry",
+        lambda: _FailingRegistry(),
+    )
+
+    refresh_response = await api_client.post("/api/market-data/refresh")
+    assert refresh_response.status_code == 200
+
+    response = await api_client.get("/api/market-data")
+    assert response.status_code == 200
+    item = {item["key"]: item for item in response.json()["items"]}["price:SPY"]
+    assert item["effective_value"] is None
+    assert item["status"] == "failed"
+    assert item["source"] == "yahoo"
+    assert item["market_time"] is None
+    assert item["fetched_at"] is not None
+    assert item["error_summary"] == "timeout while refreshing SPY secret detail"
+
+
+async def test_active_override_takes_precedence_over_failed_only_state(
+    api_client,
+    db_session,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, symbol="SPY", account_name="Broker 1"),
+    )
+    now = datetime.now(UTC)
+    db_session.add(
+        MarketData(
+            data_type="price",
+            symbol="SPY",
+            source="yahoo",
+            value=None,
+            market_time=None,
+            fetched_at=now - timedelta(minutes=5),
+            status="failed",
+            error_summary="provider timeout",
+        )
+    )
+    await db_session.commit()
+
+    override_response = await api_client.post(
+        "/api/market-data/price:SPY/override",
+        json={
+            "value": "649.90",
+            "note": "broker close",
+            "effective_at": (now - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+        },
+    )
+    assert override_response.status_code == 200
+
+    response = await api_client.get("/api/market-data")
+    item = {item["key"]: item for item in response.json()["items"]}["price:SPY"]
+    assert item["effective_value"] == "649.90"
+    assert item["status"] == "manual"
+    assert item["source"] == "manual"
+    assert item["error_summary"] is None
+
+
+async def test_expired_override_reveals_failed_only_state(
+    api_client,
+    db_session,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, symbol="SPY", account_name="Broker 1"),
+    )
+    now = datetime.now(UTC)
+    failed_at = now - timedelta(minutes=5)
+    db_session.add_all(
+        [
+            MarketData(
+                data_type="price",
+                symbol="SPY",
+                source="yahoo",
+                value=None,
+                market_time=None,
+                fetched_at=failed_at,
+                status="failed",
+                error_summary="provider timeout",
+            ),
+            MarketDataOverride(
+                data_type="price",
+                symbol="SPY",
+                value=Decimal("649.90"),
+                note="expired broker close",
+                effective_at=now - timedelta(hours=1),
+                expires_at=now - timedelta(minutes=1),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await api_client.get("/api/market-data")
+    item = {item["key"]: item for item in response.json()["items"]}["price:SPY"]
+    assert item["effective_value"] is None
+    assert item["status"] == "failed"
+    assert item["source"] == "yahoo"
+    assert item["market_time"] is None
+    assert item["fetched_at"] == failed_at.isoformat().replace("+00:00", "Z")
+    assert item["error_summary"] == "provider timeout"
+
+
 async def test_get_market_data_resolves_manual_override_and_stale_fallback(
     api_client,
     db_session,

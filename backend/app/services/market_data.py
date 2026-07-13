@@ -47,9 +47,9 @@ class ManualOverride:
 
 @dataclass(frozen=True, slots=True)
 class AutomatedValue:
-    value: Decimal
+    value: Decimal | None
     source: str
-    as_of: datetime
+    as_of: datetime | None
     fetched_at: datetime
     status: str
     error_summary: str | None = None
@@ -467,16 +467,26 @@ async def _status_for_key(
 
 
 def _resolve_automated_value(rows: list[MarketData]) -> AutomatedValue | None:
+    latest_attempt = rows[0] if rows else None
     latest_valid = next((row for row in rows if row.status == "valid" and row.value is not None), None)
     if latest_valid is None:
-        return None
+        if latest_attempt is None:
+            return None
+        return AutomatedValue(
+            value=None,
+            source=latest_attempt.source,
+            as_of=None,
+            fetched_at=latest_attempt.fetched_at,
+            status=latest_attempt.status,
+            error_summary=_sanitize_error_text(latest_attempt.error_summary),
+            currency=_currency_for_symbol(latest_attempt),
+        )
 
-    latest_attempt = rows[0] if rows else None
     status = "valid"
     error_summary = None
     if latest_attempt is not None and latest_attempt.status != "valid":
         status = "stale"
-        error_summary = latest_attempt.error_summary
+        error_summary = _sanitize_error_text(latest_attempt.error_summary)
 
     return AutomatedValue(
         value=latest_valid.value,
@@ -596,9 +606,15 @@ async def _acquire_transaction_lock(session: AsyncSession, lock_key: str) -> Non
 
 
 def _sanitize_error_summary(exc: Exception) -> str:
-    summary = re.sub(r"\s+", " ", str(exc)).strip()
+    return _sanitize_error_text(str(exc)) or "Market-data refresh failed."
+
+
+def _sanitize_error_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    summary = re.sub(r"\s+", " ", value).strip()
     if not summary:
-        summary = "Market-data refresh failed."
+        return None
     return summary[:_ERROR_SUMMARY_LIMIT]
 
 
