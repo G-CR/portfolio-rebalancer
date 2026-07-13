@@ -50,6 +50,14 @@ async def replace_asset_classes(
             "Payload must include every active asset class exactly once.",
         )
 
+    names = [item.name for item in updates]
+    if len(names) != len(set(names)):
+        raise ServiceError(
+            409,
+            "ASSET_CLASS_NAME_CONFLICT",
+            "Active asset class names must be unique.",
+        )
+
     actual_total = sum((item.target_weight for item in updates), start=Decimal("0"))
     if actual_total != Decimal("1"):
         raise ServiceError(

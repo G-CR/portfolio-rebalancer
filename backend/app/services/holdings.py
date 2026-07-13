@@ -69,8 +69,24 @@ async def update_holding(
         field_name: getattr(payload, field_name) for field_name in payload.model_fields_set
     }
 
+    target_asset_class_id = updates.get("asset_class_id", holding.asset_class_id)
+    if target_asset_class_id != holding.asset_class_id:
+        await _get_active_asset_class(session, target_asset_class_id)
+    final_is_rebalance_preferred = updates.get(
+        "is_rebalance_preferred",
+        holding.is_rebalance_preferred,
+    )
+
+    if final_is_rebalance_preferred:
+        demoted_other_preferred = await _demote_other_preferred_holdings(
+            session,
+            asset_class_id=target_asset_class_id,
+            exclude_holding_id=holding.id,
+        )
+        if demoted_other_preferred:
+            await session.flush()
+
     if "asset_class_id" in updates:
-        await _get_active_asset_class(session, updates["asset_class_id"])
         holding.asset_class_id = updates["asset_class_id"]
     if "symbol" in updates:
         holding.symbol = updates["symbol"]
@@ -182,6 +198,24 @@ async def _get_active_holdings_for_asset_class(
     if lock:
         statement = statement.with_for_update()
     return list(await session.scalars(statement))
+
+
+async def _demote_other_preferred_holdings(
+    session: AsyncSession,
+    asset_class_id: UUID,
+    exclude_holding_id: UUID,
+) -> bool:
+    active_holdings = await _get_active_holdings_for_asset_class(
+        session,
+        asset_class_id,
+        lock=True,
+    )
+    changed = False
+    for item in active_holdings:
+        if item.id != exclude_holding_id and item.is_rebalance_preferred:
+            item.is_rebalance_preferred = False
+            changed = True
+    return changed
 
 
 def _normalized_fx_values(

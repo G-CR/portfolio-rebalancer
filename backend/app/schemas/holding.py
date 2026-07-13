@@ -4,13 +4,18 @@ from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
+from pydantic_core import PydanticCustomError
 
 from app.schemas.common import DecimalString
 
 
 def _ensure_non_negative(value: Decimal, field_name: str) -> Decimal:
     if value < 0:
-        raise ValueError(field_name)
+        raise PydanticCustomError(
+            "negative_numeric_field",
+            "{field} must be non-negative.",
+            {"field": field_name},
+        )
     return value
 
 
@@ -109,7 +114,11 @@ class HoldingCreate(BaseModel):
     @classmethod
     def validate_quantity_precision(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("quantity_precision")
+            raise PydanticCustomError(
+                "negative_numeric_field",
+                "{field} must be non-negative.",
+                {"field": "quantity_precision"},
+            )
         return value
 
 
@@ -158,5 +167,9 @@ class HoldingUpdate(BaseModel):
         if value is None:
             return None
         if value < 0:
-            raise ValueError("quantity_precision")
+            raise PydanticCustomError(
+                "negative_numeric_field",
+                "{field} must be non-negative.",
+                {"field": "quantity_precision"},
+            )
         return value

@@ -97,6 +97,120 @@ async def test_patch_holding_updates_values_and_increments_version(
     assert listed == [response.json()]
 
 
+async def test_patch_holding_switches_preferred_within_asset_class(api_client) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    first = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(asset_class_id, symbol="SPY"),
+        )
+    ).json()
+    second = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                asset_class_id,
+                symbol="VOO",
+                name="Vanguard S&P 500 ETF",
+                account_name="美股账户 2",
+                is_rebalance_preferred=False,
+            ),
+        )
+    ).json()
+
+    response = await api_client.patch(
+        f"/api/holdings/{second['id']}",
+        json={"is_rebalance_preferred": True},
+    )
+
+    assert response.status_code == 200
+    holdings = (await api_client.get("/api/holdings")).json()
+    first_after = next(item for item in holdings if item["id"] == first["id"])
+    second_after = next(item for item in holdings if item["id"] == second["id"])
+    assert first_after["is_rebalance_preferred"] is False
+    assert second_after["is_rebalance_preferred"] is True
+
+
+async def test_patch_holding_move_preferred_between_asset_classes(api_client) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    source_asset_class_id = classes[0]["id"]
+    target_asset_class_id = classes[1]["id"]
+    source_preferred = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(source_asset_class_id, symbol="SPY"),
+        )
+    ).json()
+    source_other = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                source_asset_class_id,
+                symbol="SCHD",
+                name="Schwab US Dividend Equity ETF",
+                account_name="分红账户",
+                is_rebalance_preferred=False,
+            ),
+        )
+    ).json()
+    target_preferred = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                target_asset_class_id,
+                symbol="QQQ",
+                name="Invesco QQQ Trust",
+                account_name="纳指账户",
+            ),
+        )
+    ).json()
+
+    response = await api_client.patch(
+        f"/api/holdings/{source_preferred['id']}",
+        json={"asset_class_id": target_asset_class_id},
+    )
+
+    assert response.status_code == 200
+    holdings = (await api_client.get("/api/holdings")).json()
+    moved = next(item for item in holdings if item["id"] == source_preferred["id"])
+    source_other_after = next(item for item in holdings if item["id"] == source_other["id"])
+    target_preferred_after = next(
+        item for item in holdings if item["id"] == target_preferred["id"]
+    )
+    assert moved["asset_class_id"] == target_asset_class_id
+    assert moved["is_rebalance_preferred"] is True
+    assert source_other_after["is_rebalance_preferred"] is True
+    assert target_preferred_after["is_rebalance_preferred"] is False
+
+
+async def test_create_holding_rejects_negative_numeric_fields_with_structured_error(
+    api_client, asset_class_id
+) -> None:
+    response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, quantity="-1"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "NEGATIVE_NUMERIC_FIELD"
+    assert response.json()["detail"]["field"] == "quantity"
+
+
+async def test_patch_holding_rejects_negative_numeric_fields_with_structured_error(
+    api_client, asset_class_id
+) -> None:
+    created = await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+
+    response = await api_client.patch(
+        f"/api/holdings/{created.json()['id']}",
+        json={"quantity_precision": -1},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "NEGATIVE_NUMERIC_FIELD"
+    assert response.json()["detail"]["field"] == "quantity_precision"
+
+
 async def test_archive_holding_rejects_non_zero_quantity(api_client, asset_class_id) -> None:
     created = await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
     holding_id = created.json()["id"]

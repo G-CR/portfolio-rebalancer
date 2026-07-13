@@ -95,3 +95,23 @@ async def test_asset_class_update_replaces_all_rows(api_client) -> None:
 
     listed = (await api_client.get("/api/asset-classes")).json()
     assert listed == response.json()
+
+
+async def test_asset_class_update_rejects_duplicate_active_names_atomically(
+    api_client,
+) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    original = list(classes)
+    payload = [
+        {
+            **classes[0],
+            "name": classes[1]["name"],
+        },
+        *classes[1:],
+    ]
+
+    response = await api_client.put("/api/asset-classes", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ASSET_CLASS_NAME_CONFLICT"
+    assert (await api_client.get("/api/asset-classes")).json() == original

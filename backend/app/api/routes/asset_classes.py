@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
@@ -28,3 +29,13 @@ async def put_asset_classes(
             return await replace_asset_classes(session, payload)
     except ServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+    except IntegrityError as exc:
+        if "uq_asset_classes_active_name" not in str(exc.orig):
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ASSET_CLASS_NAME_CONFLICT",
+                "message": "Active asset class names must be unique.",
+            },
+        ) from exc
