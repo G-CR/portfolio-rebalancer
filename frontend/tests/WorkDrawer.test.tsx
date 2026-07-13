@@ -1,8 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 
 import { WorkDrawer } from "../src/components/WorkDrawer/WorkDrawer";
+import { registerDrawer } from "../src/components/WorkDrawer/drawerStack";
 
 function DrawerHarness() {
   const [open, setOpen] = useState(false);
@@ -61,8 +62,40 @@ function ParallelDrawers({ outerOpen, innerOpen }: { outerOpen: boolean; innerOp
   );
 }
 
+function IndependentDrawer({ title, onClose }: { title: string; onClose: () => void }) {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <WorkDrawer
+      open={open}
+      title={title}
+      onClose={() => {
+        onClose();
+        setOpen(false);
+      }}
+    >
+      <button type="button">{title}操作</button>
+    </WorkDrawer>
+  );
+}
+
+function StrictDrawer({ show, onClose }: { show: boolean; onClose: () => void }) {
+  return show ? (
+    <WorkDrawer open title="严格模式抽屉" onClose={onClose}>严格模式内容</WorkDrawer>
+  ) : null;
+}
+
+function createRootContainer(name: string) {
+  const container = document.createElement("div");
+  container.dataset.drawerTestRoot = name;
+  document.body.append(container);
+  return container;
+}
+
 describe("WorkDrawer", () => {
   afterEach(() => {
+    cleanup();
+    document.querySelectorAll("[data-drawer-test-root]").forEach((element) => element.remove());
     document.body.style.overflow = "";
   });
 
@@ -192,5 +225,162 @@ describe("WorkDrawer", () => {
     expect(document.body.style.overflow).toBe("hidden");
     unmount();
     expect(document.body.style.overflow).toBe("clip");
+  });
+
+  it("keeps identities and top-only Escape behavior correct across separate React roots", async () => {
+    const user = userEvent.setup();
+    const firstContainer = createRootContainer("first");
+    const closeFirst = vi.fn();
+    const closeSecond = vi.fn();
+    document.body.style.overflow = "clip";
+
+    render(<IndependentDrawer title="第一根抽屉" onClose={closeFirst} />, {
+      container: firstContainer,
+    });
+    const secondContainer = createRootContainer("second");
+    render(<IndependentDrawer title="第二根抽屉" onClose={closeSecond} />, {
+      container: secondContainer,
+    });
+
+    const dialogs = screen.getAllByRole("dialog", { hidden: true });
+    const titleIds = dialogs.map((dialog) => dialog.getAttribute("aria-labelledby"));
+    expect(new Set(titleIds).size).toBe(2);
+    expect(screen.getByRole("dialog", { name: "第二根抽屉" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "第一根抽屉", hidden: true })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(closeSecond).toHaveBeenCalledOnce();
+    expect(closeFirst).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "第二根抽屉" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "第一根抽屉" })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(firstContainer).toHaveAttribute("inert");
+    expect(secondContainer).toHaveAttribute("inert");
+
+    await user.keyboard("{Escape}");
+
+    expect(closeFirst).toHaveBeenCalledOnce();
+    expect(document.body.style.overflow).toBe("clip");
+    expect(firstContainer).not.toHaveAttribute("inert");
+    expect(secondContainer).not.toHaveAttribute("inert");
+  });
+
+  it("unregisters the exact cross-root entry when the top root unmounts", () => {
+    const firstContainer = createRootContainer("first");
+    const secondContainer = createRootContainer("second");
+    document.body.style.overflow = "scroll";
+    const firstRoot = render(
+      <WorkDrawer open title="第一根抽屉" onClose={() => undefined}>第一根</WorkDrawer>,
+      { container: firstContainer },
+    );
+    const secondRoot = render(
+      <WorkDrawer open title="第二根抽屉" onClose={() => undefined}>第二根</WorkDrawer>,
+      { container: secondContainer },
+    );
+
+    secondRoot.unmount();
+
+    expect(screen.getByRole("dialog", { name: "第一根抽屉" })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(firstContainer).toHaveAttribute("inert");
+
+    firstRoot.unmount();
+
+    expect(document.body.style.overflow).toBe("scroll");
+    expect(firstContainer).not.toHaveAttribute("inert");
+    expect(secondContainer).not.toHaveAttribute("inert");
+  });
+
+  it("cleans and reacquires stack ownership across StrictMode unmount and remount", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    document.body.style.overflow = "clip";
+    const { container, rerender, unmount } = render(
+      <StrictMode>
+        <StrictDrawer show onClose={onClose} />
+      </StrictMode>,
+    );
+    const firstTitleId = screen
+      .getByRole("dialog", { name: "严格模式抽屉" })
+      .getAttribute("aria-labelledby");
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(container).toHaveAttribute("inert");
+
+    rerender(
+      <StrictMode>
+        <StrictDrawer show={false} onClose={onClose} />
+      </StrictMode>,
+    );
+
+    expect(screen.queryByRole("dialog", { name: "严格模式抽屉" })).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("clip");
+    expect(container).not.toHaveAttribute("inert");
+    await user.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+
+    rerender(
+      <StrictMode>
+        <StrictDrawer show onClose={onClose} />
+      </StrictMode>,
+    );
+
+    const secondTitleId = screen
+      .getByRole("dialog", { name: "严格模式抽屉" })
+      .getAttribute("aria-labelledby");
+    expect(secondTitleId).not.toBe(firstTitleId);
+    expect(document.body.style.overflow).toBe("hidden");
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledOnce();
+
+    unmount();
+    expect(document.body.style.overflow).toBe("clip");
+    expect(container).not.toHaveAttribute("inert");
+  });
+
+  it("unregisters the exact opaque stack entry even when textual labels collide", () => {
+    const firstIdentity = {};
+    const secondIdentity = {};
+    const closeFirst = vi.fn();
+    const closeSecond = vi.fn();
+    const firstLayer = document.createElement("div");
+    const secondLayer = document.createElement("div");
+    const firstPanel = document.createElement("section");
+    const secondPanel = document.createElement("section");
+    firstLayer.dataset.workDrawerLayer = "same-text-id";
+    secondLayer.dataset.workDrawerLayer = "same-text-id";
+    firstPanel.append(document.createElement("button"));
+    secondPanel.append(document.createElement("button"));
+    firstLayer.append(firstPanel);
+    secondLayer.append(secondPanel);
+    document.body.append(firstLayer, secondLayer);
+
+    const unregisterFirst = registerDrawer({
+      identity: firstIdentity,
+      layer: firstLayer,
+      panel: firstPanel,
+      close: closeFirst,
+    });
+    const unregisterSecond = registerDrawer({
+      identity: secondIdentity,
+      layer: secondLayer,
+      panel: secondPanel,
+      close: closeSecond,
+    });
+
+    try {
+      unregisterSecond();
+      expect(firstLayer).not.toHaveAttribute("inert");
+      expect(firstPanel).toHaveAttribute("aria-modal", "true");
+
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      expect(closeFirst).toHaveBeenCalledOnce();
+      expect(closeSecond).not.toHaveBeenCalled();
+    } finally {
+      unregisterSecond();
+      unregisterFirst();
+      firstLayer.remove();
+      secondLayer.remove();
+    }
   });
 });

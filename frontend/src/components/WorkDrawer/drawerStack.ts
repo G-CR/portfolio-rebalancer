@@ -1,5 +1,5 @@
 type DrawerEntry = {
-  id: string;
+  identity: object;
   layer: HTMLElement;
   panel: HTMLElement;
   close: () => void;
@@ -43,12 +43,13 @@ function syncDrawerLayers() {
   });
 }
 
-function lockBackground() {
-  originalBodyOverflow = document.body.style.overflow;
-  document.body.style.overflow = "hidden";
-
+function captureBackgroundChildren() {
   for (const child of Array.from(document.body.children)) {
-    if (!(child instanceof HTMLElement) || child.matches("[data-work-drawer-layer]")) {
+    if (
+      !(child instanceof HTMLElement)
+      || child.matches("[data-work-drawer-layer]")
+      || backgroundState.has(child)
+    ) {
       continue;
     }
     backgroundState.set(child, {
@@ -57,6 +58,12 @@ function lockBackground() {
     });
     setInaccessible(child, true);
   }
+}
+
+function lockBackground() {
+  originalBodyOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+  captureBackgroundChildren();
 }
 
 function restoreBackground() {
@@ -110,6 +117,8 @@ export function registerDrawer(entry: DrawerEntry) {
   if (drawerStack.length === 0) {
     lockBackground();
     document.addEventListener("keydown", handleStackKeyDown);
+  } else {
+    captureBackgroundChildren();
   }
 
   drawerStack.push(entry);
@@ -117,7 +126,7 @@ export function registerDrawer(entry: DrawerEntry) {
   entry.panel.querySelector<HTMLElement>(focusableSelector)?.focus();
 
   return () => {
-    const index = drawerStack.findIndex((drawer) => drawer.id === entry.id);
+    const index = drawerStack.indexOf(entry);
     if (index === -1) return;
 
     drawerStack.splice(index, 1);
@@ -130,8 +139,8 @@ export function registerDrawer(entry: DrawerEntry) {
   };
 }
 
-export function isTopDrawer(id: string) {
-  return drawerStack.at(-1)?.id === id;
+export function isTopDrawer(identity: object) {
+  return drawerStack.at(-1)?.identity === identity;
 }
 
 export function canRestoreFocus(element: HTMLElement | null) {
