@@ -3,7 +3,9 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import { AppShell } from "../components/AppShell/AppShell";
 import { AssetClassesPage } from "../pages/AssetClassesPage";
+import { DashboardPage } from "../pages/DashboardPage";
 import { HoldingsPage } from "../pages/HoldingsPage";
+import { PnlPage } from "../pages/PnlPage";
 import { APP_ROUTES } from "./navigation";
 
 // The production container currently compiles JSX in classic mode.
@@ -45,11 +47,15 @@ const router = createBrowserRouter([
     path: "/",
     element: <AppShell />,
     children: APP_ROUTES.map((route) => {
-      const element = route.path === "/allocation"
-        ? <AssetClassesPage />
-        : route.path === "/holdings"
-          ? <HoldingsPage />
-          : <RouteWorkspace title={route.label} description={route.description} />;
+      const element = route.path === "/"
+        ? <DashboardPage />
+        : route.path === "/allocation"
+          ? <AssetClassesPage />
+          : route.path === "/holdings"
+            ? <HoldingsPage />
+            : route.path === "/analysis"
+              ? <PnlPage />
+              : <RouteWorkspace title={route.label} description={route.description} />;
       return {
         index: route.path === "/" ? true : undefined,
         path: route.path === "/" ? undefined : route.path.slice(1),

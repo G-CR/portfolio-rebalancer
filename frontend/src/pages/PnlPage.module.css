@@ -1,0 +1,46 @@
+.page { border-top: 2px solid var(--color-ink); background: var(--color-surface); }
+.header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-5); padding: var(--space-5) var(--space-7); border-bottom: 1px solid var(--color-rule); }
+.header p, .header h2, .header span { margin: 0; }
+.header p, .sectionHeading p { color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
+.header h2 { margin-top: 2px; font-size: 18px; }
+.header span { display: block; margin-top: var(--space-2); color: var(--color-muted); }
+.segmented { display: inline-grid; grid-template-columns: 1fr 1fr; padding: 2px; border: 1px solid var(--color-rule); background: var(--color-ground); }
+.segmented button { min-height: 32px; padding: 0 var(--space-3); border: 0; background: transparent; cursor: pointer; }
+.segmented button[aria-pressed="true"] { background: var(--color-surface); color: var(--color-actual); box-shadow: inset 0 0 0 1px var(--color-rule); font-weight: 650; }
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; border-bottom: 1px solid var(--color-rule); }
+.metrics div { position: relative; padding: var(--space-4) var(--space-7); border-right: 1px solid var(--color-rule); }
+.metrics div:last-child { border-right: 0; }
+.metrics dt { color: var(--color-muted); font-size: 10px; }
+.metrics dd { margin: var(--space-1) 0 0; font-family: var(--font-data); font-size: 20px; }
+.metrics dd small { position: absolute; right: var(--space-5); bottom: var(--space-4); color: var(--color-muted); font-family: var(--font-data); font-size: 9px; font-weight: 400; }
+.metrics dd em { margin-right: var(--space-2); font-family: var(--font-ui); font-size: 10px; font-style: normal; font-weight: 650; }
+.chartSection { padding: var(--space-5) var(--space-7); border-bottom: 1px solid var(--color-rule); }
+.sectionHeading { display: flex; align-items: end; justify-content: space-between; }
+.sectionHeading p, .sectionHeading h3 { margin: 0; }
+.sectionHeading h3 { margin-top: 2px; font-size: 14px; }
+.sectionHeading > span { color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
+.chart { width: 100%; height: 230px; margin-top: var(--space-3); }
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; min-width: 900px; border-collapse: collapse; table-layout: fixed; }
+.table th { height: 38px; padding: 0 var(--space-4); border-bottom: 1px solid var(--color-rule); color: var(--color-muted); font-size: 10px; text-align: right; }
+.table th:first-child { width: 180px; text-align: left; }
+.table td { height: 54px; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--color-rule); font-family: var(--font-data); font-size: 11px; text-align: right; }
+.table td:first-child { font-family: var(--font-ui); text-align: left; }
+.table td:first-child strong, .table td:first-child span { display: block; }
+.table td:first-child strong { font-family: var(--font-data); }
+.table td:first-child span { margin-top: 2px; color: var(--color-muted); font-size: 10px; }
+.pnlValue { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: var(--space-2); }
+.pnlValue small { font-family: var(--font-ui); font-size: 9px; }
+.positive { color: var(--color-planned); }
+.negative { color: var(--color-fx); }
+.neutral { color: var(--color-muted); }
+.footer { padding: var(--space-3) var(--space-7); color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
+.loading, .empty, .incomplete { min-height: 360px; padding: var(--space-7); border-top: 2px solid var(--color-ink); background: var(--color-surface); }
+.empty p { color: var(--color-muted); }
+.incomplete { border-top-color: var(--color-fx); }
+.incomplete strong { font-size: 16px; }
+.incomplete p { color: var(--color-muted); }
+.incomplete ul { max-width: 520px; padding: 0; border-top: 1px solid var(--color-rule); list-style: none; }
+.incomplete li { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-rule); font-family: var(--font-data); }
+.incomplete button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 36px; margin-top: var(--space-3); padding: 0 var(--space-3); border: 1px solid var(--color-actual); border-radius: 2px; background: var(--color-actual); color: white; cursor: pointer; }
+@media (max-width: 760px) { .header { align-items: stretch; flex-direction: column; padding: var(--space-4); } .segmented { width: 100%; } .metrics { grid-template-columns: 1fr; } .metrics div { border-right: 0; border-bottom: 1px solid var(--color-rule); padding-inline: var(--space-4); } .chartSection { padding: var(--space-4); } .footer { padding-inline: var(--space-4); } }

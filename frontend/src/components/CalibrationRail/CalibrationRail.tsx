@@ -103,6 +103,7 @@ export function CalibrationRail({
         <span
           className={styles.toleranceBand}
           style={{ left: `${bandLeft}%`, width: `${bandRight - bandLeft}%` }}
+          role="img"
           aria-label={toleranceText}
           data-testid="tolerance-band"
         />

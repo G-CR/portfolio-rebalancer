@@ -2,7 +2,8 @@ import { Filter, Plus } from "lucide-react";
 import { useState } from "react";
 
 import { ApiError } from "../api/client";
-import type { Holding } from "../api/types";
+import type { Holding, PortfolioIncompleteItem } from "../api/types";
+import { usePortfolioAnalytics } from "../features/analytics/api";
 import { useAssetClasses } from "../features/assetClasses/api";
 import { AddHoldingDrawer } from "../features/holdings/AddHoldingDrawer";
 import { AdjustmentHistoryDrawer } from "../features/holdings/AdjustmentHistoryDrawer";
@@ -20,6 +21,7 @@ export function HoldingsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const holdings = useHoldings(showArchived);
   const assetClasses = useAssetClasses();
+  const analytics = usePortfolioAnalytics();
   const archive = useArchiveHolding();
   const [selected, setSelected] = useState<Holding | null>(null);
   const [drawer, setDrawer] = useState<OpenDrawer>(null);
@@ -46,12 +48,26 @@ export function HoldingsPage() {
     setSelected(null);
   }
 
-  if (holdings.isPending || assetClasses.isPending) return <PageLoading kind="holdings" />;
+  if (holdings.isPending || assetClasses.isPending || analytics.isPending) return <PageLoading kind="holdings" />;
   if (holdings.isError || assetClasses.isError) {
     const loadError = holdings.error ?? assetClasses.error;
     const message = loadError instanceof ApiError ? loadError.message : "持仓数据载入失败。";
     return <PageError title="持仓与成本无法载入" message={message} retryLabel="重试载入持仓" onRetry={() => { void holdings.refetch(); void assetClasses.refetch(); }} />;
   }
+
+  const analyticsError = analytics.isError && analytics.error instanceof ApiError ? analytics.error : null;
+  const analyticsIncomplete = analyticsError?.code === "PORTFOLIO_DATA_INCOMPLETE";
+  if (analytics.isError && !analyticsIncomplete) {
+    const message = analytics.error instanceof ApiError ? analytics.error.message : "持仓分析载入失败。";
+    return <PageError title="持仓分析无法载入" message={message} retryLabel="重试载入持仓分析" onRetry={() => void analytics.refetch()} />;
+  }
+
+  const analyticsById = new Map((analytics.data?.holdings ?? []).map((item) => [item.holding_id, item]));
+  const incompleteItems = analyticsIncomplete && Array.isArray(analyticsError?.detail.items)
+    ? analyticsError.detail.items as unknown as PortfolioIncompleteItem[]
+    : [];
+  const incompleteById = new Map<string, PortfolioIncompleteItem[]>();
+  for (const item of incompleteItems) incompleteById.set(item.holding_id, [...(incompleteById.get(item.holding_id) ?? []), item]);
 
   const activeCount = holdings.data.filter((item) => item.is_active).length;
   const archivedCount = holdings.data.filter((item) => !item.is_active).length;
@@ -60,7 +76,7 @@ export function HoldingsPage() {
   return (
     <section className={styles.page} aria-labelledby="holdings-title">
       <header className={styles.header}>
-        <div><p>MANUAL CORE</p><h2 id="holdings-title">持仓与成本维护</h2><span>行情、市值与浮动盈亏将在市场数据接入后显示。</span></div>
+        <div><p>HOLDINGS LEDGER</p><h2 id="holdings-title">持仓与成本维护</h2><span>当前价、汇率、市值与浮动盈亏按最近有效数据展示。</span></div>
         <div className={styles.headerActions}>
           <button className={styles.addButton} type="button" onClick={() => setAddOpen(true)}>
             <Plus size={16} aria-hidden="true" />添加持仓
@@ -69,6 +85,7 @@ export function HoldingsPage() {
         </div>
       </header>
       {error ? <div className={styles.alert} role="alert">{error}</div> : null}
+      {analyticsIncomplete ? <div className={styles.alert} role="alert">{incompleteItems.map((item) => `${item.symbol} ${item.input === "price" ? "行情" : "汇率"}数据不完整`).join("；")}</div> : null}
       {filterLoading ? <div className={styles.filterStatus} role="status">正在载入已归档持仓...</div> : null}
       {!showArchived && activeCount === 0 ? (
         <div className={styles.emptyState}>
@@ -81,7 +98,7 @@ export function HoldingsPage() {
         <div className={styles.emptyState}><strong>没有已归档持仓</strong><p>当前所有持仓都处于启用状态。</p></div>
       ) : null}
       {((!showArchived && activeCount > 0) || (showArchived && archivedCount > 0)) ? (
-        <HoldingsTable holdings={holdings.data} assetClasses={assetClasses.data} showArchived={showArchived} onCommand={(holding, next) => void command(holding, next)} />
+        <HoldingsTable holdings={holdings.data} assetClasses={assetClasses.data} analyticsById={analyticsById} incompleteById={incompleteById} showArchived={showArchived} onCommand={(holding, next) => void command(holding, next)} />
       ) : null}
       <footer className={styles.statusBar}><span>{activeCount} 个启用持仓{showArchived ? ` · ${archivedCount} 个已归档` : ""}</span><span>成本字段来自手工维护 · 不含已实现盈亏</span></footer>
 

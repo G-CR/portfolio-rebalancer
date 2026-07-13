@@ -19,6 +19,11 @@
 .currency { font-family: var(--font-data); font-size: 11px; }
 .numeric { font-family: var(--font-data); font-size: 11px; text-align: right; }
 .pendingData { color: var(--color-muted); font-family: var(--font-data); font-size: 10px; text-align: right; }
+.marketValue { display: grid; justify-items: end; gap: 2px; }
+.marketValue small { color: var(--color-muted); font-family: var(--font-ui); font-size: 9px; }
+.marketValue small[data-status="stale"] { color: var(--color-target); }
+.marketValue small[data-status="manual"] { color: var(--color-actual); }
+.mobileAmount { display: none; }
 .priorityMarket { text-align: right; }
 .actions { display: flex; justify-content: flex-end; gap: var(--space-1); }
 .iconButton { display: inline-grid; width: 32px; min-height: 32px; place-items: center; padding: 0; border: 1px solid var(--color-rule); border-radius: 2px; background: var(--color-surface); cursor: pointer; }
@@ -44,12 +49,15 @@
   .table th:nth-child(6),
   .table th:nth-child(7),
   .table th:nth-child(8) { display: none; }
-  .table th, .table td { padding-inline: var(--space-2); }
-  .table th:nth-child(1) { width: 104px; }
-  .table th:nth-child(4) { width: 72px; }
-  .table th:nth-child(9), .table th:nth-child(10) { width: 58px; }
-  .table th:last-child { width: 68px; }
-  .symbol span { max-width: 96px; }
+  .table th, .table td { padding-inline: var(--space-1); }
+  .table th:nth-child(1) { width: 84px; }
+  .table th:nth-child(4) { width: 54px; }
+  .table th:nth-child(9) { width: 80px; }
+  .table th:nth-child(10) { width: 76px; }
+  .table th:last-child { width: 66px; }
+  .symbol span { max-width: 78px; }
   .actions { gap: 2px; }
-  .iconButton { width: 30px; min-height: 30px; }
+  .iconButton { width: 28px; min-height: 28px; }
+  .desktopAmount { display: none; }
+  .mobileAmount { display: inline; }
 }

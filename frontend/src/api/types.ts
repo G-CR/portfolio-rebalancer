@@ -39,6 +39,100 @@ export interface Holding {
   version: number;
 }
 
+export type AnalyticsDataStatus = "valid" | "stale" | "manual" | "missing" | "failed" | string;
+
+export interface PortfolioDataInput {
+  key: string;
+  input: "price" | "fx";
+  value: DecimalString | null;
+  status: AnalyticsDataStatus;
+  source: string | null;
+  market_time: string | null;
+  fetched_at: string | null;
+  error_summary: string | null;
+  note: string | null;
+}
+
+export interface HoldingAnalytics {
+  holding_id: string;
+  asset_class_id: string;
+  symbol: string;
+  name: string;
+  trade_currency: string;
+  current_price: DecimalString;
+  current_fx_to_cny: DecimalString;
+  price_status: AnalyticsDataStatus;
+  fx_status: AnalyticsDataStatus;
+  cost_trade_currency: DecimalString;
+  market_value_trade_currency: DecimalString;
+  unrealized_pnl_trade_currency: DecimalString;
+  cost_cny: DecimalString;
+  market_value_cny: DecimalString;
+  fx_neutral_value_cny: DecimalString;
+  unrealized_pnl: DecimalString;
+  unrealized_return: DecimalString;
+  price_effect: DecimalString;
+  fx_effect: DecimalString;
+}
+
+export interface AssetClassAnalytics {
+  id: string;
+  name: string;
+  target_weight: DecimalString;
+  display_order: number;
+  actual_weight: DecimalString;
+  fx_neutral_weight: DecimalString;
+  drift: DecimalString;
+  fx_weight_contribution: DecimalString;
+  cost_cny: DecimalString;
+  market_value_cny: DecimalString;
+  fx_neutral_value_cny: DecimalString;
+  unrealized_pnl: DecimalString;
+  price_effect: DecimalString;
+  fx_effect: DecimalString;
+}
+
+export interface PortfolioDecision {
+  status: "setup" | "hold" | "contribute" | "rebalance";
+  title: string;
+  reason: string;
+  max_drift: DecimalString;
+  fx_contribution: DecimalString;
+  primary_action: "add_holding" | "simulate_contribution" | "view_rebalance";
+}
+
+export interface PortfolioAnalytics {
+  as_of: string | null;
+  data_status: string;
+  has_stale_data: boolean;
+  has_manual_data: boolean;
+  tolerance: DecimalString;
+  cost_cny: DecimalString;
+  market_value_cny: DecimalString;
+  fx_neutral_value_cny: DecimalString;
+  unrealized_pnl: DecimalString;
+  unrealized_return: DecimalString;
+  price_effect: DecimalString;
+  fx_effect: DecimalString;
+  overseas_weight: DecimalString;
+  decision: PortfolioDecision;
+  asset_classes: AssetClassAnalytics[];
+  holdings: HoldingAnalytics[];
+  data_inputs: PortfolioDataInput[];
+}
+
+export interface PortfolioIncompleteItem {
+  holding_id: string;
+  symbol: string;
+  input: "price" | "fx";
+  key: string;
+  status: string;
+  value: null;
+  market_time?: string | null;
+  source?: string | null;
+  error_summary?: string | null;
+}
+
 export type HoldingCreate = Omit<Holding, "id" | "is_active" | "version">;
 
 export interface HoldingDefaults {
