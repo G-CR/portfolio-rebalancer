@@ -6,6 +6,28 @@ from app.domain.analytics import PositionInput, analyze_position
 from app.schemas.analytics import PositionAnalysisResponse
 
 
+def _expected_formulas(value: PositionInput) -> dict[str, Decimal]:
+    with localcontext() as context:
+        context.prec = 200
+        current_at_cost_fx = value.quantity * value.current_price * value.cost_fx
+        cost_cny = value.quantity * value.cost_price * value.cost_fx
+        market_value_cny = value.quantity * value.current_price * value.current_fx
+        fx_neutral_value_cny = value.quantity * value.current_price * value.baseline_fx
+        price_effect = current_at_cost_fx - cost_cny
+        fx_effect = market_value_cny - current_at_cost_fx
+        unrealized_pnl = market_value_cny - cost_cny
+        unrealized_return = unrealized_pnl / cost_cny if cost_cny else Decimal("0")
+        return {
+            "cost_cny": cost_cny,
+            "market_value_cny": market_value_cny,
+            "fx_neutral_value_cny": fx_neutral_value_cny,
+            "price_effect": price_effect,
+            "fx_effect": fx_effect,
+            "unrealized_pnl": unrealized_pnl,
+            "unrealized_return": unrealized_return,
+        }
+
+
 def test_usd_position_decomposes_pnl_exactly() -> None:
     result = analyze_position(
         PositionInput(
@@ -67,21 +89,48 @@ def test_zero_cost_price_returns_zero_unrealized_return() -> None:
     assert result.price_effect + result.fx_effect == result.unrealized_pnl
 
 
-def test_pnl_decomposition_identity_survives_low_precision_context() -> None:
+def test_results_are_identical_under_low_and_default_precision_contexts() -> None:
+    value = PositionInput(
+        quantity=Decimal("150"),
+        cost_price=Decimal("106.666666666667"),
+        current_price=Decimal("120"),
+        cost_fx=Decimal("7.075"),
+        current_fx=Decimal("7.20"),
+        baseline_fx=Decimal("7.00"),
+    )
+    default_result = analyze_position(value)
+
     with localcontext() as context:
         context.prec = 4
-        result = analyze_position(
-            PositionInput(
-                quantity=Decimal("150"),
-                cost_price=Decimal("106.666666666667"),
-                current_price=Decimal("120"),
-                cost_fx=Decimal("7.075"),
-                current_fx=Decimal("7.20"),
-                baseline_fx=Decimal("7.00"),
-            )
-        )
+        low_precision_result = analyze_position(value)
 
-        assert result.price_effect + result.fx_effect == result.unrealized_pnl
+    assert low_precision_result == default_result
+
+
+def test_numeric_28_12_boundary_formulas_are_exact() -> None:
+    value = PositionInput(
+        quantity=Decimal("9999999999999999.999999999999"),
+        cost_price=Decimal("9999999999999999.999999999999"),
+        current_price=Decimal("8888888888888888.888888888888"),
+        cost_fx=Decimal("19.999999999999"),
+        current_fx=Decimal("0.100000000001"),
+        baseline_fx=Decimal("10.123456789012"),
+    )
+
+    result = analyze_position(value)
+    expected = _expected_formulas(value)
+
+    assert result.cost_cny == expected["cost_cny"]
+    assert result.market_value_cny == expected["market_value_cny"]
+    assert result.fx_neutral_value_cny == expected["fx_neutral_value_cny"]
+    assert result.unrealized_pnl == expected["unrealized_pnl"]
+    assert result.price_effect == expected["price_effect"]
+    assert result.fx_effect == expected["fx_effect"]
+
+    with localcontext() as context:
+        context.prec = 200
+        assert result.market_value_cny - result.cost_cny == expected["unrealized_pnl"]
+        assert result.price_effect + result.fx_effect == expected["unrealized_pnl"]
 
 
 @pytest.mark.parametrize(
@@ -134,7 +183,7 @@ def test_position_analysis_response_validates_from_domain_result() -> None:
         "market_value_cny": "129600.00",
         "fx_neutral_value_cny": "126000.00",
         "unrealized_pnl": "16399.999999999646250",
-        "unrealized_return": "0.1448763250883356448763250884",
+        "unrealized_return": format(domain_result.unrealized_return, "f"),
         "price_effect": "14149.999999999646250",
         "fx_effect": "2250.000",
     }
