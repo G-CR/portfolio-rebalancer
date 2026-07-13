@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client";
 import type { Holding, SellPayload } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
 import { WorkDrawer } from "../../components/WorkDrawer/WorkDrawer";
-import { useConfirmAdjustment, useSellPreview } from "./api";
+import { isStaleCostPreview, useConfirmAdjustment, useSellPreview } from "./api";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
 
@@ -41,6 +41,12 @@ export function SaleDrawer({ holding, open, onClose, onUpdated }: Props) {
       await confirmMutation.mutateAsync({ expected_version: preview.holding_version, operation: "sell", payload });
       onUpdated?.();
     } catch (caught) {
+      if (isStaleCostPreview(caught)) {
+        previewMutation.reset();
+        setFingerprint(null);
+        setError("持仓已发生变化，请重新生成卖出调整预览");
+        return;
+      }
       setError(caught instanceof ApiError ? caught.message : "卖出调整确认失败。");
     }
   }

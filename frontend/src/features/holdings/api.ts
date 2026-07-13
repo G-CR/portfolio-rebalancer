@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiRequest, jsonBody } from "../../api/client";
+import { ApiError, apiRequest, jsonBody } from "../../api/client";
 import type {
   ConfirmAdjustmentRequest,
   CorrectionPayload,
@@ -13,16 +13,27 @@ import type {
   SellPayload,
 } from "../../api/types";
 
-export const holdingsQueryKey = ["holdings"] as const;
+export const holdingsQueryRoot = ["holdings"] as const;
+export const holdingsQueryKey = (includeArchived: boolean) =>
+  ["holdings", { includeArchived }] as const;
 export const costAdjustmentsQueryKey = (holdingId: string) =>
   ["cost-adjustments", holdingId] as const;
 
+export function isStaleCostPreview(
+  error: unknown,
+): error is ApiError & { code: "STALE_COST_PREVIEW" } {
+  return error instanceof ApiError && error.code === "STALE_COST_PREVIEW";
+}
+
 export function useHoldings(includeArchived = false) {
   return useQuery({
-    queryKey: holdingsQueryKey,
-    queryFn: () => apiRequest<Holding[]>(
-      includeArchived ? "/api/holdings?include_archived=true" : "/api/holdings",
+    queryKey: holdingsQueryKey(includeArchived),
+    queryFn: ({ queryKey }) => apiRequest<Holding[]>(
+      queryKey[1].includeArchived
+        ? "/api/holdings?include_archived=true"
+        : "/api/holdings",
     ),
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -33,7 +44,7 @@ export function useCreateHolding() {
       method: "POST",
       body: jsonBody(payload),
     }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryKey }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot }),
   });
 }
 
@@ -43,7 +54,7 @@ export function useArchiveHolding() {
     mutationFn: (holdingId: string) => apiRequest<Holding>(`/api/holdings/${holdingId}/archive`, {
       method: "POST",
     }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryKey }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot }),
   });
 }
 
@@ -95,7 +106,12 @@ export function useConfirmAdjustment<TPayload>(holdingId: string) {
         body: jsonBody(request),
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: holdingsQueryKey });
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
+      void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(holdingId) });
+    },
+    onError: (error) => {
+      if (!isStaleCostPreview(error)) return;
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(holdingId) });
     },
   });

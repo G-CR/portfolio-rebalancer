@@ -87,14 +87,14 @@ async def get_adjustment_context(
                 id=item.id,
                 operation_type=item.operation_type,
                 before=_history_basis_response(
-                    CostBasis(
+                    _normalized_cost_basis(
                         quantity=item.before_quantity,
                         average_price=item.before_average_cost_price,
                         cost_fx=item.before_cost_fx_to_cny,
                     )
                 ),
                 after=_history_basis_response(
-                    CostBasis(
+                    _normalized_cost_basis(
                         quantity=item.after_quantity,
                         average_price=item.after_average_cost_price,
                         cost_fx=item.after_cost_fx_to_cny,
@@ -360,12 +360,10 @@ def _preview_correction_from_holding(
     )
     before = _holding_cost_basis(holding)
     try:
-        after = _storage_basis(
-            CostBasis(
-                quantity=payload.quantity,
-                average_price=payload.average_cost_price,
-                cost_fx=payload.cost_fx_to_cny,
-            )
+        after = _normalized_cost_basis(
+            quantity=payload.quantity,
+            average_price=payload.average_cost_price,
+            cost_fx=payload.cost_fx_to_cny,
         )
     except ValueError as exc:
         raise ServiceError(422, "INVALID_COST_BASIS", str(exc)) from exc
@@ -397,12 +395,10 @@ def _preview_restore_from_holding(
         message="Restore requires a note.",
     )
     before = _holding_cost_basis(holding)
-    after = _storage_basis(
-        CostBasis(
-            quantity=adjustment.after_quantity,
-            average_price=adjustment.after_average_cost_price,
-            cost_fx=adjustment.after_cost_fx_to_cny,
-        )
+    after = _normalized_cost_basis(
+        quantity=adjustment.after_quantity,
+        average_price=adjustment.after_average_cost_price,
+        cost_fx=adjustment.after_cost_fx_to_cny,
     )
     return PreviewResult(
         operation="restore",
@@ -642,12 +638,10 @@ async def _get_cost_adjustment(
 
 
 def _holding_cost_basis(holding: Holding) -> CostBasis:
-    return _storage_basis(
-        CostBasis(
-            quantity=holding.quantity,
-            average_price=holding.average_cost_price,
-            cost_fx=holding.cost_fx_to_cny,
-        )
+    return _normalized_cost_basis(
+        quantity=holding.quantity,
+        average_price=holding.average_cost_price,
+        cost_fx=holding.cost_fx_to_cny,
     )
 
 
@@ -676,6 +670,25 @@ def _storage_basis(value: CostBasis) -> CostBasis:
         average_price=average_price,
         cost_fx=cost_fx,
         _total_cost_cny=quantity * average_price * cost_fx,
+    )
+
+
+def _normalized_cost_basis(
+    *, quantity: Decimal, average_price: Decimal, cost_fx: Decimal
+) -> CostBasis:
+    if quantity == 0:
+        return CostBasis(
+            quantity=_ZERO,
+            average_price=_ZERO,
+            cost_fx=_ZERO,
+            _total_cost_cny=_ZERO,
+        )
+    return _storage_basis(
+        CostBasis(
+            quantity=quantity,
+            average_price=average_price,
+            cost_fx=cost_fx,
+        )
     )
 
 

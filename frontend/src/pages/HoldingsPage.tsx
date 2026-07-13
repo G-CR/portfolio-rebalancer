@@ -1,5 +1,5 @@
 import { Filter, Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { ApiError } from "../api/client";
 import type { Holding } from "../api/types";
@@ -25,16 +25,6 @@ export function HoldingsPage() {
   const [drawer, setDrawer] = useState<OpenDrawer>(null);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [filterLoading, setFilterLoading] = useState(false);
-
-  useEffect(() => {
-    if (!filterLoading) return;
-    let current = true;
-    void holdings.refetch().finally(() => {
-      if (current) setFilterLoading(false);
-    });
-    return () => { current = false; };
-  }, [filterLoading, holdings.refetch]);
 
   async function command(holding: Holding, next: HoldingCommand) {
     if (next === "archive") {
@@ -65,12 +55,18 @@ export function HoldingsPage() {
 
   const activeCount = holdings.data.filter((item) => item.is_active).length;
   const archivedCount = holdings.data.filter((item) => !item.is_active).length;
+  const filterLoading = holdings.isFetching && !holdings.isPending;
 
   return (
     <section className={styles.page} aria-labelledby="holdings-title">
       <header className={styles.header}>
         <div><p>MANUAL CORE</p><h2 id="holdings-title">持仓与成本维护</h2><span>行情、市值与浮动盈亏将在市场数据接入后显示。</span></div>
-        <label className={styles.filter}><Filter size={15} aria-hidden="true" /><input type="checkbox" checked={showArchived} onChange={(event) => { setShowArchived(event.target.checked); setFilterLoading(true); }} />仅显示已归档持仓</label>
+        <div className={styles.headerActions}>
+          <button className={styles.addButton} type="button" onClick={() => setAddOpen(true)}>
+            <Plus size={16} aria-hidden="true" />添加持仓
+          </button>
+          <label className={styles.filter}><Filter size={15} aria-hidden="true" /><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />仅显示已归档持仓</label>
+        </div>
       </header>
       {error ? <div className={styles.alert} role="alert">{error}</div> : null}
       {filterLoading ? <div className={styles.filterStatus} role="status">正在载入已归档持仓...</div> : null}
@@ -93,7 +89,7 @@ export function HoldingsPage() {
       {selected ? <SaleDrawer holding={selected} open={drawer === "sell"} onClose={closeDrawer} onUpdated={closeDrawer} /> : null}
       {selected ? <CorrectionDrawer holding={selected} open={drawer === "correction"} onClose={closeDrawer} onUpdated={closeDrawer} /> : null}
       {selected ? <AdjustmentHistoryDrawer holding={selected} open={drawer === "history"} onClose={closeDrawer} /> : null}
-      <AddHoldingDrawer assetClasses={assetClasses.data} open={addOpen} onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); setShowArchived(false); }} />
+      {addOpen ? <AddHoldingDrawer assetClasses={assetClasses.data} open onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); setShowArchived(false); }} /> : null}
     </section>
   );
 }

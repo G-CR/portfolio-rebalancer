@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../../api/client";
 import type { AssetClass, HoldingCreate } from "../../api/types";
@@ -35,6 +35,9 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   const [preferred, setPreferred] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const mounted = useRef(true);
+
+  useEffect(() => () => { mounted.current = false; }, []);
 
   useEffect(() => {
     if (!assetClassId && activeClasses[0]) setAssetClassId(activeClasses[0].id);
@@ -71,7 +74,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
     };
     try {
       await create.mutateAsync(payload);
-      onCreated();
+      if (mounted.current) onCreated();
     } catch (error) {
       setServerError(error instanceof ApiError ? error.message : "持仓创建失败，请检查输入后重试。");
     }

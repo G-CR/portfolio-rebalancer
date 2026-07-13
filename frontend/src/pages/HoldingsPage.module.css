@@ -4,6 +4,8 @@
 .header p { color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
 .header h2 { margin-top: var(--space-1); font-size: 18px; }
 .header span { display: block; margin-top: var(--space-2); color: var(--color-muted); font-size: 11px; }
+.headerActions { display: flex; align-items: center; gap: var(--space-2); }
+.addButton { display: inline-flex; min-height: 36px; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--color-actual); border-radius: 2px; background: var(--color-actual); color: white; cursor: pointer; white-space: nowrap; }
 .filter { display: flex; align-items: center; gap: var(--space-2); min-height: 36px; padding: 0 var(--space-3); border: 1px solid var(--color-rule); white-space: nowrap; }
 .filter input { accent-color: var(--color-actual); }
 .alert { padding: var(--space-3) var(--space-7); border-bottom: 1px solid var(--color-fx); background: rgb(201 74 58 / 6%); color: var(--color-fx); }
@@ -15,6 +17,8 @@
 .emptyState button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 38px; padding: 0 var(--space-4); border: 1px solid var(--color-actual); border-radius: 2px; background: var(--color-actual); color: white; cursor: pointer; }
 @media (max-width: 760px) {
   .header { align-items: stretch; flex-direction: column; padding: var(--space-4); }
+  .headerActions { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .addButton { justify-content: center; }
   .filter { justify-content: center; }
   .statusBar { align-items: flex-start; flex-direction: column; padding: var(--space-3) var(--space-4); }
   .filterStatus, .emptyState { padding-inline: var(--space-4); }

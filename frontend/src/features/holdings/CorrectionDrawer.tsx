@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client";
 import type { CorrectionPayload, Holding } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
 import { WorkDrawer } from "../../components/WorkDrawer/WorkDrawer";
-import { useConfirmAdjustment, useCorrectionPreview } from "./api";
+import { isStaleCostPreview, useConfirmAdjustment, useCorrectionPreview } from "./api";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
 
@@ -53,6 +53,12 @@ export function CorrectionDrawer({ holding, open, onClose, onUpdated }: Props) {
       await confirmMutation.mutateAsync({ expected_version: preview.holding_version, operation: "manual_correction", payload });
       onUpdated?.();
     } catch (caught) {
+      if (isStaleCostPreview(caught)) {
+        previewMutation.reset();
+        setFingerprint(null);
+        setError("持仓已发生变化，请重新生成人工修正预览");
+        return;
+      }
       setError(caught instanceof ApiError ? caught.message : "人工修正确认失败。");
     }
   }

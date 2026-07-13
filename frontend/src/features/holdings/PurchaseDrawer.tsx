@@ -9,6 +9,7 @@ import {
   useConfirmAdjustment,
   useCostAdjustments,
   usePurchasePreview,
+  isStaleCostPreview,
 } from "./api";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
@@ -30,7 +31,7 @@ function today() {
 
 function messageFor(error: unknown) {
   if (!(error instanceof ApiError)) return "请求失败，请检查输入后重试。";
-  if (error.code === "STALE_COST_PREVIEW") return "持仓已发生变化，请重新生成预览";
+  if (isStaleCostPreview(error)) return "持仓已发生变化，请重新生成预览";
   return error.message;
 }
 
@@ -116,7 +117,7 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
       setSuccess(true);
       onUpdated?.();
     } catch (error) {
-      if (error instanceof ApiError && error.code === "STALE_COST_PREVIEW") {
+      if (isStaleCostPreview(error)) {
         previewMutation.reset();
         setPreviewFingerprint(null);
       }

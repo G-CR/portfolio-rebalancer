@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { screen, waitFor } from "@testing-library/react";
 
 import { AssetClassesPage } from "../src/pages/AssetClassesPage";
+import { holdingsQueryKey } from "../src/features/holdings/api";
 import { assetClassFixtures } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
@@ -31,7 +32,7 @@ describe("AssetClassEditor", () => {
   it("explains excess and submits exact decimal strings", async () => {
     const user = userEvent.setup();
     let requestBody: unknown;
-    renderWithProviders(<AssetClassesPage />, {
+    const { queryClient } = renderWithProviders(<AssetClassesPage />, {
       handlers: [
         http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
         holdingsHandler,
@@ -41,6 +42,7 @@ describe("AssetClassEditor", () => {
         }),
       ],
     });
+    queryClient.setQueryData(holdingsQueryKey(false), []);
 
     const input = await screen.findByRole("textbox", { name: "红利低波目标比例" });
     await user.clear(input);
@@ -55,6 +57,7 @@ describe("AssetClassEditor", () => {
     expect((requestBody as Array<{ target_weight: string }>)[0].target_weight)
       .toBe("0.20000000");
     expect(screen.getByText("资产配置已保存")).toBeInTheDocument();
+    expect(queryClient.getQueryState(holdingsQueryKey(false))?.isInvalidated).toBe(true);
   });
 
   it("surfaces a structured backend save error and keeps edits", async () => {

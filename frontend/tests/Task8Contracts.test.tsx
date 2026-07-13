@@ -6,7 +6,11 @@ import { AssetClassesPage } from "../src/pages/AssetClassesPage";
 import { HoldingsPage } from "../src/pages/HoldingsPage";
 import { PurchaseDrawer } from "../src/features/holdings/PurchaseDrawer";
 import { assetClassesQueryKey } from "../src/features/assetClasses/api";
-import { costAdjustmentsQueryKey, holdingsQueryKey } from "../src/features/holdings/api";
+import {
+  costAdjustmentsQueryKey,
+  holdingsQueryKey,
+  holdingsQueryRoot,
+} from "../src/features/holdings/api";
 import { assetClassFixtures, holdingFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
@@ -19,7 +23,9 @@ const context = {
 
 it("keeps the planned TanStack Query keys exact", () => {
   expect(assetClassesQueryKey).toEqual(["asset-classes"]);
-  expect(holdingsQueryKey).toEqual(["holdings"]);
+  expect(holdingsQueryRoot).toEqual(["holdings"]);
+  expect(holdingsQueryKey(false)).toEqual(["holdings", { includeArchived: false }]);
+  expect(holdingsQueryKey(true)).toEqual(["holdings", { includeArchived: true }]);
   expect(costAdjustmentsQueryKey(holdingFixture.id)).toEqual([
     "cost-adjustments",
     holdingFixture.id,

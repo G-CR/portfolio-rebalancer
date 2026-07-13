@@ -507,6 +507,43 @@ async def test_sell_confirm_preserves_average_cost_and_cost_fx(api_client, db_se
     assert rows[0].operation_type == "SELL"
 
 
+async def test_zero_quantity_holding_defaults_can_preview_correction(api_client) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    holding_response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(
+            asset_class_id,
+            symbol="ZERO",
+            trade_currency="CNY",
+            quantity="0",
+            average_cost_price="0",
+            cost_fx_to_cny="1",
+            baseline_fx_to_cny="1",
+        ),
+    )
+    assert holding_response.status_code == 201
+    holding = holding_response.json()
+
+    preview = await api_client.post(
+        f"/api/cost-adjustments/{holding['id']}/preview-correction",
+        json={
+            "quantity": "0",
+            "average_cost_price": "0",
+            "cost_fx_to_cny": "1",
+            "note": "确认空仓初始状态",
+        },
+    )
+
+    assert preview.status_code == 200
+    assert preview.json()["before"] == {
+        "quantity": "0",
+        "average_cost_price": "0.00",
+        "cost_fx_to_cny": "0",
+        "total_cost_cny": "0.00",
+    }
+    assert preview.json()["after"] == preview.json()["before"]
+
+
 async def test_manual_correction_requires_reason_and_restore_creates_append_only_audit_row(
     api_client, db_session
 ) -> None:

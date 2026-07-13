@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
 import type { AssetClass, AssetClassUpdate } from "../../api/types";
+import { holdingsQueryRoot } from "../holdings/api";
 
 export const assetClassesQueryKey = ["asset-classes"] as const;
 
@@ -22,6 +23,7 @@ export function useSaveAssetClasses() {
     onSuccess: (items) => {
       queryClient.setQueryData(assetClassesQueryKey, items);
       void queryClient.invalidateQueries({ queryKey: assetClassesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
     },
   });
 }

@@ -1,11 +1,16 @@
-import { Check, RotateCcw } from "lucide-react";
+import { Check, RefreshCw, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import { ApiError } from "../../api/client";
 import type { CostAdjustmentHistoryItem, Holding, RestorePayload } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
 import { WorkDrawer } from "../../components/WorkDrawer/WorkDrawer";
-import { useConfirmAdjustment, useCostAdjustments, useRestorePreview } from "./api";
+import {
+  isStaleCostPreview,
+  useConfirmAdjustment,
+  useCostAdjustments,
+  useRestorePreview,
+} from "./api";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
 
@@ -43,14 +48,18 @@ export function AdjustmentHistoryDrawer({ holding, open, onClose, onUpdated }: P
   const [note, setNote] = useState("恢复到此状态");
   const [error, setError] = useState<string | null>(null);
 
-  async function beginRestore(item: CostAdjustmentHistoryItem) {
-    setSelected(item);
+  async function generateRestore(item: CostAdjustmentHistoryItem) {
     setError(null);
     try {
       await restorePreview.mutateAsync({ adjustmentId: item.id, note: note || null });
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "恢复预览失败。");
     }
+  }
+
+  async function beginRestore(item: CostAdjustmentHistoryItem) {
+    setSelected(item);
+    await generateRestore(item);
   }
 
   async function confirmRestore() {
@@ -66,6 +75,11 @@ export function AdjustmentHistoryDrawer({ holding, open, onClose, onUpdated }: P
       restorePreview.reset();
       onUpdated?.();
     } catch (caught) {
+      if (isStaleCostPreview(caught)) {
+        restorePreview.reset();
+        setError("持仓已发生变化，请重新生成恢复预览");
+        return;
+      }
       setError(caught instanceof ApiError ? caught.message : "恢复确认失败。");
     }
   }
@@ -100,6 +114,11 @@ export function AdjustmentHistoryDrawer({ holding, open, onClose, onUpdated }: P
           <div className={styles.historyIntro}><strong>新增修正记录</strong><p>将新增一条人工修正记录，原历史不会删除。</p></div>
           {error ? <div className={styles.alert} role="alert">{error}</div> : null}
           <FormField label="恢复备注"><textarea value={note} onChange={(event) => setNote(event.target.value)} /></FormField>
+          {selected && error ? (
+            <button className={styles.previewButton} type="button" disabled={restorePreview.isPending} onClick={() => void generateRestore(selected)}>
+              <RefreshCw size={16} aria-hidden="true" />重新生成恢复预览
+            </button>
+          ) : null}
           {restorePreview.isPending ? <p className={styles.muted}>正在生成恢复预览...</p> : null}
           {restorePreview.data ? <CostBasisPreview preview={restorePreview.data} /> : null}
         </div>
