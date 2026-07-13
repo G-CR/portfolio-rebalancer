@@ -5,9 +5,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+COPY index.html ./
 COPY src ./src
-RUN printf '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Portfolio Rebalancer</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>' > index.html \
-    && npm run build
+RUN npm run build
 
 FROM nginx:1.29-alpine
 
