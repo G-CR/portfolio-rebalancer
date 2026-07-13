@@ -97,4 +97,4 @@ class YahooProvider:
             with urlopen(url, timeout=15) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:  # pragma: no cover - network behavior
-            raise ProviderRequestError(f"Yahoo request failed: {exc}") from exc
+            raise ProviderRequestError("Yahoo request failed.") from exc

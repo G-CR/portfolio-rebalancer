@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
@@ -18,6 +21,7 @@ from app.services.market_data import (
 )
 
 router = APIRouter(tags=["market-data"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/market-data", response_model=MarketDataCollectionResponse)
@@ -68,3 +72,15 @@ async def _run_write(session: AsyncSession, operation):
             return await operation()
     except ServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_detail()) from exc
+    except SQLAlchemyError as exc:
+        logger.error(
+            "Market-data storage operation failed exception_class=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "MARKET_DATA_STORAGE_ERROR",
+                "message": "Market-data storage operation failed.",
+            },
+        ) from exc

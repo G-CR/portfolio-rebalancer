@@ -66,4 +66,4 @@ class AkshareProvider:
             frame = ak.fund_etf_spot_em()
             return frame.to_dict("records")
         except Exception as exc:  # pragma: no cover - network behavior
-            raise ProviderRequestError(f"AKShare request failed for {symbol}: {exc}") from exc
+            raise ProviderRequestError("AKShare request failed.") from exc

@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 from pydantic_core import PydanticCustomError
 
+from app.core.market import normalize_currency_code, normalize_market_code
 from app.schemas.common import DecimalString
 
 
@@ -94,10 +95,29 @@ class HoldingCreate(BaseModel):
     quantity_precision: int
     is_rebalance_preferred: bool = False
 
+    @field_validator("market")
+    @classmethod
+    def normalize_market(cls, value: str) -> str:
+        try:
+            return normalize_market_code(value)
+        except ValueError as exc:
+            raise PydanticCustomError(
+                "holding_market_invalid",
+                "Market must be one of US, SH, or SZ.",
+                {"field": "market"},
+            ) from exc
+
     @field_validator("trade_currency")
     @classmethod
     def normalize_trade_currency(cls, value: str) -> str:
-        return value.upper()
+        try:
+            return normalize_currency_code(value)
+        except ValueError as exc:
+            raise PydanticCustomError(
+                "holding_trade_currency_invalid",
+                "Trade currency must be exactly three ASCII letters.",
+                {"field": "trade_currency"},
+            ) from exc
 
     @field_validator(
         "quantity",
@@ -139,12 +159,33 @@ class HoldingUpdate(BaseModel):
     quantity_precision: int | None = None
     is_rebalance_preferred: bool | None = None
 
+    @field_validator("market")
+    @classmethod
+    def normalize_market(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return normalize_market_code(value)
+        except ValueError as exc:
+            raise PydanticCustomError(
+                "holding_market_invalid",
+                "Market must be one of US, SH, or SZ.",
+                {"field": "market"},
+            ) from exc
+
     @field_validator("trade_currency")
     @classmethod
     def normalize_trade_currency(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return value.upper()
+        try:
+            return normalize_currency_code(value)
+        except ValueError as exc:
+            raise PydanticCustomError(
+                "holding_trade_currency_invalid",
+                "Trade currency must be exactly three ASCII letters.",
+                {"field": "trade_currency"},
+            ) from exc
 
     @field_validator(
         "quantity",

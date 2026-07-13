@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-import re
+import logging
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.decimal import fits_numeric_28_12
+from app.core.market import normalize_currency_code, normalize_market_code
 from app.db.models import AssetClass, Holding, HoldingDefault, MarketData, MarketDataOverride, Setting
 from app.providers.akshare import AkshareProvider
 from app.providers.alpha_vantage import AlphaVantageProvider
@@ -17,10 +19,16 @@ from app.providers.base import (
     NullCredentialReader,
     ProviderError,
     ProviderNotConfigured,
+    ProviderPayloadError,
+    ProviderRequestError,
 )
 from app.providers.tushare import TushareProvider
 from app.providers.yahoo import YahooProvider
-from app.schemas.market_data import MarketDataCollectionResponse, MarketDataStatusResponse
+from app.schemas.market_data import (
+    MarketDataCollectionResponse,
+    MarketDataDiagnosticResponse,
+    MarketDataStatusResponse,
+)
 from app.services.errors import ServiceError
 
 _ONE = Decimal("1")
@@ -28,6 +36,14 @@ _ERROR_SUMMARY_LIMIT = 200
 _DOMESTIC_PROVIDER_ORDER = ("akshare", "tushare")
 _INTERNATIONAL_PROVIDER_ORDER = ("yahoo", "alpha_vantage")
 _FX_PROVIDER_ORDER = ("yahoo", "alpha_vantage")
+_SAFE_FAILURE_DETAILS = {
+    "provider_not_configured": "Market-data provider is not configured.",
+    "provider_payload_invalid": "Market-data provider returned invalid data.",
+    "provider_request_failed": "Market-data provider request failed.",
+    "provider_internal_error": "Market-data provider failed unexpectedly.",
+    "legacy_refresh_error": "Previous market-data refresh failed.",
+}
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +108,12 @@ class RequiredMarketDataItem:
     preferred_source: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RequiredMarketDataCollection:
+    items: list[RequiredMarketDataItem]
+    diagnostics: list[MarketDataDiagnosticResponse]
+
+
 class ProviderRegistry:
     def __init__(self) -> None:
         credentials = NullCredentialReader()
@@ -129,7 +151,7 @@ class ProviderRegistry:
                 last_error = exc
                 continue
         if last_error is not None:
-            raise ProviderSelectionError(last_provider_name or "unknown", str(last_error))
+            raise ProviderSelectionError(last_provider_name or "unknown", last_error)
         raise ProviderError(f"No configured provider could refresh price for {symbol}.")
 
     async def fetch_fx(
@@ -158,14 +180,15 @@ class ProviderRegistry:
                 last_error = exc
                 continue
         if last_error is not None:
-            raise ProviderSelectionError(last_provider_name or "unknown", str(last_error))
+            raise ProviderSelectionError(last_provider_name or "unknown", last_error)
         raise ProviderError(f"No configured provider could refresh FX for {base}/{quote}.")
 
 
 class ProviderSelectionError(ProviderError):
-    def __init__(self, provider_name: str, message: str) -> None:
-        super().__init__(message)
+    def __init__(self, provider_name: str, cause: ProviderError) -> None:
+        super().__init__("No market-data provider returned a valid quote.")
         self.provider_name = provider_name
+        self.failure_category = _provider_failure_category(cause)
 
 
 def get_provider_registry() -> ProviderRegistry:
@@ -209,13 +232,18 @@ def resolve_effective_value(
 
 
 async def list_market_data(session: AsyncSession) -> MarketDataCollectionResponse:
-    required_items = await _collect_required_market_data_items(session)
-    return await _build_market_data_response(session, required_items)
+    required = await _collect_required_market_data_items(session)
+    return await _build_market_data_response(
+        session,
+        required.items,
+        diagnostics=required.diagnostics,
+    )
 
 
 async def refresh_all_required_data(session: AsyncSession) -> MarketDataCollectionResponse:
     await _acquire_transaction_lock(session, "market-data-refresh-all")
-    required_items = await _collect_required_market_data_items(session)
+    required = await _collect_required_market_data_items(session)
+    required_items = required.items
     registry = get_provider_registry()
     provider_priority = await _load_provider_priority(session)
 
@@ -238,19 +266,15 @@ async def refresh_all_required_data(session: AsyncSession) -> MarketDataCollecti
                     preferred_source=item.preferred_source,
                     provider_priority=provider_priority,
                 )
-            await _upsert_market_data_row(
-                session,
-                data_type=item.data_type,
-                symbol=item.symbol,
-                source=quote.source,
-                value=quote.value,
-                market_time=quote.as_of,
-                fetched_at=quote.fetched_at,
-                status="valid",
-                error_summary=None,
-            )
+            _validate_quote_for_storage(quote)
         except Exception as exc:
             source = exc.provider_name if isinstance(exc, ProviderSelectionError) else _default_failure_source(item)
+            logger.warning(
+                "Market-data refresh failed provider=%s data_type=%s exception_class=%s",
+                source,
+                item.data_type,
+                type(exc).__name__,
+            )
             await _upsert_market_data_row(
                 session,
                 data_type=item.data_type,
@@ -260,11 +284,28 @@ async def refresh_all_required_data(session: AsyncSession) -> MarketDataCollecti
                 market_time=None,
                 fetched_at=datetime.now(UTC),
                 status="failed",
-                error_summary=_sanitize_error_summary(exc),
+                error_summary=_safe_failure_summary(exc),
             )
+            continue
+
+        await _upsert_market_data_row(
+            session,
+            data_type=item.data_type,
+            symbol=item.symbol,
+            source=quote.source,
+            value=quote.value,
+            market_time=quote.as_of,
+            fetched_at=quote.fetched_at,
+            status="valid",
+            error_summary=None,
+        )
 
     await session.flush()
-    return await _build_market_data_response(session, required_items)
+    return await _build_market_data_response(
+        session,
+        required_items,
+        diagnostics=required.diagnostics,
+    )
 
 
 async def set_manual_override(
@@ -282,6 +323,13 @@ async def set_manual_override(
             422,
             "MARKET_DATA_OVERRIDE_VALUE_INVALID",
             "Override value must be positive and finite.",
+        )
+    if not fits_numeric_28_12(value):
+        raise ServiceError(
+            422,
+            "MARKET_DATA_NUMERIC_OUT_OF_RANGE",
+            "Market-data values must fit NUMERIC(28,12).",
+            {"field": "value"},
         )
     if not note.strip():
         raise ServiceError(
@@ -367,13 +415,15 @@ def parse_market_data_key(raw_key: str) -> ParsedMarketDataKey:
         return ParsedMarketDataKey(key=f"price:{symbol}", data_type="price", symbol=symbol)
 
     if raw_key.startswith("fx:"):
-        symbol = raw_key.removeprefix("fx:").strip().upper()
+        symbol = raw_key.removeprefix("fx:").strip()
         parts = symbol.split("/")
         if len(parts) != 2 or not all(parts):
             raise ServiceError(422, "MARKET_DATA_KEY_INVALID", "Market-data key is invalid.")
-        if not all(part.isalpha() and len(part) == 3 for part in parts):
+        try:
+            base, quote = (normalize_currency_code(part) for part in parts)
+        except ValueError:
             raise ServiceError(422, "MARKET_DATA_KEY_INVALID", "Market-data key is invalid.")
-        base, quote = parts
+
         return ParsedMarketDataKey(key=f"fx:{base}/{quote}", data_type="fx", symbol=f"{base}/{quote}")
 
     raise ServiceError(422, "MARKET_DATA_KEY_INVALID", "Market-data key is invalid.")
@@ -382,6 +432,8 @@ def parse_market_data_key(raw_key: str) -> ParsedMarketDataKey:
 async def _build_market_data_response(
     session: AsyncSession,
     required_items: list[RequiredMarketDataItem],
+    *,
+    diagnostics: list[MarketDataDiagnosticResponse] | None = None,
 ) -> MarketDataCollectionResponse:
     items = [
         response
@@ -391,7 +443,7 @@ async def _build_market_data_response(
         ]
         if response is not None
     ]
-    return MarketDataCollectionResponse(items=items)
+    return MarketDataCollectionResponse(items=items, diagnostics=diagnostics or [])
 
 
 async def _status_for_item(
@@ -467,8 +519,12 @@ async def _status_for_key(
 
 
 def _resolve_automated_value(rows: list[MarketData]) -> AutomatedValue | None:
-    latest_attempt = rows[0] if rows else None
-    latest_valid = next((row for row in rows if row.status == "valid" and row.value is not None), None)
+    latest_attempt = max(rows, key=_attempt_order_key, default=None)
+    latest_valid = max(
+        (row for row in rows if row.status == "valid" and row.value is not None),
+        key=_valid_quote_order_key,
+        default=None,
+    )
     if latest_valid is None:
         if latest_attempt is None:
             return None
@@ -484,24 +540,38 @@ def _resolve_automated_value(rows: list[MarketData]) -> AutomatedValue | None:
 
     status = "valid"
     error_summary = None
+    fetched_at = latest_valid.fetched_at
     if latest_attempt is not None and latest_attempt.status != "valid":
         status = "stale"
         error_summary = _sanitize_error_text(latest_attempt.error_summary)
+        fetched_at = latest_attempt.fetched_at
 
     return AutomatedValue(
         value=latest_valid.value,
         source=latest_valid.source,
         as_of=latest_valid.market_time or latest_valid.fetched_at,
-        fetched_at=latest_valid.fetched_at,
+        fetched_at=fetched_at,
         status=status,
         error_summary=error_summary,
         currency=_currency_for_symbol(latest_valid),
     )
 
 
+def _attempt_order_key(row: MarketData) -> tuple[datetime, datetime]:
+    return (row.fetched_at, row.created_at)
+
+
+def _valid_quote_order_key(row: MarketData) -> tuple[datetime, datetime, datetime]:
+    return (
+        row.market_time or row.fetched_at,
+        row.fetched_at,
+        row.created_at,
+    )
+
+
 async def _collect_required_market_data_items(
     session: AsyncSession,
-) -> list[RequiredMarketDataItem]:
+) -> RequiredMarketDataCollection:
     rows = await session.execute(
         select(Holding, HoldingDefault.default_data_source)
         .join(AssetClass, Holding.asset_class_id == AssetClass.id)
@@ -514,7 +584,31 @@ async def _collect_required_market_data_items(
     )
 
     deduped: dict[str, RequiredMarketDataItem] = {}
+    diagnostics: list[MarketDataDiagnosticResponse] = []
     for holding, default_data_source in rows:
+        invalid_fields: list[str] = []
+        try:
+            market = normalize_market_code(holding.market)
+        except ValueError:
+            invalid_fields.append("market")
+            market = None
+        try:
+            trade_currency = normalize_currency_code(holding.trade_currency)
+        except ValueError:
+            invalid_fields.append("trade_currency")
+            trade_currency = None
+        if invalid_fields:
+            diagnostics.append(
+                MarketDataDiagnosticResponse(
+                    code="HOLDING_MARKET_DATA_CONFIG_INVALID",
+                    message="Holding market-data configuration is invalid.",
+                    holding_id=holding.id,
+                    symbol=holding.symbol,
+                    fields=invalid_fields,
+                )
+            )
+            continue
+
         price_key = f"price:{holding.symbol}"
         deduped.setdefault(
             price_key,
@@ -522,13 +616,13 @@ async def _collect_required_market_data_items(
                 key=price_key,
                 data_type="price",
                 symbol=holding.symbol,
-                currency=holding.trade_currency,
-                market=holding.market,
+                currency=trade_currency,
+                market=market,
                 preferred_source=default_data_source,
             ),
         )
 
-        if holding.trade_currency == "CNY":
+        if trade_currency == "CNY":
             fx_key = "fx:CNY/CNY"
             deduped.setdefault(
                 fx_key,
@@ -541,7 +635,7 @@ async def _collect_required_market_data_items(
             )
             continue
 
-        fx_symbol = f"{holding.trade_currency}/CNY"
+        fx_symbol = f"{trade_currency}/CNY"
         fx_key = f"fx:{fx_symbol}"
         deduped.setdefault(
             fx_key,
@@ -553,7 +647,10 @@ async def _collect_required_market_data_items(
             ),
         )
 
-    return [deduped[key] for key in sorted(deduped)]
+    return RequiredMarketDataCollection(
+        items=[deduped[key] for key in sorted(deduped)],
+        diagnostics=diagnostics,
+    )
 
 
 async def _load_provider_priority(session: AsyncSession) -> list[str]:
@@ -605,17 +702,41 @@ async def _acquire_transaction_lock(session: AsyncSession, lock_key: str) -> Non
     )
 
 
-def _sanitize_error_summary(exc: Exception) -> str:
-    return _sanitize_error_text(str(exc)) or "Market-data refresh failed."
-
-
 def _sanitize_error_text(value: str | None) -> str | None:
     if value is None:
         return None
-    summary = re.sub(r"\s+", " ", value).strip()
-    if not summary:
-        return None
-    return summary[:_ERROR_SUMMARY_LIMIT]
+    category = value.partition(":")[0]
+    if category not in _SAFE_FAILURE_DETAILS:
+        category = "legacy_refresh_error"
+    return _format_failure_summary(category)
+
+
+def _safe_failure_summary(exc: Exception) -> str:
+    if isinstance(exc, ProviderSelectionError):
+        return _format_failure_summary(exc.failure_category)
+    return _format_failure_summary(_provider_failure_category(exc))
+
+
+def _provider_failure_category(exc: Exception) -> str:
+    if isinstance(exc, ProviderNotConfigured):
+        return "provider_not_configured"
+    if isinstance(exc, ProviderPayloadError):
+        return "provider_payload_invalid"
+    if isinstance(exc, ProviderRequestError):
+        return "provider_request_failed"
+    return "provider_internal_error"
+
+
+def _format_failure_summary(category: str) -> str:
+    detail = _SAFE_FAILURE_DETAILS[category]
+    return f"{category}: {detail}"[:_ERROR_SUMMARY_LIMIT]
+
+
+def _validate_quote_for_storage(quote: MarketQuote) -> None:
+    if not quote.value.is_finite() or quote.value <= 0:
+        raise ProviderPayloadError("Provider quote value must be positive and finite.")
+    if not fits_numeric_28_12(quote.value):
+        raise ProviderPayloadError("Provider quote value must fit NUMERIC(28,12).")
 
 
 def _default_failure_source(item: RequiredMarketDataItem) -> str:

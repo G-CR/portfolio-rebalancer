@@ -123,4 +123,4 @@ class TushareProvider:
             with urlopen(request, timeout=15) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:  # pragma: no cover - network behavior
-            raise ProviderRequestError(f"Tushare request failed: {exc}") from exc
+            raise ProviderRequestError("Tushare request failed.") from exc

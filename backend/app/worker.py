@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -17,6 +18,10 @@ class RefreshSchedule:
     hour: int
     minute: int
 
+    def __post_init__(self) -> None:
+        if not 0 <= self.hour <= 23 or not 0 <= self.minute <= 59:
+            raise ValueError("Worker refresh schedule must contain a valid hour and minute.")
+
 
 async def scheduled_refresh() -> None:
     async with SessionFactory() as session:
@@ -26,12 +31,20 @@ async def scheduled_refresh() -> None:
 
 def build_scheduler(*, refresh_hour: int | None = None, refresh_minute: int | None = None):
     settings = get_settings()
+    schedule = RefreshSchedule(
+        hour=settings.refresh_hour if refresh_hour is None else refresh_hour,
+        minute=settings.refresh_minute if refresh_minute is None else refresh_minute,
+    )
+    try:
+        ZoneInfo(settings.timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("Worker timezone is invalid.") from exc
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
         scheduled_refresh,
         trigger="cron",
-        hour=settings.refresh_hour if refresh_hour is None else refresh_hour,
-        minute=settings.refresh_minute if refresh_minute is None else refresh_minute,
+        hour=schedule.hour,
+        minute=schedule.minute,
         id="daily-market-refresh",
         replace_existing=True,
         max_instances=1,
@@ -55,7 +68,10 @@ async def _run() -> None:
         refresh_minute=schedule.minute,
     )
     scheduler.start()
-    await asyncio.Event().wait()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 def main() -> None:

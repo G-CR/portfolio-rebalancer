@@ -79,6 +79,39 @@ async def test_create_cny_holding_normalizes_fx_and_sets_first_holding_preferred
     assert response.json()["version"] == 1
 
 
+async def test_create_holding_normalizes_supported_market_and_currency(
+    api_client, asset_class_id
+) -> None:
+    response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(
+            asset_class_id,
+            market="sse",
+            trade_currency="cny",
+        ),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["market"] == "SH"
+    assert response.json()["trade_currency"] == "CNY"
+
+
+async def test_create_holding_rejects_non_iso_trade_currency(
+    api_client, asset_class_id
+) -> None:
+    response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, trade_currency="USDT"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "HOLDING_TRADE_CURRENCY_INVALID",
+        "message": "Trade currency must be exactly three ASCII letters.",
+        "field": "trade_currency",
+    }
+
+
 async def test_patch_holding_updates_values_and_increments_version(
     api_client, asset_class_id
 ) -> None:
@@ -102,6 +135,24 @@ async def test_patch_holding_updates_values_and_increments_version(
 
     listed = (await api_client.get("/api/holdings")).json()
     assert listed == [response.json()]
+
+
+async def test_patch_holding_rejects_unsupported_market(
+    api_client, asset_class_id
+) -> None:
+    created = await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+
+    response = await api_client.patch(
+        f"/api/holdings/{created.json()['id']}",
+        json={"market": "MOON"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "HOLDING_MARKET_INVALID",
+        "message": "Market must be one of US, SH, or SZ.",
+        "field": "market",
+    }
 
 
 async def test_patch_holding_switches_preferred_within_asset_class(api_client) -> None:

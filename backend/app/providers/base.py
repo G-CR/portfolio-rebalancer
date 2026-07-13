@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
+from app.core.decimal import fits_numeric_28_12
 
 class ProviderError(Exception):
     pass
@@ -69,6 +70,10 @@ class MarketQuote:
             raise ProviderPayloadError(
                 "Provider payload must include a positive finite value."
             )
+        if not fits_numeric_28_12(self.value):
+            raise ProviderPayloadError(
+                "Provider quote value must fit NUMERIC(28,12)."
+            )
         object.__setattr__(self, "currency", _normalize_currency(self.currency))
         object.__setattr__(self, "as_of", _normalize_timestamp(self.as_of, field_name="as_of"))
         object.__setattr__(
@@ -88,5 +93,7 @@ class ProviderCredentialReader(Protocol):
 
 
 class NullCredentialReader:
+    """Task 9 credential boundary; Task 15 replaces this with encrypted storage."""
+
     def get_api_key(self, provider: str) -> str | None:
         return None

@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic_core import PydanticCustomError
 
+from app.core.decimal import fits_numeric_28_12
 from app.schemas.common import DecimalString
 
 
@@ -34,32 +35,13 @@ def _ensure_positive(value: Decimal, field_name: str) -> Decimal:
 
 
 def _ensure_numeric_storage_range(value: Decimal, field_name: str) -> None:
-    if _fits_numeric_28_12(value):
+    if fits_numeric_28_12(value):
         return
     raise PydanticCustomError(
         "cost_adjustment_numeric_out_of_range",
         "{field} must fit NUMERIC(28,12).",
         {"field": field_name},
     )
-
-
-def _fits_numeric_28_12(value: Decimal) -> bool:
-    if not value.is_finite():
-        return False
-    if value.is_zero():
-        return True
-
-    _, raw_digits, raw_exponent = value.as_tuple()
-    digits = list(raw_digits)
-    exponent = raw_exponent
-    while exponent < 0 and digits[-1] == 0:
-        digits.pop()
-        exponent += 1
-
-    integer_digits = max(len(digits) + exponent, 0)
-    fractional_digits = max(-exponent, 0)
-    return integer_digits <= 16 and fractional_digits <= 12
-
 
 class HoldingDefaultsResponse(BaseModel):
     model_config = ConfigDict(frozen=True)

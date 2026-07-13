@@ -106,4 +106,4 @@ class AlphaVantageProvider:
             with urlopen(url, timeout=15) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:  # pragma: no cover - network behavior
-            raise ProviderRequestError(f"Alpha Vantage request failed: {exc}") from exc
+            raise ProviderRequestError("Alpha Vantage request failed.") from exc
