@@ -1,0 +1,26 @@
+:root {
+  --color-ground: #eef2ee;
+  --color-surface: #fbfcfa;
+  --color-ink: #18221d;
+  --color-actual: #2f5da8;
+  --color-fx: #c94a3a;
+  --color-target: #b58b2a;
+  --color-planned: #2e7458;
+  --color-rule: #cbd4ce;
+  --color-muted: rgb(24 34 29 / 64%);
+  --color-subtle: rgb(24 34 29 / 8%);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --sidebar-width: 188px;
+  --topbar-height: 66px;
+  --control-height: 36px;
+  --radius: 3px;
+  --focus-ring: 0 0 0 3px rgb(47 93 168 / 24%);
+  --font-ui: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-data: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
