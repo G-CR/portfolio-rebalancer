@@ -37,6 +37,55 @@ async def _run_alembic_downgrade(revision: str) -> None:
     await asyncio.to_thread(command.downgrade, _alembic_config(), revision)
 
 
+async def _holding_migration_state() -> dict[str, object]:
+    async with MigrationSessionFactory() as session:
+        revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
+        indexes = set(
+            await session.scalars(
+                text(
+                    """
+                    SELECT indexname
+                    FROM pg_indexes
+                    WHERE schemaname = 'public'
+                      AND tablename = 'holdings'
+                    """
+                )
+            )
+        )
+        constraints = set(
+            await session.scalars(
+                text(
+                    """
+                    SELECT conname
+                    FROM pg_constraint
+                    WHERE conrelid = 'holdings'::regclass
+                    """
+                )
+            )
+        )
+        rows = [
+            dict(row)
+            for row in (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, symbol, name, account_name, is_active
+                        FROM holdings
+                        ORDER BY id
+                        """
+                    )
+                )
+            ).mappings()
+        ]
+
+    return {
+        "revision": revision,
+        "indexes": indexes,
+        "constraints": constraints,
+        "rows": rows,
+    }
+
+
 async def test_initial_migration_creates_core_tables(db_session) -> None:
     rows = await db_session.execute(
         text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
@@ -195,93 +244,152 @@ async def test_upgrade_from_0001_normalizes_settings_singleton() -> None:
 
 
 async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes(
-    db_session,
+    _reset_database,
 ) -> None:
-    asset_class = AssetClass(
-        name="Equity",
-        target_weight=Decimal("1"),
-        display_order=1,
-    )
-    archived = Holding(
-        asset_class=asset_class,
-        symbol="SPY",
-        name="Archived SPDR S&P 500 ETF",
-        market="NYSEARCA",
-        account_name="Brokerage",
-        trade_currency="USD",
-        quantity=Decimal("0"),
-        average_cost_price=Decimal("500"),
-        cost_fx_to_cny=Decimal("7.2"),
-        baseline_fx_to_cny=Decimal("7.2"),
-        lot_size=Decimal("1"),
-        quantity_precision=0,
-        is_rebalance_preferred=False,
-        is_active=False,
-    )
-    recreated = Holding(
-        asset_class=asset_class,
-        symbol="SPY",
-        name="Recreated SPDR S&P 500 ETF",
-        market="NYSEARCA",
-        account_name="Brokerage",
-        trade_currency="USD",
-        quantity=Decimal("10"),
-        average_cost_price=Decimal("510"),
-        cost_fx_to_cny=Decimal("7.1"),
-        baseline_fx_to_cny=Decimal("7.2"),
-        lot_size=Decimal("1"),
-        quantity_precision=0,
-        is_rebalance_preferred=True,
-    )
-    db_session.add_all([archived, recreated])
-    await db_session.commit()
+    async with MigrationSessionFactory() as session:
+        asset_class = AssetClass(
+            name="Equity",
+            target_weight=Decimal("1"),
+            display_order=1,
+        )
+        archived = Holding(
+            asset_class=asset_class,
+            symbol="SPY",
+            name="Archived SPDR S&P 500 ETF",
+            market="NYSEARCA",
+            account_name="Brokerage",
+            trade_currency="USD",
+            quantity=Decimal("0"),
+            average_cost_price=Decimal("500"),
+            cost_fx_to_cny=Decimal("7.2"),
+            baseline_fx_to_cny=Decimal("7.2"),
+            lot_size=Decimal("1"),
+            quantity_precision=0,
+            is_rebalance_preferred=False,
+            is_active=False,
+        )
+        recreated = Holding(
+            asset_class=asset_class,
+            symbol="SPY",
+            name="Recreated SPDR S&P 500 ETF",
+            market="NYSEARCA",
+            account_name="Brokerage",
+            trade_currency="USD",
+            quantity=Decimal("10"),
+            average_cost_price=Decimal("510"),
+            cost_fx_to_cny=Decimal("7.1"),
+            baseline_fx_to_cny=Decimal("7.2"),
+            lot_size=Decimal("1"),
+            quantity_precision=0,
+            is_rebalance_preferred=True,
+        )
+        session.add_all([archived, recreated])
+        await session.commit()
+        archived_id = archived.id
+        recreated_id = recreated.id
 
-    with pytest.raises(
-        CommandError,
-        match="cannot downgrade 20260713_0003 without discarding holding history",
-    ):
+    try:
+        with pytest.raises(
+            CommandError,
+            match="cannot downgrade 20260713_0003 without discarding holding history",
+        ):
+            await _run_alembic_downgrade("20260713_0002")
+
+        state = await _holding_migration_state()
+        rows = {row["id"]: row for row in state["rows"]}
+
+        assert state["revision"] == "20260713_0003"
+        assert "uq_holdings_active_symbol_account_name" in state["indexes"]
+        assert "uq_holdings_symbol_account_name" not in state["constraints"]
+        assert rows[archived_id] == {
+            "id": archived_id,
+            "symbol": "SPY",
+            "name": "Archived SPDR S&P 500 ETF",
+            "account_name": "Brokerage",
+            "is_active": False,
+        }
+        assert rows[recreated_id] == {
+            "id": recreated_id,
+            "symbol": "SPY",
+            "name": "Recreated SPDR S&P 500 ETF",
+            "account_name": "Brokerage",
+            "is_active": True,
+        }
+    finally:
+        await _run_alembic_upgrade("head")
+
+
+async def test_downgrade_0003_restores_global_identity_constraint_for_compatible_data(
+    _reset_database,
+) -> None:
+    async with MigrationSessionFactory() as session:
+        asset_class = AssetClass(
+            name="Equity",
+            target_weight=Decimal("1"),
+            display_order=1,
+        )
+        archived = Holding(
+            asset_class=asset_class,
+            symbol="SPY-OLD",
+            name="Archived SPDR S&P 500 ETF",
+            market="NYSEARCA",
+            account_name="Brokerage",
+            trade_currency="USD",
+            quantity=Decimal("0"),
+            average_cost_price=Decimal("500"),
+            cost_fx_to_cny=Decimal("7.2"),
+            baseline_fx_to_cny=Decimal("7.2"),
+            lot_size=Decimal("1"),
+            quantity_precision=0,
+            is_rebalance_preferred=False,
+            is_active=False,
+        )
+        active = Holding(
+            asset_class=asset_class,
+            symbol="SPY",
+            name="Active SPDR S&P 500 ETF",
+            market="NYSEARCA",
+            account_name="Brokerage",
+            trade_currency="USD",
+            quantity=Decimal("10"),
+            average_cost_price=Decimal("510"),
+            cost_fx_to_cny=Decimal("7.1"),
+            baseline_fx_to_cny=Decimal("7.2"),
+            lot_size=Decimal("1"),
+            quantity_precision=0,
+            is_rebalance_preferred=True,
+        )
+        session.add_all([archived, active])
+        await session.commit()
+        archived_id = archived.id
+        active_id = active.id
+
+    try:
         await _run_alembic_downgrade("20260713_0002")
 
-    revision = await db_session.scalar(text("SELECT version_num FROM alembic_version"))
-    active_identity_index = await db_session.scalar(
-        text(
-            """
-            SELECT indexdef
-            FROM pg_indexes
-            WHERE schemaname = 'public'
-              AND tablename = 'holdings'
-              AND indexname = 'uq_holdings_active_symbol_account_name'
-            """
-        )
-    )
-    old_constraint_count = await db_session.scalar(
-        text(
-            """
-            SELECT count(*)
-            FROM pg_constraint
-            WHERE conname = 'uq_holdings_symbol_account_name'
-            """
-        )
-    )
-    rows = (
-        await db_session.execute(
-            text(
-                """
-                SELECT id, name, is_active
-                FROM holdings
-                WHERE id IN (:archived_id, :recreated_id)
-                ORDER BY is_active ASC
-                """
-            ),
-            {"archived_id": archived.id, "recreated_id": recreated.id},
-        )
-    ).mappings().all()
+        state = await _holding_migration_state()
+        rows = {row["id"]: row for row in state["rows"]}
 
-    assert revision == "20260713_0003"
-    assert active_identity_index is not None
-    assert "WHERE is_active" in active_identity_index
-    assert old_constraint_count == 0
-    assert [(row["name"], row["is_active"]) for row in rows] == [
-        ("Archived SPDR S&P 500 ETF", False),
-        ("Recreated SPDR S&P 500 ETF", True),
-    ]
+        assert state["revision"] == "20260713_0002"
+        assert "uq_holdings_active_symbol_account_name" not in state["indexes"]
+        assert "uq_holdings_symbol_account_name" in state["indexes"]
+        assert "uq_holdings_symbol_account_name" in state["constraints"]
+        assert rows[archived_id] == {
+            "id": archived_id,
+            "symbol": "SPY-OLD",
+            "name": "Archived SPDR S&P 500 ETF",
+            "account_name": "Brokerage",
+            "is_active": False,
+        }
+        assert rows[active_id] == {
+            "id": active_id,
+            "symbol": "SPY",
+            "name": "Active SPDR S&P 500 ETF",
+            "account_name": "Brokerage",
+            "is_active": True,
+        }
+    finally:
+        await _run_alembic_upgrade("head")
+
+    restored_state = await _holding_migration_state()
+    assert restored_state["revision"] == "20260713_0003"
