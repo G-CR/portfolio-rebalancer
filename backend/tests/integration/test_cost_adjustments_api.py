@@ -128,10 +128,7 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
             "price": "600",
             "fx": "7.10",
             "fee_currency": "USD",
-            "commission_rate": "0.0010",
-            "minimum_commission": "5",
-            "per_share_fee": "0.02",
-            "fixed_fee": "3",
+            "actual_fee": "3",
             "save_fee_defaults": False,
         },
     )
@@ -147,10 +144,7 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
                 "price": "600",
                 "fx": "7.10",
                 "fee_currency": "USD",
-                "commission_rate": "0.0010",
-                "minimum_commission": "5",
-                "per_share_fee": "0.02",
-                "fixed_fee": "3",
+                "actual_fee": "3",
                 "save_fee_defaults": False,
             },
         },
@@ -164,6 +158,77 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
     assert defaults.fixed_fee == Decimal("2")
 
 
+@pytest.mark.parametrize(
+    ("rule_fields", "missing_fields"),
+    [
+        ({}, {"commission_rate", "minimum_commission", "per_share_fee", "fixed_fee"}),
+        (
+            {"commission_rate": "0.001", "minimum_commission": "2"},
+            {"per_share_fee", "fixed_fee"},
+        ),
+    ],
+)
+async def test_preview_rejects_incomplete_explicit_fee_default_save(
+    api_client,
+    db_session,
+    rule_fields: dict[str, str],
+    missing_fields: set[str],
+) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/preview-purchase",
+        json={
+            "quantity": "1",
+            "price": "500",
+            "fx": "7.1",
+            "actual_fee": "2",
+            "save_fee_defaults": True,
+            **rule_fields,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "INCOMPLETE_FEE_DEFAULT_RULE"
+    assert detail["message"] == "Saving fee defaults requires all four fee rule fields."
+    assert set(detail["missing_fields"]) == missing_fields
+    assert list(await db_session.scalars(select(HoldingDefault))) == []
+
+
+async def test_confirm_rejects_actual_fee_only_default_save_atomically(
+    api_client,
+    db_session,
+) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/confirm",
+        json={
+            "expected_version": spy_holding["version"],
+            "operation": "purchase",
+            "payload": {
+                "quantity": "1",
+                "price": "500",
+                "fx": "7.1",
+                "actual_fee": "2",
+                "save_fee_defaults": True,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INCOMPLETE_FEE_DEFAULT_RULE"
+    holding = await db_session.scalar(
+        select(Holding).where(Holding.id == UUID(spy_holding["id"]))
+    )
+    assert holding is not None
+    assert holding.version == 1
+    assert holding.quantity == Decimal("10")
+    assert list(await db_session.scalars(select(HoldingDefault))) == []
+    assert list(await db_session.scalars(select(CostAdjustment))) == []
+
+
 async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
     spy_holding = await _create_spy_holding(api_client)
     preview = await api_client.post(
@@ -174,6 +239,10 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
             "fx": "7.1850",
             "actual_fee": "2.30",
             "fee_currency": "USD",
+            "commission_rate": "0.0005",
+            "minimum_commission": "1",
+            "per_share_fee": "0.01",
+            "fixed_fee": "2",
             "save_fee_defaults": True,
         },
     )
@@ -197,6 +266,10 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
                 "fx": "7.1850",
                 "actual_fee": "2.30",
                 "fee_currency": "USD",
+                "commission_rate": "0.0005",
+                "minimum_commission": "1",
+                "per_share_fee": "0.01",
+                "fixed_fee": "2",
                 "save_fee_defaults": True,
             },
         },
@@ -207,6 +280,115 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
 
     rows = list(await db_session.scalars(select(CostAdjustment)))
     assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "field"),
+    [
+        (
+            "preview-purchase",
+            {"quantity": "1", "price": "10000000000000000", "fx": "7.1"},
+            "price",
+        ),
+        ("preview-sell", {"quantity": "0.0000000000001"}, "quantity"),
+        (
+            "preview-correction",
+            {
+                "quantity": "10000000000000000",
+                "average_cost_price": "480",
+                "cost_fx_to_cny": "7.1",
+                "note": "对齐券商月结单",
+            },
+            "quantity",
+        ),
+    ],
+)
+async def test_preview_rejects_decimal_values_outside_numeric_storage_bounds(
+    api_client,
+    path: str,
+    payload: dict[str, str],
+    field: str,
+) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/{path}",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "COST_ADJUSTMENT_NUMERIC_OUT_OF_RANGE"
+    assert detail["field"] == field
+
+
+@pytest.mark.parametrize(
+    ("operation", "payload", "field"),
+    [
+        (
+            "purchase",
+            {"quantity": "1", "price": "10000000000000000", "fx": "7.1"},
+            "payload.price",
+        ),
+        ("sell", {"quantity": "0.0000000000001"}, "payload.quantity"),
+        (
+            "manual_correction",
+            {
+                "quantity": "10000000000000000",
+                "average_cost_price": "480",
+                "cost_fx_to_cny": "7.1",
+                "note": "对齐券商月结单",
+            },
+            "payload.quantity",
+        ),
+    ],
+)
+async def test_confirm_rejects_out_of_range_decimal_atomically(
+    api_client,
+    db_session,
+    operation: str,
+    payload: dict[str, str],
+    field: str,
+) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/confirm",
+        json={
+            "expected_version": spy_holding["version"],
+            "operation": operation,
+            "payload": payload,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "COST_ADJUSTMENT_NUMERIC_OUT_OF_RANGE"
+    assert {error["field"] for error in detail["errors"]} == {field}
+    holding = await db_session.scalar(
+        select(Holding).where(Holding.id == UUID(spy_holding["id"]))
+    )
+    assert holding is not None
+    assert holding.version == 1
+    assert holding.quantity == Decimal("10")
+    assert list(await db_session.scalars(select(CostAdjustment))) == []
+
+
+async def test_preview_translates_decimal_arithmetic_overflow(api_client) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    response = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/preview-purchase",
+        json={
+            "quantity": "9999999999999999",
+            "price": "9999999999999999",
+            "fx": "9999999999999999",
+            "actual_fee": "0",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "COST_ADJUSTMENT_NUMERIC_OUT_OF_RANGE"
 
 
 @pytest.mark.parametrize(

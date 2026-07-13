@@ -31,6 +31,15 @@ app = FastAPI(title="Portfolio Rebalancer", version="1.0.0", lifespan=lifespan)
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(_, exc: RequestValidationError) -> JSONResponse:
     first_error = exc.errors()[0]
+    if first_error["type"] == "cost_adjustment_numeric_out_of_range":
+        field = str(first_error.get("ctx", {}).get("field") or first_error["loc"][-1])
+        detail = {
+            "code": "COST_ADJUSTMENT_NUMERIC_OUT_OF_RANGE",
+            "message": "Cost adjustment numeric fields must fit NUMERIC(28,12).",
+            "field": field,
+        }
+        return JSONResponse(status_code=422, content={"detail": detail})
+
     if first_error["type"] != "negative_numeric_field":
         return await fastapi_request_validation_exception_handler(_, exc)
 

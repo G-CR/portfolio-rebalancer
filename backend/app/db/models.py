@@ -234,7 +234,6 @@ class CostAdjustment(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=utcnow,
     )
 
     holding: Mapped[Holding] = relationship(back_populates="cost_adjustments")

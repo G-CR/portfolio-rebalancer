@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TypeVar
 from uuid import UUID
 
@@ -31,6 +31,12 @@ _CNY = "CNY"
 _ZERO = Decimal("0")
 _CENT = Decimal("0.01")
 _STORAGE_SCALE = Decimal("0.000000000001")
+_FEE_RULE_FIELDS = (
+    "commission_rate",
+    "minimum_commission",
+    "per_share_fee",
+    "fixed_fee",
+)
 _OperationPayload = TypeVar("_OperationPayload", bound=BaseModel)
 
 
@@ -108,10 +114,13 @@ async def preview_purchase(
     holding_id: UUID,
     payload: PurchasePreviewRequest,
 ) -> CostAdjustmentPreviewResponse:
-    holding = await _get_active_holding(session, holding_id)
-    defaults = await _get_holding_defaults(session, holding.id)
-    preview = _preview_purchase_from_holding(holding, defaults, payload)
-    return _preview_response(holding, preview)
+    try:
+        holding = await _get_active_holding(session, holding_id)
+        defaults = await _get_holding_defaults(session, holding.id)
+        preview = _preview_purchase_from_holding(holding, defaults, payload)
+        return _preview_response(holding, preview)
+    except InvalidOperation as exc:
+        raise _numeric_range_error() from exc
 
 
 async def preview_sell(
@@ -119,9 +128,12 @@ async def preview_sell(
     holding_id: UUID,
     payload: SellPreviewRequest,
 ) -> CostAdjustmentPreviewResponse:
-    holding = await _get_active_holding(session, holding_id)
-    preview = _preview_sell_from_holding(holding, payload)
-    return _preview_response(holding, preview)
+    try:
+        holding = await _get_active_holding(session, holding_id)
+        preview = _preview_sell_from_holding(holding, payload)
+        return _preview_response(holding, preview)
+    except InvalidOperation as exc:
+        raise _numeric_range_error() from exc
 
 
 async def preview_correction(
@@ -129,9 +141,12 @@ async def preview_correction(
     holding_id: UUID,
     payload: ManualCorrectionPreviewRequest,
 ) -> CostAdjustmentPreviewResponse:
-    holding = await _get_active_holding(session, holding_id)
-    preview = _preview_correction_from_holding(holding, payload)
-    return _preview_response(holding, preview)
+    try:
+        holding = await _get_active_holding(session, holding_id)
+        preview = _preview_correction_from_holding(holding, payload)
+        return _preview_response(holding, preview)
+    except InvalidOperation as exc:
+        raise _numeric_range_error() from exc
 
 
 async def preview_restore(
@@ -140,10 +155,13 @@ async def preview_restore(
     adjustment_id: UUID,
     payload: RestorePreviewRequest,
 ) -> CostAdjustmentPreviewResponse:
-    holding = await _get_active_holding(session, holding_id)
-    adjustment = await _get_cost_adjustment(session, holding.id, adjustment_id)
-    preview = _preview_restore_from_holding(holding, adjustment, payload)
-    return _preview_response(holding, preview)
+    try:
+        holding = await _get_active_holding(session, holding_id)
+        adjustment = await _get_cost_adjustment(session, holding.id, adjustment_id)
+        preview = _preview_restore_from_holding(holding, adjustment, payload)
+        return _preview_response(holding, preview)
+    except InvalidOperation as exc:
+        raise _numeric_range_error() from exc
 
 
 async def confirm_adjustment(
@@ -160,7 +178,10 @@ async def confirm_adjustment(
             {"current_version": holding.version},
         )
 
-    preview = await _preview_for_confirmation(session, holding, request)
+    try:
+        preview = await _preview_for_confirmation(session, holding, request)
+    except InvalidOperation as exc:
+        raise _numeric_range_error() from exc
     before = preview.before
     after = preview.after
 
@@ -190,7 +211,10 @@ async def confirm_adjustment(
     session.add(adjustment)
     await session.flush()
 
-    response = _preview_response(holding, preview)
+    try:
+        response = _preview_response(holding, preview)
+    except InvalidOperation as exc:
+        raise _numeric_range_error() from exc
     return response.model_copy(
         update={"holding_version": holding.version, "adjustment_id": adjustment.id}
     )
@@ -234,6 +258,7 @@ def _preview_purchase_from_holding(
     defaults: HoldingDefault | None,
     payload: PurchasePreviewRequest,
 ) -> PreviewResult:
+    _validate_fee_default_save(payload)
     before = _holding_cost_basis(holding)
     resolved_defaults = _resolve_fee_defaults(holding, defaults, payload)
     trade_value = payload.quantity * payload.price
@@ -515,12 +540,47 @@ def _validate_operation_payload(
             }
             for error in exc.errors()
         ]
+        if any(
+            error["type"] == "cost_adjustment_numeric_out_of_range"
+            for error in exc.errors()
+        ):
+            raise ServiceError(
+                422,
+                "COST_ADJUSTMENT_NUMERIC_OUT_OF_RANGE",
+                "Cost adjustment numeric fields must fit NUMERIC(28,12).",
+                {"errors": errors},
+            ) from exc
         raise ServiceError(
             422,
             "INVALID_COST_ADJUSTMENT_PAYLOAD",
             "Cost adjustment payload is invalid for the operation.",
             {"errors": errors},
         ) from exc
+
+
+def _validate_fee_default_save(payload: PurchasePreviewRequest) -> None:
+    if not payload.save_fee_defaults:
+        return
+    missing_fields = [
+        field_name
+        for field_name in _FEE_RULE_FIELDS
+        if getattr(payload, field_name) is None
+    ]
+    if missing_fields:
+        raise ServiceError(
+            422,
+            "INCOMPLETE_FEE_DEFAULT_RULE",
+            "Saving fee defaults requires all four fee rule fields.",
+            {"missing_fields": missing_fields},
+        )
+
+
+def _numeric_range_error() -> ServiceError:
+    return ServiceError(
+        422,
+        "COST_ADJUSTMENT_NUMERIC_OUT_OF_RANGE",
+        "Cost adjustment numeric fields must fit NUMERIC(28,12).",
+    )
 
 
 def _defaults_response(defaults: HoldingDefault | None) -> HoldingDefaultsResponse | None:

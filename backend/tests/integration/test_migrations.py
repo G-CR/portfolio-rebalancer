@@ -14,7 +14,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.db.models import AssetClass, DEFAULT_SETTINGS_ID, Holding, MarketData, Setting
+from app.db.models import (
+    AssetClass,
+    CostAdjustment,
+    DEFAULT_SETTINGS_ID,
+    Holding,
+    MarketData,
+    Setting,
+)
 
 
 MIGRATION_TEST_ENGINE = create_async_engine(
@@ -105,6 +112,13 @@ async def test_initial_migration_creates_core_tables(db_session) -> None:
         "settings",
         "encrypted_secrets",
     } <= names
+
+
+def test_cost_adjustment_created_at_has_no_implicit_default() -> None:
+    column = CostAdjustment.__table__.c.created_at
+
+    assert column.default is None
+    assert column.server_default is None
 
 
 async def test_holding_orm_update_increments_version(db_session) -> None:
