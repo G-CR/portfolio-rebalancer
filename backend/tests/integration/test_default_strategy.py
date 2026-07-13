@@ -30,6 +30,24 @@ async def test_default_strategy_is_seeded_once(db_session) -> None:
     ]
 
 
+async def test_seed_preserves_intentionally_inactive_asset_classes(db_session) -> None:
+    async with db_session.begin():
+        await seed_default_strategy(db_session)
+    first = await db_session.scalar(
+        select(AssetClass).order_by(AssetClass.display_order.asc()).limit(1)
+    )
+    assert first is not None
+    first.is_active = False
+    await db_session.commit()
+
+    async with db_session.begin():
+        await seed_default_strategy(db_session)
+
+    all_items = await list_asset_classes(db_session, include_inactive=True)
+    assert len(all_items) == 5
+    assert all_items[0].is_active is False
+
+
 async def test_default_strategy_seeds_default_settings(db_session) -> None:
     async with db_session.begin():
         await seed_default_strategy(db_session)

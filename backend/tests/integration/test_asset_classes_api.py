@@ -151,3 +151,88 @@ async def test_asset_class_update_rejects_duplicate_active_names_atomically(
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "ASSET_CLASS_NAME_CONFLICT"
     assert (await api_client.get("/api/asset-classes")).json() == original
+
+
+async def test_asset_class_full_set_can_deactivate_and_reactivate_preserving_data(
+    api_client,
+) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    deactivated_payload = [
+        {
+            **item,
+            "is_active": index != 0,
+            "target_weight": (
+                item["target_weight"]
+                if index == 0
+                else ("0.25000000", "0.37500000", "0.25000000", "0.12500000")[index - 1]
+            ),
+        }
+        for index, item in enumerate(classes)
+    ]
+
+    response = await api_client.put("/api/asset-classes", json=deactivated_payload)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 5
+    assert response.json()[0]["is_active"] is False
+    assert response.json()[0]["name"] == classes[0]["name"]
+    assert response.json()[0]["target_weight"] == classes[0]["target_weight"]
+    assert [item["name"] for item in (await api_client.get("/api/asset-classes")).json()] == [
+        item["name"] for item in classes[1:]
+    ]
+
+    all_classes = (
+        await api_client.get("/api/asset-classes", params={"include_inactive": "true"})
+    ).json()
+    assert all_classes == response.json()
+
+    reactivated = await api_client.put(
+        "/api/asset-classes",
+        json=[{**original, "is_active": True} for original in classes],
+    )
+    assert reactivated.status_code == 200
+    assert reactivated.json() == classes
+
+
+async def test_asset_class_full_set_total_counts_only_active_rows(api_client) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    payload = [
+        {**item, "is_active": index != 0}
+        for index, item in enumerate(classes)
+    ]
+
+    response = await api_client.put("/api/asset-classes", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "TARGET_WEIGHT_TOTAL_INVALID"
+    assert response.json()["detail"]["actual_total"] == "0.80000000"
+    assert (
+        await api_client.get("/api/asset-classes", params={"include_inactive": "true"})
+    ).json() == classes
+
+
+async def test_legacy_active_only_put_remains_valid_after_deactivation(api_client) -> None:
+    classes = (await api_client.get("/api/asset-classes")).json()
+    full_payload = [
+        {
+            **item,
+            "is_active": index != 0,
+            "target_weight": (
+                item["target_weight"]
+                if index == 0
+                else ("0.25000000", "0.37500000", "0.25000000", "0.12500000")[index - 1]
+            ),
+        }
+        for index, item in enumerate(classes)
+    ]
+    assert (await api_client.put("/api/asset-classes", json=full_payload)).status_code == 200
+    active = (await api_client.get("/api/asset-classes")).json()
+
+    response = await api_client.put(
+        "/api/asset-classes",
+        json=[{**item, "notes": "legacy client"} for item in active],
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 4
+    assert all(item["notes"] == "legacy client" for item in response.json())

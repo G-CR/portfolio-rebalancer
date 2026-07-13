@@ -20,11 +20,18 @@ DEFAULT_ASSET_CLASSES: tuple[tuple[str, Decimal], ...] = (
 )
 
 
-async def list_asset_classes(session: AsyncSession) -> list[AssetClass]:
+async def list_asset_classes(
+    session: AsyncSession, *, include_inactive: bool = False
+) -> list[AssetClass]:
+    statement = select(AssetClass)
+    if not include_inactive:
+        statement = statement.where(AssetClass.is_active.is_(True))
     result = await session.scalars(
-        select(AssetClass)
-        .where(AssetClass.is_active.is_(True))
-        .order_by(AssetClass.display_order.asc(), AssetClass.created_at.asc())
+        statement.order_by(
+            AssetClass.display_order.asc(),
+            AssetClass.created_at.asc(),
+            AssetClass.id.asc(),
+        )
     )
     return list(result)
 
@@ -32,25 +39,30 @@ async def list_asset_classes(session: AsyncSession) -> list[AssetClass]:
 async def replace_asset_classes(
     session: AsyncSession, updates: list[AssetClassUpdate]
 ) -> list[AssetClass]:
-    active_rows = list(
+    all_rows = list(
         await session.scalars(
             select(AssetClass)
-            .where(AssetClass.is_active.is_(True))
             .order_by(AssetClass.id.asc())
             .with_for_update()
         )
     )
-
-    if len(active_rows) != len(updates) or {
+    active_rows = [item for item in all_rows if item.is_active]
+    update_ids = {item.id for item in updates}
+    is_full_set = len(all_rows) == len(updates) and update_ids == {
+        item.id for item in all_rows
+    }
+    is_legacy_active_set = len(active_rows) == len(updates) and update_ids == {
         item.id for item in active_rows
-    } != {item.id for item in updates}:
+    }
+
+    if not is_full_set and not is_legacy_active_set:
         raise ServiceError(
             422,
             "ASSET_CLASS_SET_MISMATCH",
-            "Payload must include every active asset class exactly once.",
+            "Payload must include either every active asset class or the full asset class set exactly once.",
         )
 
-    names = [item.name for item in updates]
+    names = [item.name for item in updates if item.is_active]
     if len(names) != len(set(names)):
         raise ServiceError(
             409,
@@ -70,7 +82,10 @@ async def replace_asset_classes(
                 },
             )
 
-    actual_total = sum((item.target_weight for item in updates), start=Decimal("0"))
+    actual_total = sum(
+        (item.target_weight for item in updates if item.is_active),
+        start=Decimal("0"),
+    )
     if actual_total != Decimal("1"):
         raise ServiceError(
             422,
@@ -80,38 +95,43 @@ async def replace_asset_classes(
         )
 
     updates_by_id = {item.id: item for item in updates}
-    for row in active_rows:
+    rows_to_update = all_rows if is_full_set else active_rows
+    for row in rows_to_update:
         payload = updates_by_id[row.id]
         row.name = payload.name
         row.target_weight = payload.target_weight
         row.display_order = payload.display_order
         row.notes = payload.notes
+        if is_full_set:
+            row.is_active = payload.is_active
 
     await session.flush()
-    return await list_asset_classes(session)
+    return await list_asset_classes(session, include_inactive=is_full_set)
 
 
 async def seed_default_strategy(session: AsyncSession) -> None:
-    await session.execute(
-        insert(AssetClass)
-        .values(
-            [
-                {
-                    "name": name,
-                    "target_weight": target_weight,
-                    "display_order": index,
-                }
-                for index, (name, target_weight) in enumerate(
-                    DEFAULT_ASSET_CLASSES,
-                    start=1,
-                )
-            ]
+    existing_asset_class_id = await session.scalar(select(AssetClass.id).limit(1))
+    if existing_asset_class_id is None:
+        await session.execute(
+            insert(AssetClass)
+            .values(
+                [
+                    {
+                        "name": name,
+                        "target_weight": target_weight,
+                        "display_order": index,
+                    }
+                    for index, (name, target_weight) in enumerate(
+                        DEFAULT_ASSET_CLASSES,
+                        start=1,
+                    )
+                ]
+            )
+            .on_conflict_do_nothing(
+                index_elements=[AssetClass.name],
+                index_where=text("is_active"),
+            )
         )
-        .on_conflict_do_nothing(
-            index_elements=[AssetClass.name],
-            index_where=text("is_active"),
-        )
-    )
 
     await session.execute(
         insert(Setting)

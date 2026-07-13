@@ -49,7 +49,7 @@ function ActionMenu({ holding, onCommand }: { holding: Holding; onCommand: Props
 
 export function HoldingsTable({ holdings, assetClasses, showArchived, onCommand }: Props) {
   const assetNames = new Map(assetClasses.map((item) => [item.id, item.name]));
-  const visible = holdings.filter((holding) => showArchived || holding.is_active);
+  const visible = holdings.filter((holding) => showArchived ? !holding.is_active : holding.is_active);
 
   return (
     <div className={styles.tableWrap}>
@@ -83,14 +83,14 @@ export function HoldingsTable({ holdings, assetClasses, showArchived, onCommand 
               <td className={`${styles.pendingData} ${styles.priorityMarket}`}>--</td>
               <td className={`${styles.pendingData} ${styles.priorityMarket}`}>--</td>
               <td>
-                <div className={styles.actions}>
-                  {holding.is_active ? (
+                {holding.is_active ? (
+                  <div className={styles.actions}>
                     <button className={`${styles.iconButton} ${styles.addButton}`} type="button" title="追加买入" aria-label={`追加买入 ${holding.symbol}`} onClick={() => onCommand(holding, "purchase")}>
                       <Plus size={17} aria-hidden="true" />
                     </button>
-                  ) : null}
-                  <ActionMenu holding={holding} onCommand={onCommand} />
-                </div>
+                    <ActionMenu holding={holding} onCommand={onCommand} />
+                  </div>
+                ) : <span className={styles.archivedActions}>已归档，无可用操作</span>}
               </td>
             </tr>
           ))}

@@ -8,8 +8,14 @@
 .filter input { accent-color: var(--color-actual); }
 .alert { padding: var(--space-3) var(--space-7); border-bottom: 1px solid var(--color-fx); background: rgb(201 74 58 / 6%); color: var(--color-fx); }
 .statusBar { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) var(--space-7); color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
+.filterStatus { min-height: 56px; padding: var(--space-5) var(--space-7); border-bottom: 1px solid var(--color-rule); color: var(--color-muted); }
+.emptyState { display: grid; min-height: 220px; place-content: center; justify-items: center; padding: var(--space-7); border-bottom: 1px solid var(--color-rule); text-align: center; }
+.emptyState strong { font-size: 15px; }
+.emptyState p { max-width: 430px; margin: var(--space-2) 0 var(--space-4); color: var(--color-muted); line-height: 1.6; }
+.emptyState button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 38px; padding: 0 var(--space-4); border: 1px solid var(--color-actual); border-radius: 2px; background: var(--color-actual); color: white; cursor: pointer; }
 @media (max-width: 760px) {
   .header { align-items: stretch; flex-direction: column; padding: var(--space-4); }
   .filter { justify-content: center; }
   .statusBar { align-items: flex-start; flex-direction: column; padding: var(--space-3) var(--space-4); }
+  .filterStatus, .emptyState { padding-inline: var(--space-4); }
 }

@@ -14,9 +14,10 @@ router = APIRouter(tags=["asset-classes"])
 
 @router.get("/asset-classes", response_model=list[AssetClassResponse])
 async def get_asset_classes(
+    include_inactive: bool = False,
     session: AsyncSession = Depends(get_session),
 ) -> list[AssetClassResponse]:
-    return await list_asset_classes(session)
+    return await list_asset_classes(session, include_inactive=include_inactive)
 
 
 @router.put("/asset-classes", response_model=list[AssetClassResponse])

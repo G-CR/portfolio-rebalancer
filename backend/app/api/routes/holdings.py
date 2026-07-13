@@ -17,9 +17,10 @@ router = APIRouter(tags=["holdings"])
 
 @router.get("/holdings", response_model=list[HoldingResponse])
 async def get_holdings(
+    include_archived: bool = False,
     session: AsyncSession = Depends(get_session),
 ) -> list[HoldingResponse]:
-    return await list_holdings(session)
+    return await list_holdings(session, include_archived=include_archived)
 
 
 @router.post("/holdings", response_model=HoldingResponse, status_code=201)

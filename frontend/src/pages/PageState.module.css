@@ -9,3 +9,24 @@
 .error {
   color: var(--color-fx);
 }
+
+.error strong { color: var(--color-ink); font-size: 14px; }
+.error p { max-width: 620px; margin: var(--space-2) 0 0; line-height: 1.55; }
+.error button { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-4); padding: 0 var(--space-4); border: 1px solid var(--color-actual); border-radius: 2px; background: var(--color-actual); color: white; cursor: pointer; }
+.loading { min-height: 420px; border-top: 2px solid var(--color-ink); background: var(--color-surface); }
+.loadingHeader { display: flex; height: 112px; align-items: center; justify-content: space-between; padding: var(--space-7); border-bottom: 1px solid var(--color-rule); }
+.loadingHeader span:first-child { width: 220px; height: 42px; }
+.loadingHeader span:last-child { width: 110px; height: 28px; }
+.loadingTable { display: grid; }
+.loadingRow { display: grid; height: 56px; grid-template-columns: 90px 1.2fr .8fr 1.4fr; align-items: center; gap: var(--space-5); padding: 0 var(--space-7); border-bottom: 1px solid var(--color-rule); }
+.loading span { display: block; border-radius: 2px; background: rgb(24 34 29 / 9%); animation: skeleton 1.4s ease-in-out infinite alternate; }
+.loadingRow span { height: 13px; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+@keyframes skeleton { to { opacity: .48; } }
+@media (max-width: 760px) {
+  .state { padding: var(--space-5) var(--space-4); }
+  .loadingHeader { height: 104px; padding: var(--space-4); }
+  .loadingRow { grid-template-columns: 90px 1fr 60px; padding: 0 var(--space-4); }
+  .loadingRow span:last-child { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .loading span { animation: none; } }

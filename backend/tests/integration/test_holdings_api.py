@@ -320,6 +320,47 @@ async def test_archive_zero_quantity_hiding_from_active_list(
     assert (await api_client.get("/api/holdings")).json() == []
 
 
+async def test_list_holdings_can_include_archived_without_changing_default_order(
+    api_client, asset_class_id
+) -> None:
+    archived = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                asset_class_id,
+                symbol="ZERO",
+                account_name="归档账户",
+                quantity="0",
+            ),
+        )
+    ).json()
+    active = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                asset_class_id,
+                symbol="SPY",
+                account_name="长期账户",
+            ),
+        )
+    ).json()
+    archived_response = await api_client.post(f"/api/holdings/{archived['id']}/archive")
+    assert archived_response.status_code == 200
+
+    default_response = await api_client.get("/api/holdings")
+    include_archived_response = await api_client.get(
+        "/api/holdings", params={"include_archived": "true"}
+    )
+
+    assert [item["id"] for item in default_response.json()] == [active["id"]]
+    assert [item["id"] for item in include_archived_response.json()] == [
+        archived["id"],
+        active["id"],
+    ]
+    assert include_archived_response.json()[0]["is_active"] is False
+    assert include_archived_response.json()[1]["is_active"] is True
+
+
 async def test_archive_then_recreate_same_symbol_and_account(
     api_client, asset_class_id, db_session
 ) -> None:

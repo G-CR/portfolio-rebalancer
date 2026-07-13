@@ -7,6 +7,7 @@ import type {
   CostAdjustmentCollection,
   CostAdjustmentPreview,
   Holding,
+  HoldingCreate,
   PurchasePayload,
   RestorePayload,
   SellPayload,
@@ -16,10 +17,23 @@ export const holdingsQueryKey = ["holdings"] as const;
 export const costAdjustmentsQueryKey = (holdingId: string) =>
   ["cost-adjustments", holdingId] as const;
 
-export function useHoldings() {
+export function useHoldings(includeArchived = false) {
   return useQuery({
     queryKey: holdingsQueryKey,
-    queryFn: () => apiRequest<Holding[]>("/api/holdings"),
+    queryFn: () => apiRequest<Holding[]>(
+      includeArchived ? "/api/holdings?include_archived=true" : "/api/holdings",
+    ),
+  });
+}
+
+export function useCreateHolding() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: HoldingCreate) => apiRequest<Holding>("/api/holdings", {
+      method: "POST",
+      body: jsonBody(payload),
+    }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: holdingsQueryKey }),
   });
 }
 

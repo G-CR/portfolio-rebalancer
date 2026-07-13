@@ -17,7 +17,7 @@ export interface AssetClass {
 
 export type AssetClassUpdate = Pick<
   AssetClass,
-  "id" | "name" | "target_weight" | "display_order" | "notes"
+  "id" | "name" | "target_weight" | "display_order" | "notes" | "is_active"
 >;
 
 export interface Holding {
@@ -38,6 +38,8 @@ export interface Holding {
   is_active: boolean;
   version: number;
 }
+
+export type HoldingCreate = Omit<Holding, "id" | "is_active" | "version">;
 
 export interface HoldingDefaults {
   fee_currency: string;

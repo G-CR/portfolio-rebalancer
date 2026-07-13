@@ -30,3 +30,4 @@ class AssetClassUpdate(BaseModel):
     target_weight: DecimalString
     display_order: int
     notes: str | None = None
+    is_active: bool = True

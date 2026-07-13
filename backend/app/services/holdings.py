@@ -13,12 +13,23 @@ from app.services.errors import ServiceError
 _ONE = Decimal("1")
 
 
-async def list_holdings(session: AsyncSession) -> list[Holding]:
+async def list_holdings(
+    session: AsyncSession, *, include_archived: bool = False
+) -> list[Holding]:
+    statement = select(Holding).join(
+        AssetClass, Holding.asset_class_id == AssetClass.id
+    )
+    if not include_archived:
+        statement = statement.where(
+            Holding.is_active.is_(True),
+            AssetClass.is_active.is_(True),
+        )
     result = await session.scalars(
-        select(Holding)
-        .join(AssetClass, Holding.asset_class_id == AssetClass.id)
-        .where(Holding.is_active.is_(True), AssetClass.is_active.is_(True))
-        .order_by(AssetClass.display_order.asc(), Holding.created_at.asc())
+        statement.order_by(
+            AssetClass.display_order.asc(),
+            Holding.created_at.asc(),
+            Holding.id.asc(),
+        )
     )
     return list(result)
 

@@ -8,7 +8,7 @@ export const assetClassesQueryKey = ["asset-classes"] as const;
 export function useAssetClasses() {
   return useQuery({
     queryKey: assetClassesQueryKey,
-    queryFn: () => apiRequest<AssetClass[]>("/api/asset-classes"),
+    queryFn: () => apiRequest<AssetClass[]>("/api/asset-classes?include_inactive=true"),
   });
 }
 

@@ -12,6 +12,7 @@ type Props = {
   initialItems: readonly AssetClass[];
   onSave: (items: AssetClassUpdate[]) => Promise<unknown>;
   saving?: boolean;
+  holdingImpact?: Record<string, number>;
 };
 
 function editable(items: readonly AssetClass[]): EditableAssetClass[] {
@@ -20,17 +21,20 @@ function editable(items: readonly AssetClass[]): EditableAssetClass[] {
     .map((item) => ({ ...item, targetPercent: ratioToPercent(item.target_weight) }));
 }
 
-export function AssetClassEditor({ initialItems, onSave, saving = false }: Props) {
+export function AssetClassEditor({ initialItems, onSave, saving = false, holdingImpact = {} }: Props) {
   const [items, setItems] = useState(() => editable(initialItems));
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => setItems(editable(initialItems)), [initialItems]);
   const difference = useMemo(
-    () => percentDifference(items.map((item) => item.targetPercent)),
+    () => percentDifference(
+      items.filter((item) => item.is_active).map((item) => item.targetPercent),
+    ),
     [items],
   );
   const valid = Boolean(difference?.valid) && items.every((item) => item.name.trim());
+  const activeCount = items.filter((item) => item.is_active).length;
 
   function update(id: string, patch: Partial<EditableAssetClass>) {
     setSaved(false);
@@ -49,6 +53,17 @@ export function AssetClassEditor({ initialItems, onSave, saving = false }: Props
     });
   }
 
+  function changeActive(item: EditableAssetClass, nextActive: boolean) {
+    if (!nextActive) {
+      const count = holdingImpact[item.id] ?? 0;
+      const confirmed = window.confirm(
+        `停用“${item.name}”后，其目标比例不再计入 100%，${count} 个关联持仓将从默认持仓视图和组合计算中排除。类别、顺序、比例和备注都会保留。继续停用吗？`,
+      );
+      if (!confirmed) return;
+    }
+    update(item.id, { is_active: nextActive });
+  }
+
   async function save() {
     if (!valid) return;
     setError(null);
@@ -60,6 +75,7 @@ export function AssetClassEditor({ initialItems, onSave, saving = false }: Props
         target_weight: percentToRatio(item.targetPercent),
         display_order: index + 1,
         notes: item.notes?.trim() || null,
+        is_active: item.is_active,
       })));
       setSaved(true);
     } catch (caught) {
@@ -72,10 +88,10 @@ export function AssetClassEditor({ initialItems, onSave, saving = false }: Props
       <header className={styles.header}>
         <div>
           <p className={styles.eyebrow}>ACTIVE STRATEGY</p>
-          <h2 id="asset-editor-title">当前启用资产配置</h2>
+          <h2 id="asset-editor-title">资产配置</h2>
           <p>目标比例按启用类别合计，保存时必须精确等于 100%。</p>
         </div>
-        <span className={styles.count}>{items.length} 类资产</span>
+        <span className={styles.count}>{activeCount} 个启用 · {items.length} 个配置</span>
       </header>
 
       {error ? <div className={styles.alert} role="alert">{error}</div> : null}
@@ -94,7 +110,7 @@ export function AssetClassEditor({ initialItems, onSave, saving = false }: Props
           </thead>
           <tbody>
             {items.map((item, index) => (
-              <tr key={item.id}>
+              <tr key={item.id} data-inactive={!item.is_active || undefined}>
                 <td>
                   <div className={styles.orderControls}>
                     <span>{index + 1}</span>
@@ -124,9 +140,14 @@ export function AssetClassEditor({ initialItems, onSave, saving = false }: Props
                   </div>
                 </td>
                 <td>
-                  <label className={styles.activeState} title="当前 API 维护启用配置集合">
-                    <input type="checkbox" checked readOnly aria-label={`${item.name}启用状态`} />
-                    <span>启用中</span>
+                  <label className={item.is_active ? styles.activeState : styles.inactiveState}>
+                    <input
+                      type="checkbox"
+                      checked={item.is_active}
+                      aria-label={`${item.name}启用状态`}
+                      onChange={(event) => changeActive(item, event.target.checked)}
+                    />
+                    <span>{item.is_active ? "启用中" : "已停用"}</span>
                   </label>
                 </td>
                 <td>
@@ -141,7 +162,7 @@ export function AssetClassEditor({ initialItems, onSave, saving = false }: Props
 
       <footer className={styles.footer}>
         <div>
-          <strong>目标比例合计 {difference?.total ?? "输入有误"}%</strong>
+          <strong>启用目标比例合计 {difference?.total ?? "输入有误"}%</strong>
           {!difference ? <p className={styles.invalid}>请输入有效的非负比例</p> : null}
           {difference && !difference.valid ? (
             <p className={difference.deficit ? styles.warning : styles.invalid}>
