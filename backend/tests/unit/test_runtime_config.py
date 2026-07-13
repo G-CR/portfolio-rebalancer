@@ -10,14 +10,64 @@ import app.main as main_module
 from app.core.config import get_settings
 
 
+class _SessionScope:
+    def __init__(self, session: object) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> object:
+        return self._session
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
 def test_lifespan_disposes_engine_on_shutdown(monkeypatch) -> None:
+    session = object()
     dispose = AsyncMock()
+    seed_default_strategy = AsyncMock()
     monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose))
+    monkeypatch.setattr(
+        main_module,
+        "SessionFactory",
+        lambda: _SessionScope(session),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "seed_default_strategy",
+        seed_default_strategy,
+        raising=False,
+    )
 
     with TestClient(main_module.app):
         pass
 
+    seed_default_strategy.assert_awaited_once_with(session)
     dispose.assert_awaited_once()
+
+
+def test_lifespan_seeds_default_strategy_on_startup(monkeypatch) -> None:
+    session = object()
+    dispose = AsyncMock()
+    seed_default_strategy = AsyncMock()
+    monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose))
+    monkeypatch.setattr(
+        main_module,
+        "SessionFactory",
+        lambda: _SessionScope(session),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "seed_default_strategy",
+        seed_default_strategy,
+        raising=False,
+    )
+
+    with TestClient(main_module.app):
+        pass
+
+    seed_default_strategy.assert_awaited_once_with(session)
 
 
 def test_compose_secret_mount_matches_settings() -> None:
