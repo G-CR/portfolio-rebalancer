@@ -218,3 +218,77 @@ def test_fx_pass_never_buys_a_class_overweight_after_same_currency_pass(
         for trade in with_fx.trades
     )
     assert with_fx.max_drift_after <= without_fx.max_drift_after
+
+
+@given(
+    first_value=st.integers(min_value=1, max_value=999),
+    cny_cash=st.integers(min_value=0, max_value=1000),
+    usd_cash=st.integers(min_value=0, max_value=1000),
+    tolerance=st.integers(min_value=0, max_value=50),
+    minimum_trade=st.integers(min_value=0, max_value=100),
+    allow_sell=st.booleans(),
+    allow_fx=st.booleans(),
+)
+@settings(max_examples=100)
+def test_before_metrics_match_original_weights_independent_of_cash_and_options(
+    first_value: int,
+    cny_cash: int,
+    usd_cash: int,
+    tolerance: int,
+    minimum_trade: int,
+    allow_sell: bool,
+    allow_fx: bool,
+) -> None:
+    second_value = 1000 - first_value
+    assets = (
+        AssetInput(
+            "first",
+            "FIRST",
+            "CNY",
+            Decimal(first_value),
+            Decimal("0.5"),
+            Decimal("10"),
+            Decimal("1"),
+        ),
+        AssetInput(
+            "second",
+            "SECOND",
+            "USD",
+            Decimal(second_value),
+            Decimal("0.5"),
+            Decimal("10"),
+            Decimal("1"),
+        ),
+    )
+    expected_weights = (
+        Decimal(first_value) / Decimal("1000"),
+        Decimal(second_value) / Decimal("1000"),
+    )
+    expected_drift = max(
+        abs(expected_weights[0] - Decimal("0.5")),
+        abs(expected_weights[1] - Decimal("0.5")),
+    )
+    baseline = rebalance(
+        assets,
+        CashInput(Decimal("0"), Decimal("0"), Decimal("1")),
+        RebalanceOptions(Decimal("0"), Decimal("0"), False, False),
+    )
+    variant = rebalance(
+        assets,
+        CashInput(Decimal(cny_cash), Decimal(usd_cash), Decimal("1")),
+        RebalanceOptions(
+            Decimal(tolerance) / Decimal("100"),
+            Decimal(minimum_trade),
+            allow_sell,
+            allow_fx,
+        ),
+    )
+
+    assert tuple(
+        weight.before for weight in baseline.projected_weights
+    ) == expected_weights
+    assert tuple(
+        weight.before for weight in variant.projected_weights
+    ) == expected_weights
+    assert baseline.max_drift_before == expected_drift
+    assert variant.max_drift_before == expected_drift

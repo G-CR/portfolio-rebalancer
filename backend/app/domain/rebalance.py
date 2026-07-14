@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR, localcontext
-from typing import Literal, Sequence
+from types import MappingProxyType
+from typing import Literal
 
 
 Currency = Literal["CNY", "USD"]
@@ -236,7 +238,7 @@ def _weight(value: Decimal, total: Decimal) -> Decimal:
 
 
 def _max_drift(
-    assets: Sequence[AssetInput], values: dict[str, Decimal], total: Decimal
+    assets: Sequence[AssetInput], values: Mapping[str, Decimal], total: Decimal
 ) -> Decimal:
     if not assets:
         return Decimal("0")
@@ -283,11 +285,17 @@ def rebalance(
         ) != Decimal("1"):
             raise ValueError("target weights must sum to 1")
 
-        values = {
-            item.asset_class_id: item.current_value_cny for item in asset_list
-        }
-        current_total = sum(values.values(), Decimal("0"))
-        investable_total = current_total + cash.cny + cash.usd * cash.usd_cny
+        original_values = MappingProxyType(
+            {
+                item.asset_class_id: item.current_value_cny
+                for item in asset_list
+            }
+        )
+        original_invested_total = sum(original_values.values(), Decimal("0"))
+        values = dict(original_values)
+        investable_total = (
+            original_invested_total + cash.cny + cash.usd * cash.usd_cny
+        )
         initial_targets = {
             item.asset_class_id: investable_total * item.target_weight
             for item in asset_list
@@ -438,15 +446,16 @@ def rebalance(
             buy_usd_with_fx(current_targets)
 
         final_total = sum(values.values(), Decimal("0"))
-        before_values = {
-            item.asset_class_id: item.current_value_cny for item in asset_list
-        }
-        max_drift_before = _max_drift(asset_list, before_values, current_total)
+        max_drift_before = _max_drift(
+            asset_list, original_values, original_invested_total
+        )
         max_drift_after = _max_drift(asset_list, values, final_total)
         projected_weights = tuple(
             ProjectedWeight(
                 asset_class_id=item.asset_class_id,
-                before=_weight(item.current_value_cny, current_total),
+                before=_weight(
+                    original_values[item.asset_class_id], original_invested_total
+                ),
                 after=_weight(values[item.asset_class_id], final_total),
                 target=item.target_weight,
             )

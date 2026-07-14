@@ -274,6 +274,29 @@ def test_cash_that_restores_tolerance_prevents_sells() -> None:
     assert result.feasible is True
 
 
+def test_before_metrics_use_original_holdings_with_temporary_cash() -> None:
+    assets = [
+        _asset("over", "OVER", "CNY", "600", "0.5", "10"),
+        _asset("under", "UNDER", "CNY", "400", "0.5", "10"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("200"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.02"), Decimal("0"), True, True),
+    )
+
+    assert [weight.before for weight in result.projected_weights] == [
+        Decimal("0.6"),
+        Decimal("0.4"),
+    ]
+    assert result.max_drift_before == Decimal("0.1")
+    assert [weight.after for weight in result.projected_weights] == [
+        Decimal("0.5"),
+        Decimal("0.5"),
+    ]
+
+
 def test_minimum_trade_filters_lots_without_spending_cash() -> None:
     assets = [
         _asset("a", "AAA", "CNY", "0", "0.5", "40"),
