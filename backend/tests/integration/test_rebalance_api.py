@@ -9,7 +9,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
 from app.db.models import AssetClass, Holding, MarketData, RebalancePlan
+from app.db.session import SessionFactory
 from app.main import app
+from app.services import rebalancing as rebalancing_service
 
 NOW = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
 
@@ -350,6 +352,88 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
         "fx_comparison": created["fx_comparison"],
         "data_status": "valid",
     }
+
+
+async def test_create_plan_uses_one_capture_when_newer_price_is_appended_before_insert(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+    captured_price = await db_session.scalar(
+        select(MarketData).where(
+            MarketData.data_type == "price",
+            MarketData.symbol == "CNY-FUND",
+        )
+    )
+    captured_price_id = str(captured_price.id)
+    appended_ids: list[str] = []
+    preparation_count = 0
+    refresh_count = 0
+    original_prepare = rebalancing_service._prepare_rebalance
+
+    async def _prepare_then_append(*args, **kwargs):
+        nonlocal preparation_count
+        prepared = await original_prepare(*args, **kwargs)
+        preparation_count += 1
+        if preparation_count == 1:
+            async with SessionFactory() as concurrent_session:
+                newer = MarketData(
+                    data_type="price",
+                    symbol="CNY-FUND",
+                    source="concurrent",
+                    value=Decimal("125.000000000000"),
+                    market_time=NOW + timedelta(minutes=1),
+                    fetched_at=NOW + timedelta(minutes=1),
+                    status="valid",
+                )
+                concurrent_session.add(newer)
+                await concurrent_session.commit()
+                appended_ids.append(str(newer.id))
+        return prepared
+
+    async def _record_refresh(_session) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+
+    monkeypatch.setattr(rebalancing_service, "_prepare_rebalance", _prepare_then_append)
+    monkeypatch.setattr(rebalancing_service, "refresh_all_required_data", _record_refresh)
+
+    created_response = await api_client.post(
+        "/api/rebalance/plans",
+        json={
+            **_preview_payload(session_token="single-capture-browser-session"),
+            "idempotency_key": "single-capture-create",
+        },
+    )
+    created = created_response.json()
+    plan = await db_session.scalar(
+        select(RebalancePlan).where(
+            RebalancePlan.create_idempotency_key == "single-capture-create"
+        )
+    )
+
+    assert created_response.status_code == 201, created_response.text
+    assert preparation_count == 1
+    assert refresh_count == 1
+    assert appended_ids
+    assert created["market_data_record_ids"]["price:CNY-FUND"] == captured_price_id
+    assert created["market_data_record_ids"]["price:CNY-FUND"] != appended_ids[0]
+    assert Decimal(created["result"]["trades"][0]["quantity"]) == Decimal("3")
+    assert Decimal(created["result"]["trades"][0]["amount_cny"]) == Decimal("300")
+    assert plan.input_summary["market_data_record_ids"] == created["market_data_record_ids"]
+    assert plan.projected_result["result"] == created["result"]
+
+    next_preview = await api_client.post(
+        "/api/rebalance/preview",
+        json=_preview_payload(
+            session_token="single-capture-browser-session",
+            request_token="preview-after-concurrent-append",
+        ),
+    )
+
+    assert next_preview.status_code == 200, next_preview.text
+    assert Decimal(next_preview.json()["result"]["trades"][0]["amount_cny"]) == Decimal("375")
 
 
 async def test_concurrent_plan_create_with_same_key_returns_one_persisted_plan(

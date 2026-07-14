@@ -89,27 +89,40 @@ class _LifecycleCapture:
         return dict(self.asset_class_targets)
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedConstraints:
+    allow_sell: bool
+    allow_fx: bool
+    tolerance: Decimal
+    minimum_trade_cny: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedRebalance:
-    def __init__(
-        self,
-        *,
-        data_status: Literal["valid", "stale", "manual"],
-        market_data_record_ids: dict[str, str],
-        holding_versions: dict[str, int],
-        asset_class_targets: dict[str, str],
-        result: RebalanceResult,
-        comparison: RebalanceComparisonResponse,
-        effective_fx: dict[str, Decimal],
-        resolved_constraints: dict[str, object],
-    ) -> None:
-        self.data_status = data_status
-        self.market_data_record_ids = market_data_record_ids
-        self.holding_versions = holding_versions
-        self.asset_class_targets = asset_class_targets
-        self.result = result
-        self.comparison = comparison
-        self.effective_fx = effective_fx
-        self.resolved_constraints = resolved_constraints
+    data_status: Literal["valid", "stale", "manual"]
+    market_data_records: tuple[tuple[str, str], ...]
+    holding_version_items: tuple[tuple[str, int], ...]
+    asset_class_target_items: tuple[tuple[str, str], ...]
+    result: RebalanceResult
+    comparison: RebalanceComparisonResponse
+    effective_fx_items: tuple[tuple[str, Decimal], ...]
+    resolved_constraints: _ResolvedConstraints
+
+    @property
+    def market_data_record_ids(self) -> dict[str, str]:
+        return dict(self.market_data_records)
+
+    @property
+    def holding_versions(self) -> dict[str, int]:
+        return dict(self.holding_version_items)
+
+    @property
+    def asset_class_targets(self) -> dict[str, str]:
+        return dict(self.asset_class_target_items)
+
+    @property
+    def effective_fx(self) -> dict[str, Decimal]:
+        return dict(self.effective_fx_items)
 
 
 async def preview_rebalance(
@@ -122,6 +135,19 @@ async def preview_rebalance(
         payload=payload,
         allow_stale=payload.acknowledge_stale_data,
     )
+    return _preview_response(
+        payload=payload,
+        prepared=prepared,
+        refresh_attempted=refresh_attempted,
+    )
+
+
+def _preview_response(
+    *,
+    payload: RebalancePreviewRequest,
+    prepared: _PreparedRebalance,
+    refresh_attempted: bool,
+) -> RebalancePreviewResponse:
     return RebalancePreviewResponse(
         session_token=payload.session_token,
         request_token=payload.request_token,
@@ -145,14 +171,22 @@ async def create_rebalance_plan(
     if existing is not None:
         return (_plan_response(existing), False)
 
-    preview = await preview_rebalance(
+    preview_payload = RebalancePreviewRequest(
+        **payload.model_dump(exclude={"idempotency_key"})
+    )
+    refresh_attempted = await _refresh_before_first_preview(
         session,
-        RebalancePreviewRequest(**payload.model_dump(exclude={"idempotency_key"})),
+        preview_payload.session_token,
     )
     prepared = await _prepare_rebalance(
         session,
-        payload=RebalancePreviewRequest(**payload.model_dump(exclude={"idempotency_key"})),
-        allow_stale=payload.acknowledge_stale_data,
+        payload=preview_payload,
+        allow_stale=preview_payload.acknowledge_stale_data,
+    )
+    preview = _preview_response(
+        payload=preview_payload,
+        prepared=prepared,
+        refresh_attempted=refresh_attempted,
     )
     data_version = _data_version(
         market_data_record_ids=prepared.market_data_record_ids,
@@ -165,10 +199,13 @@ async def create_rebalance_plan(
         "market_data_record_ids": prepared.market_data_record_ids,
         "asset_class_targets": prepared.asset_class_targets,
         "resolved_constraints": {
-            "allow_sell": prepared.resolved_constraints["allow_sell"],
-            "allow_fx": prepared.resolved_constraints["allow_fx"],
-            "tolerance": format(prepared.resolved_constraints["tolerance"], "f"),
-            "minimum_trade_cny": format(prepared.resolved_constraints["minimum_trade_cny"], "f"),
+            "allow_sell": prepared.resolved_constraints.allow_sell,
+            "allow_fx": prepared.resolved_constraints.allow_fx,
+            "tolerance": format(prepared.resolved_constraints.tolerance, "f"),
+            "minimum_trade_cny": format(
+                prepared.resolved_constraints.minimum_trade_cny,
+                "f",
+            ),
         },
     }
     suggested_actions = preview.result.model_dump(mode="json")["trades"]
@@ -375,28 +412,28 @@ async def _prepare_rebalance(
     else:
         data_status = "valid"
 
-    resolved_constraints = {
-        "allow_sell": (
+    resolved_constraints = _ResolvedConstraints(
+        allow_sell=(
             context["default_constraints"]["allow_sell"]
             if payload.allow_sell is None
             else payload.allow_sell
         ),
-        "allow_fx": (
+        allow_fx=(
             context["default_constraints"]["allow_fx"]
             if payload.allow_fx is None
             else payload.allow_fx
         ),
-        "tolerance": (
+        tolerance=(
             context["default_constraints"]["tolerance"]
             if payload.tolerance is None
             else payload.tolerance
         ),
-        "minimum_trade_cny": (
+        minimum_trade_cny=(
             context["default_constraints"]["minimum_trade_cny"]
             if payload.minimum_trade_cny is None
             else payload.minimum_trade_cny
         ),
-    }
+    )
 
     requested_result = _run_engine(
         valuation_basis=payload.valuation_basis,
@@ -405,10 +442,10 @@ async def _prepare_rebalance(
         effective_inputs=context["effective_inputs"],
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
-        tolerance=resolved_constraints["tolerance"],
-        minimum_trade_cny=resolved_constraints["minimum_trade_cny"],
-        allow_sell=resolved_constraints["allow_sell"],
-        allow_fx=resolved_constraints["allow_fx"],
+        tolerance=resolved_constraints.tolerance,
+        minimum_trade_cny=resolved_constraints.minimum_trade_cny,
+        allow_sell=resolved_constraints.allow_sell,
+        allow_fx=resolved_constraints.allow_fx,
     )
     alternate_basis: Literal["actual", "fx_neutral"] = (
         "fx_neutral" if payload.valuation_basis == "actual" else "actual"
@@ -420,22 +457,22 @@ async def _prepare_rebalance(
         effective_inputs=context["effective_inputs"],
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
-        tolerance=resolved_constraints["tolerance"],
-        minimum_trade_cny=resolved_constraints["minimum_trade_cny"],
-        allow_sell=resolved_constraints["allow_sell"],
-        allow_fx=resolved_constraints["allow_fx"],
+        tolerance=resolved_constraints.tolerance,
+        minimum_trade_cny=resolved_constraints.minimum_trade_cny,
+        allow_sell=resolved_constraints.allow_sell,
+        allow_fx=resolved_constraints.allow_fx,
     )
     return _PreparedRebalance(
         data_status=data_status,
-        market_data_record_ids=context["market_data_record_ids"],
-        holding_versions=context["holding_versions"],
-        asset_class_targets=context["asset_class_targets"],
+        market_data_records=tuple(sorted(context["market_data_record_ids"].items())),
+        holding_version_items=tuple(sorted(context["holding_versions"].items())),
+        asset_class_target_items=tuple(sorted(context["asset_class_targets"].items())),
         result=requested_result,
         comparison=RebalanceComparisonResponse(
             valuation_basis=alternate_basis,
             result=_serialize_result(alternate_result),
         ),
-        effective_fx=context["effective_fx"],
+        effective_fx_items=tuple(sorted(context["effective_fx"].items())),
         resolved_constraints=resolved_constraints,
     )
 
