@@ -253,7 +253,9 @@ def rebalance(
     cash: CashInput,
     options: RebalanceOptions,
 ) -> RebalanceResult:
-    asset_list = tuple(assets)
+    asset_list = tuple(
+        sorted(assets, key=lambda item: (item.asset_class_id, item.symbol))
+    )
     class_ids = [item.asset_class_id for item in asset_list]
     symbols = [item.symbol for item in asset_list]
     if len(class_ids) != len(set(class_ids)):
@@ -349,14 +351,24 @@ def rebalance(
             currency: Currency | None = None,
             *,
             adjust_for_invested_denominator: bool,
-        ) -> list[tuple[Decimal, Decimal, AssetInput]]:
+        ) -> list[tuple[Decimal, Decimal | None, AssetInput]]:
             candidates = []
             for item in asset_list:
                 deficit = targets[item.asset_class_id] - values[item.asset_class_id]
-                if (currency is None or item.currency == currency) and deficit > 0:
+                is_full_target = (
+                    adjust_for_invested_denominator
+                    and item.target_weight == Decimal("1")
+                )
+                if (
+                    currency is None or item.currency == currency
+                ) and (deficit > 0 or is_full_target):
                     required_buy = deficit
                     if adjust_for_invested_denominator:
-                        required_buy = deficit / (Decimal("1") - item.target_weight)
+                        required_buy = (
+                            None
+                            if is_full_target
+                            else deficit / (Decimal("1") - item.target_weight)
+                        )
                     candidates.append((deficit, required_buy, item))
             return sorted(candidates, key=lambda row: (-row[0], row[2].symbol))
 
@@ -370,7 +382,12 @@ def rebalance(
                 adjust_for_invested_denominator=adjust_for_invested_denominator,
             ):
                 available_cny = ledger.available_cny(item.currency, cash.usd_cny)
-                quantity = _floor_lots(min(required_buy, available_cny), item)
+                buy_limit = (
+                    available_cny
+                    if required_buy is None
+                    else min(required_buy, available_cny)
+                )
+                quantity = _floor_lots(buy_limit, item)
                 amount_cny = quantity * item.unit_price_cny
                 if quantity <= 0 or amount_cny < options.minimum_trade_cny:
                     continue
@@ -389,9 +406,12 @@ def rebalance(
                 "USD",
                 adjust_for_invested_denominator=True,
             ):
-                quantity = _floor_lots(
-                    min(required_buy, ledger.remaining_cny), item
+                buy_limit = (
+                    ledger.remaining_cny
+                    if required_buy is None
+                    else min(required_buy, ledger.remaining_cny)
                 )
+                quantity = _floor_lots(buy_limit, item)
                 amount_cny = quantity * item.unit_price_cny
                 if quantity <= 0 or amount_cny < options.minimum_trade_cny:
                     continue
@@ -461,20 +481,49 @@ def rebalance(
             )
             for item in asset_list
         )
-        trades = tuple(
-            TradeSuggestion(
-                symbol=item.symbol,
-                action=item.action,
-                quantity=item.quantity,
-                amount_cny=item.amount_cny,
-                amount_trade_currency=item.amount_trade_currency,
-                reason_code=(
-                    "OVERWEIGHT_AFTER_CASH"
-                    if item.action == "sell"
-                    else _buy_reason_code(frozenset(item.reason_components))
-                ),
+        execution_order: dict[str, int] = {}
+        for symbol, _ in trade_totals:
+            execution_order.setdefault(symbol, len(execution_order))
+
+        net_trades = []
+        for asset in asset_list:
+            delta_cny = (
+                values[asset.asset_class_id]
+                - original_values[asset.asset_class_id]
             )
-            for item in trade_totals.values()
+            if delta_cny == 0:
+                continue
+            action: TradeAction = "buy" if delta_cny > 0 else "sell"
+            amount_cny = abs(delta_cny)
+            quantity = amount_cny / asset.unit_price_cny
+            amount_trade_currency = (
+                amount_cny
+                if asset.currency == "CNY"
+                else amount_cny / cash.usd_cny
+            )
+            reason_code: ReasonCode
+            if action == "sell":
+                reason_code = "OVERWEIGHT_AFTER_CASH"
+            else:
+                buy_total = trade_totals[(asset.symbol, "buy")]
+                reason_code = _buy_reason_code(
+                    frozenset(buy_total.reason_components)
+                )
+            net_trades.append(
+                TradeSuggestion(
+                    symbol=asset.symbol,
+                    action=action,
+                    quantity=quantity,
+                    amount_cny=amount_cny,
+                    amount_trade_currency=amount_trade_currency,
+                    reason_code=reason_code,
+                )
+            )
+        trades = tuple(
+            sorted(
+                net_trades,
+                key=lambda item: (execution_order[item.symbol], item.symbol),
+            )
         )
 
         return RebalanceResult(

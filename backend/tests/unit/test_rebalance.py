@@ -110,6 +110,48 @@ def test_fx_converts_only_executable_usd_deficit() -> None:
     assert result.trades[0].reason_code == "UNDERWEIGHT_AFTER_FX"
 
 
+def test_full_target_asset_consumes_same_currency_and_convertible_cash() -> None:
+    assets = [
+        _asset("all", "ALL", "USD", "100", "1", "10"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("25"), Decimal("25"), Decimal("1")),
+        RebalanceOptions(Decimal("0"), Decimal("0"), False, True),
+    )
+
+    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
+        ("ALL", "buy", Decimal("4"))
+    ]
+    assert result.trades[0].reason_code == "UNDERWEIGHT_WITH_CASH_AND_FX"
+    assert result.remaining_cny == Decimal("5")
+    assert result.remaining_usd == Decimal("5")
+
+
+def test_mixed_full_and_zero_targets_rebalance_without_division_by_zero() -> None:
+    assets = [
+        _asset("all", "ALL", "USD", "0", "1", "10"),
+        _asset("zero", "ZERO", "CNY", "100", "0", "10"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("100"), Decimal("0"), Decimal("1")),
+        RebalanceOptions(Decimal("0"), Decimal("0"), True, True),
+    )
+
+    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
+        ("ALL", "buy", Decimal("20")),
+        ("ZERO", "sell", Decimal("10")),
+    ]
+    assert result.feasible is True
+    assert [weight.after for weight in result.projected_weights] == [
+        Decimal("1"),
+        Decimal("0"),
+    ]
+
+
 def test_reviewer_scenario_does_not_buy_currently_overweight_usd_class() -> None:
     assets = [
         _asset("usd", "USD-FUND", "USD", "130", "0.5", "20"),
@@ -256,6 +298,26 @@ def test_merged_buy_preserves_cash_fx_and_sell_proceeds_components() -> None:
     )
 
 
+def test_reviewer_round_trip_is_removed_from_executable_trades() -> None:
+    assets = [
+        _asset("a", "AAA", "CNY", "0", "0.5", "200"),
+        _asset("b", "BBB", "CNY", "50", "0.5", "50"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("150"), Decimal("0"), Decimal("1")),
+        RebalanceOptions(Decimal("0.02"), Decimal("0"), True, False),
+    )
+
+    assert result.trades == ()
+    assert result.remaining_cny == Decimal("150")
+    assert [weight.after for weight in result.projected_weights] == [
+        Decimal("0"),
+        Decimal("1"),
+    ]
+
+
 def test_cash_that_restores_tolerance_prevents_sells() -> None:
     assets = [
         _asset("a", "AAA", "CNY", "600", "0.5", "10"),
@@ -329,6 +391,24 @@ def test_final_weights_exclude_uninvested_temporary_cash() -> None:
     assert [weight.after for weight in result.projected_weights] == [
         Decimal("0.5"),
         Decimal("0.5"),
+    ]
+
+
+def test_projected_weights_are_sorted_by_asset_class_id() -> None:
+    assets = [
+        _asset("z-class", "AAA", "CNY", "40", "0.4", "10"),
+        _asset("a-class", "ZZZ", "CNY", "60", "0.6", "10"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("0"), Decimal("0"), Decimal("1")),
+        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, False),
+    )
+
+    assert [weight.asset_class_id for weight in result.projected_weights] == [
+        "a-class",
+        "z-class",
     ]
 
 
