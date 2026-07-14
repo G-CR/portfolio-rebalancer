@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
 from app.schemas.common import DecimalString
@@ -26,6 +26,8 @@ def _ensure_finite_nonnegative(value: Decimal, field_name: str) -> Decimal:
 class RebalancePreviewRequest(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
+    session_token: str
+    request_token: str
     available_cny: DecimalString
     available_usd: DecimalString
     valuation_basis: Literal["actual", "fx_neutral"] = "actual"
@@ -48,8 +50,18 @@ class RebalancePreviewRequest(BaseModel):
             raise PydanticCustomError(
                 "rebalance_tolerance_out_of_range",
                 "tolerance must not exceed 1.",
-            )
+        )
         return value
+
+
+class RebalancePlanCreateRequest(RebalancePreviewRequest):
+    idempotency_key: str
+
+
+class RebalancePlanTransitionRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    idempotency_key: str
 
 
 class TradeSuggestionResponse(BaseModel):
@@ -70,6 +82,7 @@ class TradeSuggestionResponse(BaseModel):
         "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
         "OVERWEIGHT_AFTER_CASH",
     ]
+    reason: str
 
 
 class ProjectedWeightResponse(BaseModel):
@@ -92,3 +105,50 @@ class RebalanceResultResponse(BaseModel):
     remaining_usd: DecimalString
     projected_weights: tuple[ProjectedWeightResponse, ...]
     trades: tuple[TradeSuggestionResponse, ...]
+
+
+class RebalanceComparisonResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    valuation_basis: Literal["actual", "fx_neutral"]
+    result: RebalanceResultResponse
+
+
+class RebalancePreviewResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    session_token: str
+    request_token: str
+    status: Literal["ok"]
+    data_status: Literal["valid", "stale", "manual"]
+    acknowledge_stale_data: bool
+    refresh_attempted: bool
+    valuation_basis: Literal["actual", "fx_neutral"]
+    result: RebalanceResultResponse
+    fx_comparison: RebalanceComparisonResponse
+
+
+class RebalancePlanResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    status: Literal["draft", "in_progress", "completed", "cancelled"]
+    valuation_basis: Literal["actual", "fx_neutral"]
+    data_version: str
+    data_status: Literal["valid", "stale", "manual"]
+    market_data_record_ids: dict[str, str]
+    holding_versions: dict[str, int]
+    asset_class_targets: dict[str, str] = Field(default_factory=dict)
+    result: RebalanceResultResponse
+    fx_comparison: RebalanceComparisonResponse
+    before_snapshot_id: str | None
+    after_snapshot_id: str | None
+    baseline_reset_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class RebalancePlanCollectionResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    items: list[RebalancePlanResponse]

@@ -587,6 +587,8 @@ def test_rebalance_schema_serializes_domain_result_as_decimal_strings() -> None:
 
 def test_rebalance_preview_request_is_frozen_normalized_and_validated() -> None:
     request = RebalancePreviewRequest(
+        session_token="browser-session-1",
+        request_token="preview-request-1",
         available_cny="20000",
         available_usd="0",
         valuation_basis="actual",
@@ -601,6 +603,8 @@ def test_rebalance_preview_request_is_frozen_normalized_and_validated() -> None:
         request.available_cny = Decimal("1")  # type: ignore[misc]
     with pytest.raises(ValidationError):
         RebalancePreviewRequest(
+            session_token="browser-session-1",
+            request_token="preview-request-2",
             available_cny="NaN",
             available_usd="0",
             valuation_basis="actual",

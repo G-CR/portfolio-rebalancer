@@ -120,6 +120,39 @@ async def create_manual_snapshot(
     return await get_snapshot_detail(session, snapshot.id)
 
 
+async def create_event_snapshot(
+    session: AsyncSession,
+    *,
+    snapshot_type: str,
+    note: str | None = None,
+    now: datetime | None = None,
+) -> Snapshot:
+    captured_at = _aware_now(now)
+    analytics = await get_portfolio_analytics(session)
+    if analytics.data_status == "setup":
+        raise ServiceError(
+            409,
+            "SNAPSHOT_PORTFOLIO_EMPTY",
+            "A snapshot cannot be created before the portfolio has active holdings.",
+        )
+
+    snapshot = Snapshot(
+        snapshot_type=snapshot_type,
+        local_date=captured_at.astimezone(ZoneInfo(get_settings().timezone)).date(),
+        captured_at=captured_at,
+        note=note,
+        data_complete=True,
+        has_stale_data=analytics.has_stale_data,
+        has_manual_data=analytics.has_manual_data,
+        created_at=captured_at,
+    )
+    session.add(snapshot)
+    await session.flush()
+    await _persist_items(session, snapshot_id=snapshot.id, analytics=analytics, captured_at=captured_at)
+    await session.flush()
+    return snapshot
+
+
 async def list_snapshots(
     session: AsyncSession,
     *,

@@ -168,6 +168,65 @@ async def _snapshot_migration_state() -> dict[str, object]:
     }
 
 
+async def _rebalance_plan_migration_state() -> dict[str, object]:
+    async with MigrationSessionFactory() as session:
+        revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
+        columns = {
+            row["column_name"]: {
+                "nullable": row["is_nullable"],
+                "default": row["column_default"],
+            }
+            for row in (
+                await session.execute(
+                    text(
+                        """
+                        SELECT column_name, is_nullable, column_default
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'rebalance_plans'
+                          AND column_name IN (
+                              'create_idempotency_key',
+                              'before_snapshot_id',
+                              'after_snapshot_id',
+                              'started_at',
+                              'cancelled_at',
+                              'baseline_reset_at',
+                              'start_market_data_record_ids',
+                              'completion_market_data_record_ids',
+                              'start_idempotency_key',
+                              'cancel_idempotency_key',
+                              'complete_idempotency_key'
+                          )
+                        ORDER BY column_name
+                        """
+                    )
+                )
+            ).mappings()
+        }
+        rows = [
+            dict(row)
+            for row in (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, strategy_mode, status, data_version,
+                               input_summary, suggested_actions, projected_result,
+                               completed_at
+                        FROM rebalance_plans
+                        ORDER BY id
+                        """
+                    )
+                )
+            ).mappings()
+        ]
+
+    return {
+        "revision": revision,
+        "columns": columns,
+        "rows": rows,
+    }
+
+
 async def test_initial_migration_creates_core_tables(db_session) -> None:
     rows = await db_session.execute(
         text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
@@ -187,6 +246,109 @@ async def test_initial_migration_creates_core_tables(db_session) -> None:
         "settings",
         "encrypted_secrets",
     } <= names
+
+
+async def test_rebalance_plan_lifecycle_upgrade_preserves_existing_rows(
+    _reset_database,
+) -> None:
+    plan_id = UUID("00000000-0000-0000-0000-000000000611")
+    expected_columns = {
+        "after_snapshot_id": {"nullable": "YES", "default": None},
+        "baseline_reset_at": {"nullable": "YES", "default": None},
+        "before_snapshot_id": {"nullable": "YES", "default": None},
+        "cancel_idempotency_key": {"nullable": "YES", "default": None},
+        "cancelled_at": {"nullable": "YES", "default": None},
+        "complete_idempotency_key": {"nullable": "YES", "default": None},
+        "completion_market_data_record_ids": {"nullable": "YES", "default": None},
+        "create_idempotency_key": {"nullable": "YES", "default": None},
+        "start_idempotency_key": {"nullable": "YES", "default": None},
+        "start_market_data_record_ids": {"nullable": "YES", "default": None},
+        "started_at": {"nullable": "YES", "default": None},
+    }
+
+    try:
+        await _run_alembic_downgrade("20260714_0004")
+        async with MigrationSessionFactory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO rebalance_plans (
+                        id, strategy_mode, status, data_version,
+                        input_summary, suggested_actions, projected_result,
+                        created_at, updated_at, completed_at
+                    )
+                    VALUES (
+                        :plan_id, 'actual', 'draft', 'v1',
+                        '{"request_token":"preview-1"}'::json,
+                        '[]'::json,
+                        '{"valuation_basis":"actual"}'::json,
+                        TIMESTAMPTZ '2026-07-14 01:00:00+00',
+                        TIMESTAMPTZ '2026-07-14 01:00:00+00',
+                        NULL
+                    )
+                    """
+                ),
+                {"plan_id": plan_id},
+            )
+            await session.commit()
+
+        await _run_alembic_upgrade("head")
+        state = await _rebalance_plan_migration_state()
+        assert state["revision"] == "20260714_0005"
+        assert state["columns"] == expected_columns
+        assert state["rows"] == [
+            {
+                "id": plan_id,
+                "strategy_mode": "actual",
+                "status": "draft",
+                "data_version": "v1",
+                "input_summary": {"request_token": "preview-1"},
+                "suggested_actions": [],
+                "projected_result": {"valuation_basis": "actual"},
+                "completed_at": None,
+            }
+        ]
+    finally:
+        await _run_alembic_upgrade("head")
+
+
+async def test_rebalance_plan_lifecycle_migration_round_trip(
+    _reset_database,
+) -> None:
+    expected_columns = {
+        "after_snapshot_id": {"nullable": "YES", "default": None},
+        "baseline_reset_at": {"nullable": "YES", "default": None},
+        "before_snapshot_id": {"nullable": "YES", "default": None},
+        "cancel_idempotency_key": {"nullable": "YES", "default": None},
+        "cancelled_at": {"nullable": "YES", "default": None},
+        "complete_idempotency_key": {"nullable": "YES", "default": None},
+        "completion_market_data_record_ids": {"nullable": "YES", "default": None},
+        "create_idempotency_key": {"nullable": "YES", "default": None},
+        "start_idempotency_key": {"nullable": "YES", "default": None},
+        "start_market_data_record_ids": {"nullable": "YES", "default": None},
+        "started_at": {"nullable": "YES", "default": None},
+    }
+
+    try:
+        await _run_alembic_downgrade("20260714_0004")
+        assert (await _rebalance_plan_migration_state())["columns"] == {}
+
+        await _run_alembic_upgrade("head")
+        first = await _rebalance_plan_migration_state()
+        assert first["revision"] == "20260714_0005"
+        assert first["columns"] == expected_columns
+        assert first["rows"] == []
+
+        await _run_alembic_downgrade("20260714_0004")
+        assert (await _rebalance_plan_migration_state())["columns"] == {}
+
+        await _run_alembic_upgrade("head")
+        second = await _rebalance_plan_migration_state()
+        assert second["revision"] == "20260714_0005"
+        assert second["columns"] == expected_columns
+        assert second["rows"] == []
+    finally:
+        await _run_alembic_upgrade("head")
 
 
 def test_cost_adjustment_created_at_has_no_implicit_default() -> None:
@@ -344,7 +506,7 @@ async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
 
         await _run_alembic_upgrade("head")
         first_upgrade = await _snapshot_migration_state()
-        assert first_upgrade["revision"] == "20260714_0004"
+        assert first_upgrade["revision"] == "20260714_0005"
         assert first_upgrade["columns"] == expected_columns
         assert first_upgrade["snapshots"] == []
         assert first_upgrade["items"] == []
@@ -354,7 +516,7 @@ async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
 
         await _run_alembic_upgrade("head")
         second_upgrade = await _snapshot_migration_state()
-        assert second_upgrade["revision"] == "20260714_0004"
+        assert second_upgrade["revision"] == "20260714_0005"
         assert second_upgrade["columns"] == expected_columns
         assert second_upgrade["snapshots"] == []
         assert second_upgrade["items"] == []
@@ -489,7 +651,7 @@ async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes
         state = await _holding_migration_state()
         rows = {row["id"]: row for row in state["rows"]}
 
-        assert state["revision"] == "20260714_0004"
+        assert state["revision"] == "20260714_0005"
         assert "uq_holdings_active_symbol_account_name" in state["indexes"]
         assert "uq_holdings_symbol_account_name" not in state["constraints"]
         assert rows[archived_id] == {
@@ -583,4 +745,4 @@ async def test_downgrade_0003_restores_global_identity_constraint_for_compatible
         await _run_alembic_upgrade("head")
 
     restored_state = await _holding_migration_state()
-    assert restored_state["revision"] == "20260714_0004"
+    assert restored_state["revision"] == "20260714_0005"

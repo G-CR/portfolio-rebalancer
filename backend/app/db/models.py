@@ -316,9 +316,18 @@ class RebalancePlan(Base):
     strategy_mode: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     data_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    create_idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     input_summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     suggested_actions: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     projected_result: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    before_snapshot_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("snapshots.id", ondelete="SET NULL")
+    )
+    after_snapshot_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("snapshots.id", ondelete="SET NULL")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -330,6 +339,12 @@ class RebalancePlan(Base):
         default=utcnow,
         onupdate=utcnow,
     )
+    baseline_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    start_market_data_record_ids: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    completion_market_data_record_ids: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    start_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    cancel_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    complete_idempotency_key: Mapped[str | None] = mapped_column(String(128))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
