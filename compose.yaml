@@ -6,7 +6,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:${PORTFOLIO_PORT:-8080}:80"
 
   api:
     build:
@@ -27,6 +27,8 @@ services:
       retries: 10
     volumes:
       - secret_data:/run/portfolio-secrets
+    expose:
+      - "8000"
 
   worker:
     build:
@@ -55,6 +57,8 @@ services:
       retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
 
 volumes:
   postgres_data:
