@@ -110,6 +110,60 @@ def test_fx_converts_only_executable_usd_deficit() -> None:
     assert result.trades[0].reason_code == "UNDERWEIGHT_AFTER_FX"
 
 
+def test_reviewer_scenario_does_not_buy_currently_overweight_usd_class() -> None:
+    assets = [
+        _asset("usd", "USD-FUND", "USD", "130", "0.5", "20"),
+        _asset("cny", "CNY-FUND", "CNY", "70", "0.5", "50"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("100"), Decimal("0"), Decimal("1")),
+        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, True),
+    )
+
+    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
+        ("CNY-FUND", "buy", Decimal("1"))
+    ]
+    assert result.max_drift_after == Decimal("0.02")
+
+
+def test_sell_gate_uses_current_invested_upper_bound_after_filtered_buy() -> None:
+    assets = [
+        _asset("over", "OVER", "CNY", "600", "0.5", "100"),
+        _asset("under", "UNDER", "CNY", "400", "0.5", "200"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("100"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, False),
+    )
+
+    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
+        ("OVER", "sell", Decimal("1"))
+    ]
+    assert result.max_drift_after < result.max_drift_before
+
+
+def test_merged_existing_usd_and_fx_buy_has_combined_reason() -> None:
+    assets = [
+        _asset("cny", "CNY-FUND", "CNY", "700", "0.4", "100"),
+        _asset("usd", "USD-FUND", "USD", "300", "0.6", "100"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("300"), Decimal("10"), Decimal("10")),
+        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, True),
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].symbol == "USD-FUND"
+    assert result.trades[0].quantity == Decimal("4")
+    assert result.trades[0].reason_code == "UNDERWEIGHT_WITH_CASH_AND_FX"
+
+
 def test_sell_proceeds_are_reused_before_fx_and_restore_target() -> None:
     assets = [
         _asset("cny", "CNY-FUND", "CNY", "800", "0.5", "100"),
@@ -170,11 +224,36 @@ def test_repeated_buys_are_merged_and_sales_do_not_cross_below_target() -> None:
     over_sell = next(trade for trade in result.trades if trade.symbol == "OVER")
     assert len(under_buys) == 1
     assert under_buys[0].quantity == Decimal("3")
+    assert (
+        under_buys[0].reason_code
+        == "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS"
+    )
     assert over_sell.quantity == Decimal("2")
     projected_over = next(
         weight for weight in result.projected_weights if weight.asset_class_id == "over"
     )
     assert projected_over.after > projected_over.target
+
+
+def test_merged_buy_preserves_cash_fx_and_sell_proceeds_components() -> None:
+    assets = [
+        _asset("cny", "CNY-FUND", "CNY", "200", "0.2", "100"),
+        _asset("usd-under", "USD-UNDER", "USD", "100", "0.4", "100"),
+        _asset("usd-over", "USD-OVER", "USD", "700", "0.4", "100"),
+    ]
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("100"), Decimal("10"), Decimal("10")),
+        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, True),
+    )
+
+    under_buy = next(
+        trade for trade in result.trades if trade.symbol == "USD-UNDER"
+    )
+    assert under_buy.reason_code == (
+        "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX"
+    )
 
 
 def test_cash_that_restores_tolerance_prevents_sells() -> None:

@@ -60,7 +60,16 @@ class TradeSuggestionResponse(BaseModel):
     quantity: DecimalString
     amount_cny: DecimalString
     amount_trade_currency: DecimalString
-    reason_code: str
+    reason_code: Literal[
+        "UNDERWEIGHT_WITH_CASH",
+        "UNDERWEIGHT_AFTER_FX",
+        "UNDERWEIGHT_WITH_SELL_PROCEEDS",
+        "UNDERWEIGHT_WITH_CASH_AND_FX",
+        "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS",
+        "UNDERWEIGHT_AFTER_SELL_AND_FX",
+        "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
+        "OVERWEIGHT_AFTER_CASH",
+    ]
 
 
 class ProjectedWeightResponse(BaseModel):

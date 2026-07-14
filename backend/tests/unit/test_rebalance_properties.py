@@ -1,6 +1,6 @@
 from decimal import Decimal, localcontext
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import assume, given, settings, strategies as st
 
 from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, rebalance
 
@@ -159,3 +159,62 @@ def test_pnl_fields_cannot_influence_the_engine_contract() -> None:
         "unit_price_cny",
         "lot_size",
     }
+
+
+@given(
+    usd_value=st.integers(min_value=1, max_value=500),
+    cny_value=st.integers(min_value=0, max_value=500),
+    cny_cash=st.integers(min_value=1, max_value=500),
+    cny_lot_value=st.integers(min_value=1, max_value=200),
+    usd_lot_value=st.integers(min_value=1, max_value=200),
+)
+@settings(max_examples=120)
+def test_fx_pass_never_buys_a_class_overweight_after_same_currency_pass(
+    usd_value: int,
+    cny_value: int,
+    cny_cash: int,
+    cny_lot_value: int,
+    usd_lot_value: int,
+) -> None:
+    assets = (
+        AssetInput(
+            "usd",
+            "USD-FUND",
+            "USD",
+            Decimal(usd_value),
+            Decimal("0.5"),
+            Decimal(usd_lot_value),
+            Decimal("1"),
+        ),
+        AssetInput(
+            "cny",
+            "CNY-FUND",
+            "CNY",
+            Decimal(cny_value),
+            Decimal("0.5"),
+            Decimal(cny_lot_value),
+            Decimal("1"),
+        ),
+    )
+    cash = CashInput(Decimal(cny_cash), Decimal("0"), Decimal("1"))
+    options_without_fx = RebalanceOptions(
+        Decimal("0.02"), Decimal("0"), False, False
+    )
+    options_with_fx = RebalanceOptions(
+        Decimal("0.02"), Decimal("0"), False, True
+    )
+    without_fx = rebalance(assets, cash, options_without_fx)
+    usd_after_same_currency = next(
+        weight.after
+        for weight in without_fx.projected_weights
+        if weight.asset_class_id == "usd"
+    )
+    assume(usd_after_same_currency >= Decimal("0.5"))
+
+    with_fx = rebalance(assets, cash, options_with_fx)
+
+    assert all(
+        not (trade.symbol == "USD-FUND" and trade.action == "buy")
+        for trade in with_fx.trades
+    )
+    assert with_fx.max_drift_after <= without_fx.max_drift_after

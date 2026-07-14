@@ -7,6 +7,17 @@ from typing import Literal, Sequence
 
 Currency = Literal["CNY", "USD"]
 TradeAction = Literal["buy", "sell"]
+FundingComponent = Literal["CASH", "FX", "SELL_PROCEEDS"]
+ReasonCode = Literal[
+    "UNDERWEIGHT_WITH_CASH",
+    "UNDERWEIGHT_AFTER_FX",
+    "UNDERWEIGHT_WITH_SELL_PROCEEDS",
+    "UNDERWEIGHT_WITH_CASH_AND_FX",
+    "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS",
+    "UNDERWEIGHT_AFTER_SELL_AND_FX",
+    "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
+    "OVERWEIGHT_AFTER_CASH",
+]
 
 
 def _require_finite(name: str, value: Decimal) -> None:
@@ -101,7 +112,7 @@ class TradeSuggestion:
     quantity: Decimal
     amount_cny: Decimal
     amount_trade_currency: Decimal
-    reason_code: str
+    reason_code: ReasonCode
 
 
 @dataclass(frozen=True)
@@ -131,7 +142,87 @@ class _TradeTotal:
     quantity: Decimal
     amount_cny: Decimal
     amount_trade_currency: Decimal
-    reason_code: str
+    reason_components: set[FundingComponent]
+
+
+@dataclass
+class _CashLedger:
+    initial_cny: Decimal
+    initial_usd: Decimal
+    sale_cny: Decimal
+    sale_usd: Decimal
+
+    def available_cny(self, currency: Currency, usd_cny: Decimal) -> Decimal:
+        if currency == "CNY":
+            return self.initial_cny + self.sale_cny
+        return (self.initial_usd + self.sale_usd) * usd_cny
+
+    def spend_same_currency(
+        self, currency: Currency, amount_cny: Decimal, usd_cny: Decimal
+    ) -> set[FundingComponent]:
+        amount = amount_cny if currency == "CNY" else amount_cny / usd_cny
+        if currency == "CNY":
+            initial_used = min(self.initial_cny, amount)
+            self.initial_cny -= initial_used
+            sale_used = amount - initial_used
+            self.sale_cny -= sale_used
+        else:
+            initial_used = min(self.initial_usd, amount)
+            self.initial_usd -= initial_used
+            sale_used = amount - initial_used
+            self.sale_usd -= sale_used
+
+        components: set[FundingComponent] = set()
+        if initial_used > 0:
+            components.add("CASH")
+        if sale_used > 0:
+            components.add("SELL_PROCEEDS")
+        return components
+
+    def spend_cny_for_fx(self, amount_cny: Decimal) -> set[FundingComponent]:
+        initial_used = min(self.initial_cny, amount_cny)
+        self.initial_cny -= initial_used
+        sale_used = amount_cny - initial_used
+        self.sale_cny -= sale_used
+        components: set[FundingComponent] = {"FX"}
+        if sale_used > 0:
+            components.add("SELL_PROCEEDS")
+        return components
+
+    def add_sale(
+        self, currency: Currency, amount_cny: Decimal, usd_cny: Decimal
+    ) -> None:
+        if currency == "CNY":
+            self.sale_cny += amount_cny
+        else:
+            self.sale_usd += amount_cny / usd_cny
+
+    @property
+    def remaining_cny(self) -> Decimal:
+        return self.initial_cny + self.sale_cny
+
+    @property
+    def remaining_usd(self) -> Decimal:
+        return self.initial_usd + self.sale_usd
+
+
+def _buy_reason_code(components: frozenset[FundingComponent]) -> ReasonCode:
+    mapping: dict[frozenset[FundingComponent], ReasonCode] = {
+        frozenset(("CASH",)): "UNDERWEIGHT_WITH_CASH",
+        frozenset(("FX",)): "UNDERWEIGHT_AFTER_FX",
+        frozenset(("SELL_PROCEEDS",)): "UNDERWEIGHT_WITH_SELL_PROCEEDS",
+        frozenset(("CASH", "FX")): "UNDERWEIGHT_WITH_CASH_AND_FX",
+        frozenset(
+            ("CASH", "SELL_PROCEEDS")
+        ): "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS",
+        frozenset(
+            ("FX", "SELL_PROCEEDS")
+        ): "UNDERWEIGHT_AFTER_SELL_AND_FX",
+        frozenset(
+            ("CASH", "FX", "SELL_PROCEEDS")
+        ): "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
+    }
+    return mapping[components]
 
 
 def _floor_lots(amount_cny: Decimal, asset: AssetInput) -> Decimal:
@@ -197,12 +288,16 @@ def rebalance(
         }
         current_total = sum(values.values(), Decimal("0"))
         investable_total = current_total + cash.cny + cash.usd * cash.usd_cny
-        targets = {
+        initial_targets = {
             item.asset_class_id: investable_total * item.target_weight
             for item in asset_list
         }
-        cny_balance = cash.cny
-        usd_balance = cash.usd
+        ledger = _CashLedger(
+            initial_cny=cash.cny,
+            initial_usd=cash.usd,
+            sale_cny=Decimal("0"),
+            sale_usd=Decimal("0"),
+        )
         fx_required_cny = Decimal("0")
         trade_totals: dict[tuple[str, TradeAction], _TradeTotal] = {}
 
@@ -210,7 +305,7 @@ def rebalance(
             asset: AssetInput,
             action: TradeAction,
             quantity: Decimal,
-            reason_code: str,
+            reason_components: set[FundingComponent],
         ) -> None:
             amount_cny = quantity * asset.unit_price_cny
             amount_trade_currency = (
@@ -225,72 +320,97 @@ def rebalance(
                     quantity=quantity,
                     amount_cny=amount_cny,
                     amount_trade_currency=amount_trade_currency,
-                    reason_code=reason_code,
+                    reason_components=set(reason_components),
                 )
                 return
             existing.quantity += quantity
             existing.amount_cny += amount_cny
             existing.amount_trade_currency += amount_trade_currency
+            existing.reason_components.update(reason_components)
+
+        def invested_state() -> tuple[Decimal, dict[str, Decimal]]:
+            total = sum(values.values(), Decimal("0"))
+            targets = {
+                item.asset_class_id: total * item.target_weight
+                for item in asset_list
+            }
+            return total, targets
 
         def deficits(
+            targets: dict[str, Decimal],
             currency: Currency | None = None,
-        ) -> list[tuple[Decimal, AssetInput]]:
+            *,
+            adjust_for_invested_denominator: bool,
+        ) -> list[tuple[Decimal, Decimal, AssetInput]]:
             candidates = []
             for item in asset_list:
                 deficit = targets[item.asset_class_id] - values[item.asset_class_id]
                 if (currency is None or item.currency == currency) and deficit > 0:
-                    candidates.append((deficit, item))
-            return sorted(candidates, key=lambda row: (-row[0], row[1].symbol))
+                    required_buy = deficit
+                    if adjust_for_invested_denominator:
+                        required_buy = deficit / (Decimal("1") - item.target_weight)
+                    candidates.append((deficit, required_buy, item))
+            return sorted(candidates, key=lambda row: (-row[0], row[2].symbol))
 
-        def buy_with_same_currency() -> None:
-            nonlocal cny_balance, usd_balance
-            for deficit, item in deficits():
-                available_cny = (
-                    cny_balance
-                    if item.currency == "CNY"
-                    else usd_balance * cash.usd_cny
-                )
-                quantity = _floor_lots(min(deficit, available_cny), item)
+        def buy_with_same_currency(
+            targets: dict[str, Decimal],
+            *,
+            adjust_for_invested_denominator: bool,
+        ) -> None:
+            for _, required_buy, item in deficits(
+                targets,
+                adjust_for_invested_denominator=adjust_for_invested_denominator,
+            ):
+                available_cny = ledger.available_cny(item.currency, cash.usd_cny)
+                quantity = _floor_lots(min(required_buy, available_cny), item)
                 amount_cny = quantity * item.unit_price_cny
                 if quantity <= 0 or amount_cny < options.minimum_trade_cny:
                     continue
                 values[item.asset_class_id] += amount_cny
-                if item.currency == "CNY":
-                    cny_balance -= amount_cny
-                else:
-                    usd_balance -= amount_cny / cash.usd_cny
-                add_trade(item, "buy", quantity, "UNDERWEIGHT_WITH_CASH")
+                components = ledger.spend_same_currency(
+                    item.currency, amount_cny, cash.usd_cny
+                )
+                add_trade(item, "buy", quantity, components)
 
-        def buy_usd_with_fx() -> None:
-            nonlocal cny_balance, usd_balance, fx_required_cny
-            if not options.allow_fx or cny_balance <= 0:
+        def buy_usd_with_fx(targets: dict[str, Decimal]) -> None:
+            nonlocal fx_required_cny
+            if not options.allow_fx or ledger.remaining_cny <= 0:
                 return
-            for deficit, item in deficits("USD"):
-                quantity = _floor_lots(min(deficit, cny_balance), item)
+            for _, required_buy, item in deficits(
+                targets,
+                "USD",
+                adjust_for_invested_denominator=True,
+            ):
+                quantity = _floor_lots(
+                    min(required_buy, ledger.remaining_cny), item
+                )
                 amount_cny = quantity * item.unit_price_cny
                 if quantity <= 0 or amount_cny < options.minimum_trade_cny:
                     continue
-                converted_usd = amount_cny / cash.usd_cny
-                cny_balance -= amount_cny
-                usd_balance += converted_usd
+                components = ledger.spend_cny_for_fx(amount_cny)
                 fx_required_cny += amount_cny
                 values[item.asset_class_id] += amount_cny
-                usd_balance -= converted_usd
-                add_trade(item, "buy", quantity, "UNDERWEIGHT_AFTER_FX")
+                add_trade(item, "buy", quantity, components)
 
-        # Passes 1-3: fixed targets, same-currency cash, then minimal executable FX.
-        buy_with_same_currency()
-        buy_usd_with_fx()
+        # Pass 2 may plan against all temporary cash; later passes use invested state.
+        buy_with_same_currency(
+            initial_targets,
+            adjust_for_invested_denominator=False,
+        )
+        _, current_targets = invested_state()
+        buy_usd_with_fx(current_targets)
 
         # Pass 4: only residual upper-bound breaches can create sale proceeds.
-        if options.allow_sell and investable_total > 0:
+        current_total, current_targets = invested_state()
+        if options.allow_sell and current_total > 0:
             upper_candidates = []
             for item in asset_list:
-                upper_value = investable_total * (
+                upper_value = current_total * (
                     item.target_weight + options.tolerance
                 )
                 excess_to_target = (
-                    values[item.asset_class_id] - targets[item.asset_class_id]
+                    values[item.asset_class_id]
+                    - current_targets[item.asset_class_id]
                 )
                 if values[item.asset_class_id] > upper_value and excess_to_target > 0:
                     upper_candidates.append((excess_to_target, item))
@@ -306,14 +426,16 @@ def rebalance(
                 if quantity <= 0 or amount_cny < options.minimum_trade_cny:
                     continue
                 values[item.asset_class_id] -= amount_cny
-                if item.currency == "CNY":
-                    cny_balance += amount_cny
-                else:
-                    usd_balance += amount_cny / cash.usd_cny
-                add_trade(item, "sell", quantity, "OVERWEIGHT_AFTER_CASH")
+                ledger.add_sale(item.currency, amount_cny, cash.usd_cny)
+                add_trade(item, "sell", quantity, set())
 
-            buy_with_same_currency()
-            buy_usd_with_fx()
+            _, current_targets = invested_state()
+            buy_with_same_currency(
+                current_targets,
+                adjust_for_invested_denominator=True,
+            )
+            _, current_targets = invested_state()
+            buy_usd_with_fx(current_targets)
 
         final_total = sum(values.values(), Decimal("0"))
         before_values = {
@@ -337,7 +459,11 @@ def rebalance(
                 quantity=item.quantity,
                 amount_cny=item.amount_cny,
                 amount_trade_currency=item.amount_trade_currency,
-                reason_code=item.reason_code,
+                reason_code=(
+                    "OVERWEIGHT_AFTER_CASH"
+                    if item.action == "sell"
+                    else _buy_reason_code(frozenset(item.reason_components))
+                ),
             )
             for item in trade_totals.values()
         )
@@ -347,8 +473,8 @@ def rebalance(
             max_drift_before=max_drift_before,
             max_drift_after=max_drift_after,
             fx_required_cny=fx_required_cny,
-            remaining_cny=cny_balance,
-            remaining_usd=usd_balance,
+            remaining_cny=ledger.remaining_cny,
+            remaining_usd=ledger.remaining_usd,
             projected_weights=projected_weights,
             trades=trades,
         )
