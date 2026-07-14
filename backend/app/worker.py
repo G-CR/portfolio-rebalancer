@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -12,6 +13,8 @@ from app.db.models import Setting
 from app.db.session import SessionFactory
 from app.services.market_data import refresh_all_required_data
 from app.services.snapshots import create_daily_snapshot_if_complete
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +31,13 @@ async def scheduled_refresh() -> None:
     async with SessionFactory() as session:
         async with session.begin():
             await refresh_all_required_data(session)
-            await create_daily_snapshot_if_complete(session)
+
+    try:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await create_daily_snapshot_if_complete(session)
+    except Exception:
+        logger.exception("Daily snapshot creation failed after successful market refresh")
 
 
 def build_scheduler(*, refresh_hour: int | None = None, refresh_minute: int | None = None):

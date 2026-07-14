@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
+import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -221,6 +223,107 @@ async def test_worker_refresh_creates_daily_snapshot_with_refreshed_values(
     ]
     assert item.market_price == Decimal("101.250000000000")
     assert item.current_fx_to_cny == Decimal("7.220000000000")
+
+
+async def test_worker_refresh_commit_survives_snapshot_failure(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    asset_class = (await api_client.get("/api/asset-classes")).json()[2]
+    response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class["id"]),
+    )
+    assert response.status_code == 201
+
+    class _Registry:
+        async def fetch_price(self, symbol: str, **_kwargs) -> MarketQuote:
+            return MarketQuote(
+                key=f"price:{symbol}", symbol=symbol, value=Decimal("101.25"),
+                currency="USD", source="commit-provider", as_of=NOW, fetched_at=NOW,
+            )
+
+        async def fetch_fx(self, base: str, quote: str, **_kwargs) -> MarketQuote:
+            return MarketQuote(
+                key=f"fx:{base}/{quote}", symbol=f"{base}/{quote}", value=Decimal("7.22"),
+                currency=quote, source="commit-provider", as_of=NOW, fetched_at=NOW,
+            )
+
+    monkeypatch.setattr(market_data_service, "get_provider_registry", _Registry)
+
+    async def failing_snapshot(session) -> None:
+        session.add(
+            Snapshot(
+                snapshot_type="manual",
+                local_date=NOW.date(),
+                captured_at=NOW,
+                note="must rollback",
+                data_complete=True,
+                has_stale_data=False,
+                has_manual_data=False,
+                created_at=NOW,
+            )
+        )
+        await session.flush()
+        raise RuntimeError("snapshot failed after write")
+
+    monkeypatch.setattr(worker, "create_daily_snapshot_if_complete", failing_snapshot)
+    log_exception = Mock()
+    monkeypatch.setattr(worker.logger, "exception", log_exception)
+
+    await worker.scheduled_refresh()
+    db_session.expire_all()
+
+    quotes = list(await db_session.scalars(select(MarketData).order_by(MarketData.data_type)))
+    assert [(quote.data_type, quote.source) for quote in quotes] == [
+        ("fx", "commit-provider"),
+        ("price", "commit-provider"),
+    ]
+    assert list(await db_session.scalars(select(Snapshot))) == []
+    log_exception.assert_called_once_with(
+        "Daily snapshot creation failed after successful market refresh"
+    )
+
+
+async def test_worker_refresh_rollback_skips_snapshot(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    asset_class = (await api_client.get("/api/asset-classes")).json()[2]
+    response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class["id"]),
+    )
+    assert response.status_code == 201
+    snapshot = AsyncMock()
+
+    async def failing_refresh(session) -> None:
+        session.add(
+            MarketData(
+                data_type="price",
+                symbol="SPY",
+                source="rollback-provider",
+                value=Decimal("101.25"),
+                market_time=NOW,
+                fetched_at=NOW,
+                status="valid",
+            )
+        )
+        await session.flush()
+        raise RuntimeError("refresh failed after write")
+
+    monkeypatch.setattr(worker, "refresh_all_required_data", failing_refresh)
+    monkeypatch.setattr(worker, "create_daily_snapshot_if_complete", snapshot)
+
+    with pytest.raises(RuntimeError, match="refresh failed after write"):
+        await worker.scheduled_refresh()
+    db_session.expire_all()
+
+    assert list(await db_session.scalars(select(MarketData))) == []
+    assert list(await db_session.scalars(select(Snapshot))) == []
+    snapshot.assert_not_awaited()
 
 
 async def test_snapshot_copies_complete_immutable_holding_payload(api_client, db_session) -> None:

@@ -3,6 +3,7 @@ import { ReferenceArea, ReferenceDot, Line, LineChart, CartesianGrid, Responsive
 import type { SnapshotSummary } from "../../api/types";
 import { normalizeDecimalSeries } from "../analytics/chartScale";
 import { formatAmount, formatPercent, formatSignedAmount } from "../analytics/format";
+import { formatSnapshotDate } from "./dateTime";
 import styles from "./Snapshots.module.css";
 
 export type SnapshotMetric =
@@ -35,10 +36,6 @@ function eventLabel(type: SnapshotSummary["snapshot_type"]) {
   return null;
 }
 
-function timestamp(value: string) {
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(new Date(value));
-}
-
 export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; metric: SnapshotMetric }) {
   const ordered = [...items].sort((a, b) => a.captured_at.localeCompare(b.captured_at));
   const normalized = normalizeDecimalSeries(ordered.map((item) => metricValue(item, metric)));
@@ -46,7 +43,7 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
     ...item,
     chartValue: normalized[index].scaled,
     originalValue: normalized[index].original,
-    label: timestamp(item.captured_at),
+    label: formatSnapshotDate(item.local_date),
   }));
   const pairs: { before: typeof chartData[number]; after: typeof chartData[number] }[] = [];
   let pendingBefore: typeof chartData[number] | null = null;
@@ -72,7 +69,7 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 26, right: 20, left: 4, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-rule)" vertical={false} />
-            <XAxis dataKey="captured_at" tickFormatter={timestamp} tick={{ fontSize: 10 }} />
+            <XAxis dataKey="captured_at" minTickGap={28} tickFormatter={(capturedAt) => chartData.find((item) => item.captured_at === capturedAt)?.label ?? capturedAt} tick={{ fontSize: 10 }} />
             <YAxis hide domain={["dataMin", "dataMax"]} />
             <Tooltip formatter={(_value, _name, item) => [format(item.payload.originalValue), config.label]} />
             {pairs.map(({ before, after }) => <ReferenceArea key={`${before.id}-${after.id}`} x1={before.captured_at} x2={after.captured_at} fill="var(--color-target)" fillOpacity={0.08} />)}
@@ -93,7 +90,7 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
       </div>
       {pairs.length ? (
         <div className={styles.rebalancePair} aria-label="再平衡事件配对">
-          {pairs.map(({ before, after }) => <div className={styles.pairRow} key={`${before.id}-${after.id}`}><span><i className={styles.beforeMark} />再平衡前<small>{before.note || timestamp(before.captured_at)}</small></span><b aria-hidden="true" /><span><i className={styles.afterMark} />再平衡后<small>{after.note || timestamp(after.captured_at)}</small></span></div>)}
+          {pairs.map(({ before, after }) => <div className={styles.pairRow} key={`${before.id}-${after.id}`}><span><i className={styles.beforeMark} />再平衡前<small>{before.note || before.label}</small></span><b aria-hidden="true" /><span><i className={styles.afterMark} />再平衡后<small>{after.note || after.label}</small></span></div>)}
         </div>
       ) : null}
     </section>

@@ -6,14 +6,13 @@ import { ApiError } from "../api/client";
 import type { SnapshotType } from "../api/types";
 import { WorkDrawer } from "../components/WorkDrawer/WorkDrawer";
 import { useAssetClasses } from "../features/assetClasses/api";
-import { formatDataTime } from "../features/analytics/format";
 import { useCreateManualSnapshot, useSnapshotDetail, useSnapshots } from "../features/snapshots/api";
 import { SnapshotChart, type SnapshotMetric } from "../features/snapshots/SnapshotChart";
 import styles from "../features/snapshots/Snapshots.module.css";
 import { SnapshotTable, snapshotTypeLabel } from "../features/snapshots/SnapshotTable";
+import { snapshotCompletenessLabel } from "../features/snapshots/completeness";
+import { formatSnapshotCapturedAt, snapshotRangeStart, type SnapshotRange } from "../features/snapshots/dateTime";
 import { PageError } from "./PageState";
-
-type Range = "30" | "90" | "all";
 
 const metrics: { id: SnapshotMetric; label: string }[] = [
   { id: "market", label: "核心池市值" },
@@ -24,34 +23,26 @@ const metrics: { id: SnapshotMetric; label: string }[] = [
   { id: "price_effect", label: "价格影响" },
   { id: "fx_effect", label: "汇率影响" },
 ];
-
-function fromDate(range: Range) {
-  if (range === "all") return undefined;
-  const value = new Date();
-  value.setHours(0, 0, 0, 0);
-  value.setDate(value.getDate() - Number(range));
-  return value.toISOString().slice(0, 10);
-}
+const EVENT_PAGE_SIZE = 10;
 
 function SnapshotLoading() {
   return <section className={styles.loading} role="status" aria-label="正在载入历史快照"><i /><i /><i /><i /></section>;
 }
 
 export function SnapshotsPage() {
-  const [range, setRange] = useState<Range>("90");
+  const [range, setRange] = useState<SnapshotRange>("90");
   const [snapshotType, setSnapshotType] = useState<SnapshotType | "">("");
   const [assetClass, setAssetClass] = useState("");
   const [metric, setMetric] = useState<SnapshotMetric>("market");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [tablePage, setTablePage] = useState(1);
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => ({
-    fromDate: fromDate(range),
+    fromDate: snapshotRangeStart(range),
     snapshotType: snapshotType || undefined,
     assetClass: assetClass || undefined,
-    page: 1,
-    pageSize: 25,
   }), [range, snapshotType, assetClass]);
   const snapshots = useSnapshots(filters);
   const assetClasses = useAssetClasses();
@@ -65,6 +56,15 @@ export function SnapshotsPage() {
     next.delete("capture");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    setTablePage(1);
+  }, [range, snapshotType, assetClass]);
+
+  useEffect(() => {
+    const pageCount = Math.max(1, Math.ceil((snapshots.data?.items.length ?? 0) / EVENT_PAGE_SIZE));
+    if (tablePage > pageCount) setTablePage(pageCount);
+  }, [snapshots.data?.items.length, tablePage]);
 
   async function saveManual() {
     try {
@@ -101,12 +101,12 @@ export function SnapshotsPage() {
         <div className={styles.filterGroup}><label htmlFor="snapshot-asset-class">资产类别</label><select id="snapshot-asset-class" value={assetClass} onChange={(event) => setAssetClass(event.target.value)}><option value="">全部类别</option>{assetClasses.data?.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></div>
       </div>
       <div className={styles.metrics} role="group" aria-label="主要分析口径">{metrics.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => setMetric(item.id)}>{item.label}</button>)}</div>
-      {snapshots.data.items.length === 0 ? <section className={styles.empty}><strong>还没有历史快照</strong><p>完成一次有效数据刷新，或保存当前手动快照后，这里会出现可复核的时点记录。</p></section> : <><SnapshotChart items={snapshots.data.items} metric={metric} /><SnapshotTable items={snapshots.data.items} onSelect={setSelectedId} /></>}
+      {snapshots.data.items.length === 0 ? <section className={styles.empty}><strong>还没有历史快照</strong><p>完成一次有效数据刷新，或保存当前手动快照后，这里会出现可复核的时点记录。</p></section> : <><SnapshotChart items={snapshots.data.items} metric={metric} /><SnapshotTable items={snapshots.data.items} page={tablePage} pageSize={EVENT_PAGE_SIZE} onPageChange={setTablePage} onSelect={setSelectedId} /></>}
 
       <WorkDrawer open={Boolean(selectedId)} title="快照详情" onClose={() => setSelectedId(null)}>
         {detail.isPending ? <p role="status">正在载入快照详情...</p> : null}
         {detail.isError ? <p role="alert">快照详情载入失败。</p> : null}
-        {detail.data ? <><dl className={styles.drawerMeta}><div><dt>时间</dt><dd>{formatDataTime(detail.data.captured_at)}</dd></div><div><dt>类型</dt><dd>{snapshotTypeLabel(detail.data.snapshot_type)}</dd></div><div><dt>备注</dt><dd>{detail.data.note || "无备注"}</dd></div><div><dt>数据状态</dt><dd>{detail.data.has_stale_data ? "含过期数据" : detail.data.has_manual_data ? "含手动值" : "数据完整"}</dd></div></dl><div className={styles.detailList}>{detail.data.items.map((item) => <article className={styles.detailItem} key={item.id}><h3>{item.symbol}</h3><p>{item.holding_name} · {item.asset_class_name} · {item.account_name}</p><div className={styles.detailGrid}><div><span>份额</span><strong>{item.quantity}</strong></div><div><span>市场价格</span><strong>{item.market_price ?? "缺失"}</strong></div><div><span>当前汇率</span><strong>{item.current_fx_to_cny ?? "缺失"}</strong></div><div><span>基准汇率</span><strong>{item.baseline_fx_to_cny}</strong></div><div><span>平均成本价</span><strong>{item.average_cost_price}</strong></div><div><span>成本汇率</span><strong>{item.cost_fx_to_cny}</strong></div><div><span>目标占比</span><strong>{item.target_weight}</strong></div><div><span>实际占比</span><strong>{item.actual_weight ?? "缺失"}</strong></div><div><span>剔汇率占比</span><strong>{item.fx_neutral_weight ?? "缺失"}</strong></div><div><span>价格 / 汇率状态</span><strong>{item.price_status} / {item.fx_status}</strong></div></div></article>)}</div></> : null}
+        {detail.data ? <><dl className={styles.drawerMeta}><div><dt>时间</dt><dd>{formatSnapshotCapturedAt(detail.data.captured_at, detail.data.local_date)}</dd></div><div><dt>类型</dt><dd>{snapshotTypeLabel(detail.data.snapshot_type)}</dd></div><div><dt>备注</dt><dd>{detail.data.note || "无备注"}</dd></div><div><dt>数据状态</dt><dd>{snapshotCompletenessLabel(detail.data)}</dd></div></dl><div className={styles.detailList}>{detail.data.items.map((item) => <article className={styles.detailItem} key={item.id}><h3>{item.symbol}</h3><p>{item.holding_name} · {item.asset_class_name} · {item.account_name}</p><div className={styles.detailGrid}><div><span>份额</span><strong>{item.quantity}</strong></div><div><span>市场价格</span><strong>{item.market_price ?? "缺失"}</strong></div><div><span>当前汇率</span><strong>{item.current_fx_to_cny ?? "缺失"}</strong></div><div><span>基准汇率</span><strong>{item.baseline_fx_to_cny}</strong></div><div><span>平均成本价</span><strong>{item.average_cost_price}</strong></div><div><span>成本汇率</span><strong>{item.cost_fx_to_cny}</strong></div><div><span>目标占比</span><strong>{item.target_weight}</strong></div><div><span>实际占比</span><strong>{item.actual_weight ?? "缺失"}</strong></div><div><span>剔汇率占比</span><strong>{item.fx_neutral_weight ?? "缺失"}</strong></div><div><span>价格 / 汇率状态</span><strong>{item.price_status} / {item.fx_status}</strong></div></div></article>)}</div></> : null}
       </WorkDrawer>
 
       <WorkDrawer open={manualOpen} title="保存手动快照" onClose={() => setManualOpen(false)}>

@@ -122,6 +122,27 @@ const detail = {
   }],
 };
 
+function manySummaries(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const capturedAt = new Date(Date.UTC(2026, 6, 14, 2, 0) - index * 60_000);
+    const snapshotType = index === 120
+      ? "rebalance_after"
+      : index === 121 ? "rebalance_before" : "manual";
+    return {
+      ...summaries[0],
+      id: `snapshot-${index + 1}`,
+      snapshot_type: snapshotType,
+      local_date: capturedAt.toISOString().slice(0, 10),
+      captured_at: capturedAt.toISOString(),
+      note: snapshotType === "rebalance_before"
+        ? "第二页再平衡前"
+        : snapshotType === "rebalance_after" ? "第二页再平衡后" : `事件 ${index + 1}`,
+      has_manual_data: false,
+      total_market_value_cny: `${100000 + index}.000000000000`,
+    };
+  });
+}
+
 function handlers(onList?: (url: URL) => void) {
   return [
     http.get("/api/snapshots", ({ request }) => {
@@ -200,6 +221,89 @@ describe("SnapshotsPage", () => {
     ] });
     expect(await screen.findByRole("alert")).toHaveTextContent("历史快照无法载入");
     expect(screen.getByRole("button", { name: "重试载入历史" })).toBeInTheDocument();
+  });
+
+  it("fetches the complete filtered series sequentially and pages only the event table", async () => {
+    const user = userEvent.setup();
+    const allItems = manySummaries(205);
+    const requests: { page: number; pageSize: number }[] = [];
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    renderWithProviders(<SnapshotsPage />, { handlers: [
+      http.get("/api/snapshots", async ({ request }) => {
+        const url = new URL(request.url);
+        const page = Number(url.searchParams.get("page"));
+        const pageSize = Number(url.searchParams.get("page_size"));
+        requests.push({ page, pageSize });
+        activeRequests += 1;
+        maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        activeRequests -= 1;
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          items: allItems.slice(start, start + pageSize),
+          page,
+          page_size: pageSize,
+          total: allItems.length,
+        });
+      }),
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+    ] });
+
+    expect(await screen.findByText("第 1 / 21 页 · 共 205 条")).toBeInTheDocument();
+    expect(screen.getByLabelText("再平衡事件配对")).toHaveTextContent("第二页再平衡前");
+    expect(screen.getByLabelText("再平衡事件配对")).toHaveTextContent("第二页再平衡后");
+    expect(requests).toEqual([
+      { page: 1, pageSize: 100 },
+      { page: 2, pageSize: 100 },
+      { page: 3, pageSize: 100 },
+    ]);
+    expect(maximumActiveRequests).toBe(1);
+    expect(screen.getAllByRole("row")).toHaveLength(11);
+
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("第 2 / 21 页 · 共 205 条")).toBeInTheDocument();
+    expect(screen.getByText("事件 11")).toBeInTheDocument();
+  });
+
+  it("resets the event table to page one when filters change", async () => {
+    const user = userEvent.setup();
+    const allItems = manySummaries(35);
+    renderWithProviders(<SnapshotsPage />, { handlers: [
+      http.get("/api/snapshots", ({ request }) => {
+        const url = new URL(request.url);
+        const page = Number(url.searchParams.get("page"));
+        const pageSize = Number(url.searchParams.get("page_size"));
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({ items: allItems.slice(start, start + pageSize), page, page_size: pageSize, total: allItems.length });
+      }),
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+    ] });
+
+    expect(await screen.findByText("第 1 / 4 页 · 共 35 条")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("第 2 / 4 页 · 共 35 条")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("快照类型"), "manual");
+
+    expect(await screen.findByText("第 1 / 4 页 · 共 35 条")).toBeInTheDocument();
+    expect(screen.getByText("事件 1")).toBeInTheDocument();
+  });
+
+  it("uses the same combined completeness label in table and detail", async () => {
+    const user = userEvent.setup();
+    const combined = { ...summaries[0], has_stale_data: true, has_manual_data: true };
+    renderWithProviders(<SnapshotsPage />, { handlers: [
+      http.get("/api/snapshots", () => HttpResponse.json({ items: [combined], page: 1, page_size: 100, total: 1 })),
+      http.get(`/api/snapshots/${combined.id}`, () => HttpResponse.json({ ...detail, ...combined })),
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+    ] });
+
+    const row = await screen.findByRole("row", { name: /季度复核/ });
+    expect(row).toHaveTextContent("含过期与手动值");
+    await user.click(within(row).getByRole("button", { name: "查看详情" }));
+
+    expect(await screen.findByRole("dialog", { name: "快照详情" })).toHaveTextContent("含过期与手动值");
   });
 
   it("opens the manual capture workflow from the shell command URL", async () => {
