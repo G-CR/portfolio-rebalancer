@@ -13,7 +13,7 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AssetClass, Holding, MarketData, MarketDataOverride, RebalancePlan
+from app.db.models import AssetClass, Holding, MarketData, MarketDataOverride, RebalancePlan, Setting
 from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, RebalanceResult, rebalance
 from app.schemas.rebalance import (
     ProjectedWeightResponse,
@@ -75,6 +75,7 @@ class _PreparedRebalance:
         result: RebalanceResult,
         comparison: RebalanceComparisonResponse,
         effective_fx: dict[str, Decimal],
+        resolved_constraints: dict[str, object],
     ) -> None:
         self.data_status = data_status
         self.market_data_record_ids = market_data_record_ids
@@ -83,6 +84,7 @@ class _PreparedRebalance:
         self.result = result
         self.comparison = comparison
         self.effective_fx = effective_fx
+        self.resolved_constraints = resolved_constraints
 
 
 async def preview_rebalance(
@@ -142,6 +144,12 @@ async def create_rebalance_plan(
             "holding_versions": prepared.holding_versions,
             "market_data_record_ids": prepared.market_data_record_ids,
             "asset_class_targets": prepared.asset_class_targets,
+            "resolved_constraints": {
+                "allow_sell": prepared.resolved_constraints["allow_sell"],
+                "allow_fx": prepared.resolved_constraints["allow_fx"],
+                "tolerance": format(prepared.resolved_constraints["tolerance"], "f"),
+                "minimum_trade_cny": format(prepared.resolved_constraints["minimum_trade_cny"], "f"),
+            },
         },
         suggested_actions=preview.result.model_dump(mode="json")["trades"],
         projected_result={
@@ -314,6 +322,29 @@ async def _prepare_rebalance(
     else:
         data_status = "valid"
 
+    resolved_constraints = {
+        "allow_sell": (
+            context["default_constraints"]["allow_sell"]
+            if payload.allow_sell is None
+            else payload.allow_sell
+        ),
+        "allow_fx": (
+            context["default_constraints"]["allow_fx"]
+            if payload.allow_fx is None
+            else payload.allow_fx
+        ),
+        "tolerance": (
+            context["default_constraints"]["tolerance"]
+            if payload.tolerance is None
+            else payload.tolerance
+        ),
+        "minimum_trade_cny": (
+            context["default_constraints"]["minimum_trade_cny"]
+            if payload.minimum_trade_cny is None
+            else payload.minimum_trade_cny
+        ),
+    }
+
     requested_result = _run_engine(
         valuation_basis=payload.valuation_basis,
         asset_classes=context["asset_classes"],
@@ -321,10 +352,10 @@ async def _prepare_rebalance(
         effective_inputs=context["effective_inputs"],
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
-        tolerance=payload.tolerance,
-        minimum_trade_cny=payload.minimum_trade_cny,
-        allow_sell=payload.allow_sell,
-        allow_fx=payload.allow_fx,
+        tolerance=resolved_constraints["tolerance"],
+        minimum_trade_cny=resolved_constraints["minimum_trade_cny"],
+        allow_sell=resolved_constraints["allow_sell"],
+        allow_fx=resolved_constraints["allow_fx"],
     )
     alternate_basis: Literal["actual", "fx_neutral"] = (
         "fx_neutral" if payload.valuation_basis == "actual" else "actual"
@@ -336,10 +367,10 @@ async def _prepare_rebalance(
         effective_inputs=context["effective_inputs"],
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
-        tolerance=payload.tolerance,
-        minimum_trade_cny=payload.minimum_trade_cny,
-        allow_sell=payload.allow_sell,
-        allow_fx=payload.allow_fx,
+        tolerance=resolved_constraints["tolerance"],
+        minimum_trade_cny=resolved_constraints["minimum_trade_cny"],
+        allow_sell=resolved_constraints["allow_sell"],
+        allow_fx=resolved_constraints["allow_fx"],
     )
     return _PreparedRebalance(
         data_status=data_status,
@@ -352,6 +383,7 @@ async def _prepare_rebalance(
             result=_serialize_result(alternate_result),
         ),
         effective_fx=context["effective_fx"],
+        resolved_constraints=resolved_constraints,
     )
 
 
@@ -408,6 +440,15 @@ async def _load_rebalance_context(session: AsyncSession, *, lock: bool = False) 
             if holding.trade_currency != "CNY"
         },
     }
+    settings = await session.scalar(select(Setting).limit(1))
+    default_constraints = {
+        "allow_sell": settings.allow_sell if settings is not None else True,
+        "allow_fx": settings.allow_fx if settings is not None else True,
+        "tolerance": settings.default_tolerance if settings is not None else Decimal("0.02"),
+        "minimum_trade_cny": (
+            settings.minimum_trade_amount_cny if settings is not None else Decimal("500")
+        ),
+    }
     return {
         "asset_classes": asset_classes,
         "holdings": holdings,
@@ -417,6 +458,7 @@ async def _load_rebalance_context(session: AsyncSession, *, lock: bool = False) 
         "asset_class_targets": asset_class_targets,
         "market_data_record_ids": market_data_record_ids,
         "effective_fx": effective_fx,
+        "default_constraints": default_constraints,
     }
 
 

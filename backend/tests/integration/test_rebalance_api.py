@@ -333,6 +333,12 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
             configured["cny_asset_class_id"]: "0.500000000000",
             configured["usd_asset_class_id"]: "0.500000000000",
         },
+        "resolved_constraints": {
+            "allow_sell": True,
+            "allow_fx": True,
+            "tolerance": "0.05",
+            "minimum_trade_cny": "0",
+        },
     }
     assert plan.suggested_actions == created["result"]["trades"]
     assert plan.projected_result == {

@@ -31,10 +31,10 @@ class RebalancePreviewRequest(BaseModel):
     available_cny: DecimalString
     available_usd: DecimalString
     valuation_basis: Literal["actual", "fx_neutral"] = "actual"
-    allow_sell: bool
-    allow_fx: bool
-    tolerance: DecimalString
-    minimum_trade_cny: DecimalString
+    allow_sell: bool | None = None
+    allow_fx: bool | None = None
+    tolerance: DecimalString | None = None
+    minimum_trade_cny: DecimalString | None = None
     acknowledge_stale_data: bool = False
 
     @field_validator(
@@ -44,7 +44,9 @@ class RebalancePreviewRequest(BaseModel):
         "minimum_trade_cny",
     )
     @classmethod
-    def validate_nonnegative_decimal(cls, value: Decimal, info) -> Decimal:
+    def validate_nonnegative_decimal(cls, value: Decimal | None, info) -> Decimal | None:
+        if value is None:
+            return None
         value = _ensure_finite_nonnegative(value, info.field_name)
         if info.field_name == "tolerance" and value > 1:
             raise PydanticCustomError(
