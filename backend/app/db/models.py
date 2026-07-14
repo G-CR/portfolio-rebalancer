@@ -257,13 +257,17 @@ class Snapshot(Base):
     note: Mapped[str | None] = mapped_column(Text)
     data_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     has_stale_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    has_manual_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=utcnow,
     )
 
-    items: Mapped[list[SnapshotItem]] = relationship(back_populates="snapshot")
+    items: Mapped[list[SnapshotItem]] = relationship(
+        back_populates="snapshot",
+        cascade="all, delete-orphan",
+    )
 
 
 class SnapshotItem(Base):
@@ -278,6 +282,7 @@ class SnapshotItem(Base):
         ForeignKey("holdings.id", ondelete="SET NULL"),
     )
     asset_class_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    holding_name: Mapped[str] = mapped_column(String(200), nullable=False)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     account_name: Mapped[str] = mapped_column(String(100), nullable=False)
     trade_currency: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -287,12 +292,18 @@ class SnapshotItem(Base):
     baseline_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     average_cost_price: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     cost_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
+    target_weight: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     market_value_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
+    fx_neutral_value_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     cost_value_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     unrealized_pnl_amount_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     unrealized_pnl_rate: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
+    price_effect_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
+    fx_effect_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     actual_weight: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     fx_neutral_weight: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
+    price_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    fx_status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     snapshot: Mapped[Snapshot] = relationship(back_populates="items")

@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.db.models import Setting
 from app.db.session import SessionFactory
 from app.services.market_data import refresh_all_required_data
+from app.services.snapshots import create_daily_snapshot_if_complete
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,7 @@ async def scheduled_refresh() -> None:
     async with SessionFactory() as session:
         async with session.begin():
             await refresh_all_required_data(session)
+            await create_daily_snapshot_if_complete(session)
 
 
 def build_scheduler(*, refresh_hour: int | None = None, refresh_minute: int | None = None):

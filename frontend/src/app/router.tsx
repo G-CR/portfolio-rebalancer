@@ -6,6 +6,7 @@ import { AssetClassesPage } from "../pages/AssetClassesPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { HoldingsPage } from "../pages/HoldingsPage";
 import { PnlPage } from "../pages/PnlPage";
+import { SnapshotsPage } from "../pages/SnapshotsPage";
 import { APP_ROUTES } from "./navigation";
 
 // The production container currently compiles JSX in classic mode.
@@ -55,6 +56,8 @@ const router = createBrowserRouter([
             ? <HoldingsPage />
             : route.path === "/analysis"
               ? <PnlPage />
+              : route.path === "/history"
+                ? <SnapshotsPage />
               : <RouteWorkspace title={route.label} description={route.description} />;
       return {
         index: route.path === "/" ? true : undefined,

@@ -133,6 +133,67 @@ export interface PortfolioIncompleteItem {
   error_summary?: string | null;
 }
 
+export type SnapshotType = "daily" | "manual" | "rebalance_before" | "rebalance_after";
+
+export interface SnapshotSummary {
+  id: string;
+  snapshot_type: SnapshotType;
+  local_date: string;
+  captured_at: string;
+  note: string | null;
+  data_complete: boolean;
+  has_stale_data: boolean;
+  has_manual_data: boolean;
+  total_market_value_cny: DecimalString;
+  total_fx_neutral_value_cny: DecimalString;
+  total_cost_value_cny: DecimalString;
+  total_unrealized_pnl_cny: DecimalString;
+  total_price_effect_cny: DecimalString;
+  total_fx_effect_cny: DecimalString;
+  actual_weight: DecimalString;
+  fx_neutral_weight: DecimalString;
+  target_weight: DecimalString | null;
+}
+
+export interface SnapshotItem {
+  id: string;
+  holding_id: string | null;
+  asset_class_name: string;
+  holding_name: string;
+  symbol: string;
+  account_name: string;
+  trade_currency: string;
+  quantity: DecimalString;
+  market_price: DecimalString | null;
+  current_fx_to_cny: DecimalString | null;
+  baseline_fx_to_cny: DecimalString;
+  average_cost_price: DecimalString;
+  cost_fx_to_cny: DecimalString;
+  target_weight: DecimalString;
+  market_value_cny: DecimalString | null;
+  fx_neutral_value_cny: DecimalString | null;
+  cost_value_cny: DecimalString | null;
+  unrealized_pnl_amount_cny: DecimalString | null;
+  unrealized_pnl_rate: DecimalString | null;
+  price_effect_cny: DecimalString | null;
+  fx_effect_cny: DecimalString | null;
+  actual_weight: DecimalString | null;
+  fx_neutral_weight: DecimalString | null;
+  price_status: AnalyticsDataStatus;
+  fx_status: AnalyticsDataStatus;
+}
+
+export interface SnapshotDetail extends SnapshotSummary {
+  items: SnapshotItem[];
+}
+
+export interface SnapshotCollection {
+  items: SnapshotSummary[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
 export type HoldingCreate = Omit<Holding, "id" | "is_active" | "version">;
 export type HoldingUpdate = Partial<HoldingCreate>;
 

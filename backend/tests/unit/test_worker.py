@@ -128,6 +128,7 @@ async def test_scheduled_refresh_uses_session_factory(monkeypatch) -> None:
 
     session = _FakeSession()
     refresh_all_required_data = AsyncMock()
+    create_daily_snapshot_if_complete = AsyncMock()
 
     class _SessionScope:
         async def __aenter__(self) -> _FakeSession:
@@ -142,7 +143,48 @@ async def test_scheduled_refresh_uses_session_factory(monkeypatch) -> None:
         "refresh_all_required_data",
         refresh_all_required_data,
     )
+    monkeypatch.setattr(
+        worker_module,
+        "create_daily_snapshot_if_complete",
+        create_daily_snapshot_if_complete,
+    )
 
     await worker_module.scheduled_refresh()
 
     refresh_all_required_data.assert_awaited_once_with(session)
+    create_daily_snapshot_if_complete.assert_awaited_once_with(session)
+
+
+@pytest.mark.asyncio
+async def test_scheduled_refresh_does_not_snapshot_when_refresh_fails(monkeypatch) -> None:
+    class _TransactionScope:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class _FakeSession:
+        def begin(self) -> _TransactionScope:
+            return _TransactionScope()
+
+    class _SessionScope:
+        async def __aenter__(self) -> _FakeSession:
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    snapshot = AsyncMock()
+    monkeypatch.setattr(worker_module, "SessionFactory", lambda: _SessionScope())
+    monkeypatch.setattr(
+        worker_module,
+        "refresh_all_required_data",
+        AsyncMock(side_effect=RuntimeError("provider failed")),
+    )
+    monkeypatch.setattr(worker_module, "create_daily_snapshot_if_complete", snapshot)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await worker_module.scheduled_refresh()
+
+    snapshot.assert_not_awaited()

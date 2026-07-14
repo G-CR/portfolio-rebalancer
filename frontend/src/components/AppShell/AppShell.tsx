@@ -1,6 +1,6 @@
 import { Menu, RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { APP_ROUTES } from "../../app/navigation";
 import styles from "./AppShell.module.css";
@@ -39,6 +39,7 @@ function useMediaQuery(query: string) {
 
 export function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const isMobileNavigation = useMediaQuery(MOBILE_NAVIGATION_QUERY);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationRef = useRef<HTMLElement>(null);
@@ -196,7 +197,7 @@ export function AppShell() {
             <RefreshCw size={16} aria-hidden="true" />
             <span>刷新</span>
           </button>
-          <button className={styles.primaryCommand} type="button" title="保存当前快照">
+          <button className={styles.primaryCommand} type="button" title="保存当前快照" onClick={() => navigate("/history?capture=manual")}>
             <Save size={16} aria-hidden="true" />
             <span>保存快照</span>
           </button>
