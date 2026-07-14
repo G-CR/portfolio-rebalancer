@@ -285,3 +285,78 @@ export interface ConfirmAdjustmentRequest<TPayload> {
   operation: CostOperation;
   payload: TPayload;
 }
+
+export type RebalanceValuationBasis = "actual" | "fx_neutral";
+export type RebalanceDataStatus = "valid" | "stale" | "manual";
+
+export interface RebalancePreviewPayload {
+  session_token: string;
+  request_token: string;
+  available_cny: DecimalString;
+  available_usd: DecimalString;
+  valuation_basis: RebalanceValuationBasis;
+  allow_sell: boolean;
+  allow_fx: boolean;
+  tolerance: DecimalString;
+  minimum_trade_cny: DecimalString;
+  acknowledge_stale_data: boolean;
+}
+
+export interface RebalanceTradeSuggestion {
+  symbol: string;
+  action: "buy" | "sell";
+  quantity: DecimalString;
+  amount_cny: DecimalString;
+  amount_trade_currency: DecimalString;
+  reason_code: string;
+  reason: string;
+}
+
+export interface RebalanceProjectedWeight {
+  asset_class_id: string;
+  before: DecimalString;
+  after: DecimalString;
+  target: DecimalString;
+}
+
+export interface RebalanceResult {
+  feasible: boolean;
+  max_drift_before: DecimalString;
+  max_drift_after: DecimalString;
+  fx_required_cny: DecimalString;
+  remaining_cny: DecimalString;
+  remaining_usd: DecimalString;
+  projected_weights: RebalanceProjectedWeight[];
+  trades: RebalanceTradeSuggestion[];
+}
+
+export interface RebalanceComparison {
+  valuation_basis: RebalanceValuationBasis;
+  result: RebalanceResult;
+}
+
+export interface RebalancePreview {
+  session_token: string;
+  request_token: string;
+  status: "ok";
+  data_status: RebalanceDataStatus;
+  acknowledge_stale_data: boolean;
+  refresh_attempted: boolean;
+  valuation_basis: RebalanceValuationBasis;
+  result: RebalanceResult;
+  fx_comparison: RebalanceComparison;
+}
+
+export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | "request_token" | "status" | "refresh_attempted" | "acknowledge_stale_data"> {
+  id: string;
+  status: "draft" | "in_progress" | "completed" | "cancelled";
+  data_version: string;
+  market_data_record_ids: Record<string, string>;
+  holding_versions: Record<string, number>;
+  asset_class_targets: Record<string, string>;
+  before_snapshot_id: string | null;
+  after_snapshot_id: string | null;
+  baseline_reset_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

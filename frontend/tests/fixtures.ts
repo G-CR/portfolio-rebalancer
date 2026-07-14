@@ -181,3 +181,98 @@ export const rebalanceFixture = {
     weight: item.target_weight,
   })),
 } as const;
+
+const projectedWeights = assetClassFixtures.map((item, index) => ({
+  asset_class_id: item.id,
+  before: ["0.180000000000", "0.190000000000", "0.340000000000", "0.210000000000", "0.080000000000"][index],
+  after: ["0.198000000000", "0.199000000000", "0.302000000000", "0.201000000000", "0.100000000000"][index],
+  target: item.target_weight,
+}));
+
+export const rebalancePreviewFixture = {
+  session_token: "test-browser-session",
+  request_token: "test-request",
+  status: "ok",
+  data_status: "valid",
+  acknowledge_stale_data: false,
+  refresh_attempted: true,
+  valuation_basis: "actual",
+  result: {
+    feasible: true,
+    max_drift_before: "0.040000000000",
+    max_drift_after: "0.002000000000",
+    fx_required_cny: "7200.000000000000",
+    remaining_cny: "86.000000000000",
+    remaining_usd: "12.000000000000",
+    projected_weights: projectedWeights,
+    trades: [
+      {
+        symbol: "510880",
+        action: "buy",
+        quantity: "1200.000000000000",
+        amount_cny: "3600.000000000000",
+        amount_trade_currency: "3600.000000000000",
+        reason_code: "UNDERWEIGHT_WITH_CASH",
+        reason: "当前低配，可直接使用同币种现金补足目标仓位。",
+      },
+      {
+        symbol: "159758",
+        action: "buy",
+        quantity: "3000.000000000000",
+        amount_cny: "3600.000000000000",
+        amount_trade_currency: "3600.000000000000",
+        reason_code: "UNDERWEIGHT_WITH_CASH",
+        reason: "当前低配，可直接使用同币种现金补足目标仓位。",
+      },
+      {
+        symbol: "SPY",
+        action: "sell",
+        quantity: "2.000000000000",
+        amount_cny: "8500.000000000000",
+        amount_trade_currency: "1180.000000000000",
+        reason_code: "OVERWEIGHT_AFTER_CASH",
+        reason: "新增资金不足以消除高配",
+      },
+      {
+        symbol: "518880",
+        action: "buy",
+        quantity: "1500.000000000000",
+        amount_cny: "8700.000000000000",
+        amount_trade_currency: "8700.000000000000",
+        reason_code: "UNDERWEIGHT_WITH_SELL_PROCEEDS",
+        reason: "可优先使用同币种卖出回笼资金补足低配资产。",
+      },
+    ],
+  },
+  fx_comparison: {
+    valuation_basis: "fx_neutral",
+    result: {
+      feasible: true,
+      max_drift_before: "0.022000000000",
+      max_drift_after: "0.003000000000",
+      fx_required_cny: "0",
+      remaining_cny: "420.000000000000",
+      remaining_usd: "38.000000000000",
+      projected_weights: projectedWeights,
+      trades: [],
+    },
+  },
+} as const;
+
+export const rebalancePlanFixture = {
+  id: "40000000-0000-4000-8000-000000000099",
+  status: "draft",
+  valuation_basis: "actual",
+  data_version: "fixture-data-version",
+  data_status: "valid",
+  market_data_record_ids: {},
+  holding_versions: {},
+  asset_class_targets: Object.fromEntries(assetClassFixtures.map((item) => [item.id, item.target_weight])),
+  result: rebalancePreviewFixture.result,
+  fx_comparison: rebalancePreviewFixture.fx_comparison,
+  before_snapshot_id: null,
+  after_snapshot_id: null,
+  baseline_reset_at: null,
+  created_at: "2026-07-14T00:12:00+00:00",
+  updated_at: "2026-07-14T00:12:00+00:00",
+} as const;
