@@ -87,7 +87,7 @@ export function HoldingsTable({ holdings, assetClasses, analyticsById, incomplet
   }
 
   return (
-    <div className={styles.tableWrap}>
+    <div className={styles.tableWrap} role="region" aria-label="持仓与成本表格" tabIndex={0}>
       <table className={styles.table}>
         <thead>
           <tr>

@@ -8,4 +8,6 @@ __pycache__/
 node_modules/
 dist/
 backups/
+test-results/
+playwright-report/
 .DS_Store

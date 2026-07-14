@@ -56,7 +56,6 @@ function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePr
 
 export function RebalancePage() {
   const sessionToken = useRef(token("rebalance-session"));
-  const initialized = useRef(false);
   const [form, setForm] = useState(initialForm);
   const [isDirty, setIsDirty] = useState(false);
   const [plan, setPlan] = useState<RebalancePlan | null>(null);
@@ -81,8 +80,6 @@ export function RebalancePage() {
   };
 
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
     void runPreview(initialForm);
   }, []);
 
