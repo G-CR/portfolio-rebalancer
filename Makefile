@@ -10,7 +10,15 @@ logs:
 	docker compose logs -f
 
 test-backend:
-	docker compose run --rm api uv run pytest -v
+	@set -eu; \
+		export COMPOSE_PROJECT_NAME=portfolio-rebalancer-test; \
+		export PORTFOLIO_PORT=0; \
+		cleanup() { docker compose down -v --remove-orphans >/dev/null 2>&1 || true; }; \
+		trap cleanup EXIT; \
+		cleanup; \
+		docker compose up -d db; \
+		docker compose run --rm api uv run alembic upgrade head; \
+		docker compose run --rm api uv run pytest -v
 
 test-frontend:
 	cd frontend && npm test -- --run --passWithNoTests
