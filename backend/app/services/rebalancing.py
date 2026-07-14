@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
 import json
 import logging
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AssetClass, Holding, MarketData, MarketDataOverride, RebalancePlan, Setting
+from app.domain.analytics import PositionInput, analyze_position
 from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, RebalanceResult, rebalance
 from app.schemas.rebalance import (
     ProjectedWeightResponse,
@@ -28,7 +31,11 @@ from app.schemas.rebalance import (
 from app.services.baseline import reset_baseline_fx
 from app.services.errors import ServiceError
 from app.services.market_data import refresh_all_required_data
-from app.services.snapshots import create_event_snapshot
+from app.services.snapshots import (
+    EventSnapshotCapture,
+    EventSnapshotItemCapture,
+    create_event_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,21 +54,39 @@ _REASON_TEXT = {
 }
 
 
+@dataclass(frozen=True, slots=True)
 class _EffectiveInput:
-    def __init__(
-        self,
-        *,
-        key: str,
-        value: Decimal | None,
-        status: str,
-        source_id: str | None,
-        currency: str,
-    ) -> None:
-        self.key = key
-        self.value = value
-        self.status = status
-        self.source_id = source_id
-        self.currency = currency
+    key: str
+    value: Decimal | None
+    status: str
+    source_id: str | None
+    currency: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecycleCapture:
+    snapshot: EventSnapshotCapture
+    effective_inputs: tuple[_EffectiveInput, ...]
+    effective_fx: tuple[tuple[str, Decimal], ...]
+    holding_versions: tuple[tuple[str, int], ...]
+    asset_class_targets: tuple[tuple[str, str], ...]
+    holding_baseline_fx: tuple[tuple[UUID, Decimal], ...]
+
+    @property
+    def market_data_record_ids(self) -> dict[str, str]:
+        return {
+            item.key: item.source_id
+            for item in self.effective_inputs
+            if item.source_id is not None
+        }
+
+    @property
+    def holding_version_map(self) -> dict[str, int]:
+        return dict(self.holding_versions)
+
+    @property
+    def asset_class_target_map(self) -> dict[str, str]:
+        return dict(self.asset_class_targets)
 
 
 class _PreparedRebalance:
@@ -134,33 +159,53 @@ async def create_rebalance_plan(
         holding_versions=prepared.holding_versions,
         asset_class_targets=prepared.asset_class_targets,
     )
-    plan = RebalancePlan(
-        strategy_mode=payload.valuation_basis,
-        status="draft",
-        data_version=data_version,
-        create_idempotency_key=payload.idempotency_key,
-        input_summary={
-            **payload.model_dump(exclude={"idempotency_key"}),
-            "holding_versions": prepared.holding_versions,
-            "market_data_record_ids": prepared.market_data_record_ids,
-            "asset_class_targets": prepared.asset_class_targets,
-            "resolved_constraints": {
-                "allow_sell": prepared.resolved_constraints["allow_sell"],
-                "allow_fx": prepared.resolved_constraints["allow_fx"],
-                "tolerance": format(prepared.resolved_constraints["tolerance"], "f"),
-                "minimum_trade_cny": format(prepared.resolved_constraints["minimum_trade_cny"], "f"),
-            },
+    input_summary = {
+        **payload.model_dump(exclude={"idempotency_key"}),
+        "holding_versions": prepared.holding_versions,
+        "market_data_record_ids": prepared.market_data_record_ids,
+        "asset_class_targets": prepared.asset_class_targets,
+        "resolved_constraints": {
+            "allow_sell": prepared.resolved_constraints["allow_sell"],
+            "allow_fx": prepared.resolved_constraints["allow_fx"],
+            "tolerance": format(prepared.resolved_constraints["tolerance"], "f"),
+            "minimum_trade_cny": format(prepared.resolved_constraints["minimum_trade_cny"], "f"),
         },
-        suggested_actions=preview.result.model_dump(mode="json")["trades"],
-        projected_result={
-            "valuation_basis": payload.valuation_basis,
-            "result": preview.result.model_dump(mode="json"),
-            "fx_comparison": preview.fx_comparison.model_dump(mode="json"),
-            "data_status": preview.data_status,
-        },
+    }
+    suggested_actions = preview.result.model_dump(mode="json")["trades"]
+    projected_result = {
+        "valuation_basis": payload.valuation_basis,
+        "result": preview.result.model_dump(mode="json"),
+        "fx_comparison": preview.fx_comparison.model_dump(mode="json"),
+        "data_status": preview.data_status,
+    }
+    now = datetime.now(UTC)
+    statement = (
+        insert(RebalancePlan)
+        .values(
+            id=uuid4(),
+            strategy_mode=payload.valuation_basis,
+            status="draft",
+            data_version=data_version,
+            create_idempotency_key=payload.idempotency_key,
+            input_summary=input_summary,
+            suggested_actions=suggested_actions,
+            projected_result=projected_result,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=[RebalancePlan.create_idempotency_key])
+        .returning(RebalancePlan)
     )
-    session.add(plan)
-    await session.flush()
+    plan = (await session.scalars(statement)).one_or_none()
+    if plan is None:
+        plan = await session.scalar(
+            select(RebalancePlan).where(
+                RebalancePlan.create_idempotency_key == payload.idempotency_key
+            )
+        )
+        if plan is None:
+            raise RuntimeError("Idempotent rebalance plan insert did not return the persisted row.")
+        return (_plan_response(plan), False)
     return (_plan_response(plan), True)
 
 
@@ -194,8 +239,12 @@ async def start_rebalance_plan(
             "Rebalance plan is not in a startable state.",
         )
 
-    current = await _capture_current_assumptions(session)
-    if plan.data_version != _data_version(**current):
+    capture = await _capture_lifecycle_bundle(session)
+    if plan.data_version != _data_version(
+        market_data_record_ids=capture.market_data_record_ids,
+        holding_versions=capture.holding_version_map,
+        asset_class_targets=capture.asset_class_target_map,
+    ):
         raise ServiceError(
             409,
             "REBALANCE_PLAN_CONFLICT",
@@ -203,15 +252,17 @@ async def start_rebalance_plan(
             {"status": "stale_inputs"},
         )
 
+    await _after_lifecycle_capture("start", capture)
     before_snapshot = await create_event_snapshot(
         session,
         snapshot_type="rebalance_before",
+        capture=capture.snapshot,
         note=f"rebalance-plan:{plan.id}",
     )
     plan.status = "in_progress"
     plan.started_at = datetime.now(UTC)
     plan.before_snapshot_id = before_snapshot.id
-    plan.start_market_data_record_ids = current["market_data_record_ids"]
+    plan.start_market_data_record_ids = capture.market_data_record_ids
     plan.start_idempotency_key = idempotency_key
     await session.flush()
     return _plan_response(plan)
@@ -261,19 +312,21 @@ async def complete_rebalance_plan(
             "Only in-progress rebalance plans can be completed.",
         )
 
-    current = await _capture_current_assumptions(session)
+    capture = await _capture_lifecycle_bundle(session)
+    await _after_lifecycle_capture("complete", capture)
     after_snapshot = await create_event_snapshot(
         session,
         snapshot_type="rebalance_after",
+        capture=capture.snapshot,
         note=f"rebalance-plan:{plan.id}",
     )
-    await reset_baseline_fx(session, current["effective_fx"])
+    await reset_baseline_fx(session, capture.holding_baseline_fx)
     now = datetime.now(UTC)
     plan.status = "completed"
     plan.completed_at = now
     plan.after_snapshot_id = after_snapshot.id
     plan.baseline_reset_at = now
-    plan.completion_market_data_record_ids = current["market_data_record_ids"]
+    plan.completion_market_data_record_ids = capture.market_data_record_ids
     plan.complete_idempotency_key = idempotency_key
     await session.flush()
     return _plan_response(plan)
@@ -387,7 +440,7 @@ async def _prepare_rebalance(
     )
 
 
-async def _capture_current_assumptions(session: AsyncSession) -> dict[str, object]:
+async def _capture_lifecycle_bundle(session: AsyncSession) -> _LifecycleCapture:
     context = await _load_rebalance_context(session, lock=True)
     if context["incomplete_items"]:
         raise ServiceError(
@@ -396,12 +449,134 @@ async def _capture_current_assumptions(session: AsyncSession) -> dict[str, objec
             "Required rebalance market data is incomplete.",
             {"status": "incomplete", "items": context["incomplete_items"]},
         )
-    return {
-        "market_data_record_ids": context["market_data_record_ids"],
-        "holding_versions": context["holding_versions"],
-        "asset_class_targets": context["asset_class_targets"],
-        "effective_fx": context["effective_fx"],
-    }
+
+    asset_classes: list[AssetClass] = context["asset_classes"]
+    holdings: list[Holding] = context["holdings"]
+    effective_inputs: dict[str, _EffectiveInput] = context["effective_inputs"]
+    asset_classes_by_id = {item.id: item for item in asset_classes}
+    captured_rows = []
+    total_market_value = _ZERO
+    total_fx_neutral_value = _ZERO
+
+    for holding in holdings:
+        price = effective_inputs[f"price:{holding.symbol}"]
+        fx = (
+            _EffectiveInput(
+                key="fx:CNY/CNY",
+                value=Decimal("1"),
+                status="valid",
+                source_id=None,
+                currency="CNY",
+            )
+            if holding.trade_currency == "CNY"
+            else effective_inputs[f"fx:{holding.trade_currency}/CNY"]
+        )
+        analysis = analyze_position(
+            PositionInput(
+                quantity=holding.quantity,
+                cost_price=holding.average_cost_price,
+                current_price=price.value,
+                cost_fx=holding.cost_fx_to_cny,
+                current_fx=fx.value,
+                baseline_fx=holding.baseline_fx_to_cny,
+            )
+        )
+        total_market_value += analysis.market_value_cny
+        total_fx_neutral_value += analysis.fx_neutral_value_cny
+        captured_rows.append(
+            (
+                holding,
+                asset_classes_by_id[holding.asset_class_id],
+                price,
+                fx,
+                analysis,
+            )
+        )
+
+    if not captured_rows or total_market_value == _ZERO:
+        raise ServiceError(
+            409,
+            "SNAPSHOT_PORTFOLIO_EMPTY",
+            "A snapshot cannot be created before the portfolio has active holdings.",
+        )
+
+    snapshot_items = tuple(
+        EventSnapshotItemCapture(
+            holding_id=holding.id,
+            asset_class_name=asset_class.name,
+            holding_name=holding.name,
+            symbol=holding.symbol,
+            account_name=holding.account_name,
+            trade_currency=holding.trade_currency,
+            quantity=holding.quantity,
+            market_price=price.value,
+            current_fx_to_cny=fx.value,
+            baseline_fx_to_cny=holding.baseline_fx_to_cny,
+            average_cost_price=holding.average_cost_price,
+            cost_fx_to_cny=holding.cost_fx_to_cny,
+            target_weight=asset_class.target_weight,
+            market_value_cny=analysis.market_value_cny,
+            fx_neutral_value_cny=analysis.fx_neutral_value_cny,
+            cost_value_cny=analysis.cost_cny,
+            unrealized_pnl_amount_cny=analysis.unrealized_pnl,
+            unrealized_pnl_rate=(
+                analysis.unrealized_pnl / analysis.cost_cny
+                if analysis.cost_cny
+                else _ZERO
+            ),
+            price_effect_cny=analysis.price_effect,
+            fx_effect_cny=analysis.fx_effect,
+            actual_weight=analysis.market_value_cny / total_market_value,
+            fx_neutral_weight=(
+                analysis.fx_neutral_value_cny / total_fx_neutral_value
+                if total_fx_neutral_value
+                else _ZERO
+            ),
+            price_status=price.status,
+            fx_status=fx.status,
+        )
+        for holding, asset_class, price, fx, analysis in captured_rows
+    )
+    statuses = {item.status for item in effective_inputs.values()}
+    return _LifecycleCapture(
+        snapshot=EventSnapshotCapture(
+            items=snapshot_items,
+            has_stale_data="stale" in statuses,
+            has_manual_data="manual" in statuses,
+        ),
+        effective_inputs=tuple(
+            effective_inputs[key]
+            for key in sorted(effective_inputs)
+        ),
+        effective_fx=tuple(
+            (currency, value)
+            for currency, value in sorted(context["effective_fx"].items())
+        ),
+        holding_versions=tuple(
+            (str(holding.id), holding.version)
+            for holding in holdings
+        ),
+        asset_class_targets=tuple(
+            (str(asset_class.id), format(asset_class.target_weight, "f"))
+            for asset_class in asset_classes
+        ),
+        holding_baseline_fx=tuple(
+            (
+                holding.id,
+                Decimal("1")
+                if holding.trade_currency == "CNY"
+                else effective_inputs[f"fx:{holding.trade_currency}/CNY"].value,
+            )
+            for holding in holdings
+        ),
+    )
+
+
+async def _after_lifecycle_capture(
+    event: Literal["start", "complete"],
+    capture: _LifecycleCapture,
+) -> None:
+    return None
 
 
 async def _load_rebalance_context(session: AsyncSession, *, lock: bool = False) -> dict[str, object]:

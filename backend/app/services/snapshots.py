@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, fields
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -23,6 +24,41 @@ from app.services.analytics import get_portfolio_analytics
 from app.services.errors import ServiceError
 
 _ZERO = Decimal("0")
+
+
+@dataclass(frozen=True, slots=True)
+class EventSnapshotItemCapture:
+    holding_id: UUID
+    asset_class_name: str
+    holding_name: str
+    symbol: str
+    account_name: str
+    trade_currency: str
+    quantity: Decimal
+    market_price: Decimal
+    current_fx_to_cny: Decimal
+    baseline_fx_to_cny: Decimal
+    average_cost_price: Decimal
+    cost_fx_to_cny: Decimal
+    target_weight: Decimal
+    market_value_cny: Decimal
+    fx_neutral_value_cny: Decimal
+    cost_value_cny: Decimal
+    unrealized_pnl_amount_cny: Decimal
+    unrealized_pnl_rate: Decimal
+    price_effect_cny: Decimal
+    fx_effect_cny: Decimal
+    actual_weight: Decimal
+    fx_neutral_weight: Decimal
+    price_status: str
+    fx_status: str
+
+
+@dataclass(frozen=True, slots=True)
+class EventSnapshotCapture:
+    items: tuple[EventSnapshotItemCapture, ...]
+    has_stale_data: bool
+    has_manual_data: bool
 
 
 async def create_daily_snapshot_if_complete(
@@ -124,12 +160,12 @@ async def create_event_snapshot(
     session: AsyncSession,
     *,
     snapshot_type: str,
+    capture: EventSnapshotCapture,
     note: str | None = None,
     now: datetime | None = None,
 ) -> Snapshot:
     captured_at = _aware_now(now)
-    analytics = await get_portfolio_analytics(session)
-    if analytics.data_status == "setup":
+    if not capture.items:
         raise ServiceError(
             409,
             "SNAPSHOT_PORTFOLIO_EMPTY",
@@ -142,13 +178,25 @@ async def create_event_snapshot(
         captured_at=captured_at,
         note=note,
         data_complete=True,
-        has_stale_data=analytics.has_stale_data,
-        has_manual_data=analytics.has_manual_data,
+        has_stale_data=capture.has_stale_data,
+        has_manual_data=capture.has_manual_data,
         created_at=captured_at,
     )
     session.add(snapshot)
     await session.flush()
-    await _persist_items(session, snapshot_id=snapshot.id, analytics=analytics, captured_at=captured_at)
+    session.add_all(
+        [
+            SnapshotItem(
+                snapshot_id=snapshot.id,
+                created_at=captured_at,
+                **{
+                    field.name: getattr(item, field.name)
+                    for field in fields(item)
+                },
+            )
+            for item in capture.items
+        ]
+    )
     await session.flush()
     return snapshot
 

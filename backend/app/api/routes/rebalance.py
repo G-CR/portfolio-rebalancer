@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
@@ -41,11 +41,12 @@ async def post_rebalance_preview(
 @router.post("/plans", response_model=RebalancePlanResponse, status_code=201)
 async def post_rebalance_plan(
     payload: RebalancePlanCreateRequest,
+    http_response: Response,
     session: AsyncSession = Depends(get_session),
 ) -> RebalancePlanResponse:
     response, created = await _run_write(session, lambda: create_rebalance_plan(session, payload))
     if not created:
-        return response
+        http_response.status_code = 200
     return response
 
 

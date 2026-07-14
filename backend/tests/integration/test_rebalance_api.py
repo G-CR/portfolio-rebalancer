@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
 from app.db.models import AssetClass, Holding, MarketData, RebalancePlan
+from app.main import app
 
 NOW = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
 
@@ -347,3 +350,70 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
         "fx_comparison": created["fx_comparison"],
         "data_status": "valid",
     }
+
+
+async def test_concurrent_plan_create_with_same_key_returns_one_persisted_plan(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+
+    async def _record_refresh(_session) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.rebalancing.refresh_all_required_data", _record_refresh)
+    payload = {**_preview_payload(), "idempotency_key": "concurrent-plan-create"}
+
+    async def _create() -> tuple[int, dict[str, object]]:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post("/api/rebalance/plans", json=payload)
+            return response.status_code, response.json()
+
+    responses = await asyncio.gather(*(_create() for _ in range(8)))
+    plan_count = await db_session.scalar(
+        select(func.count())
+        .select_from(RebalancePlan)
+        .where(RebalancePlan.create_idempotency_key == "concurrent-plan-create")
+    )
+
+    assert [status for status, _payload in responses].count(201) == 1
+    assert [status for status, _payload in responses].count(200) == 7
+    assert len({payload["id"] for _status, payload in responses}) == 1
+    assert plan_count == 1
+
+
+async def test_plan_create_same_key_with_different_payload_returns_original_plan(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+
+    async def _record_refresh(_session) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.rebalancing.refresh_all_required_data", _record_refresh)
+    first_payload = {**_preview_payload(), "idempotency_key": "payload-stable-key"}
+    second_payload = {
+        **first_payload,
+        "request_token": "materially-different-request",
+        "available_cny": "50000",
+        "valuation_basis": "fx_neutral",
+    }
+
+    first = await api_client.post("/api/rebalance/plans", json=first_payload)
+    second = await api_client.post("/api/rebalance/plans", json=second_payload)
+    plan_count = await db_session.scalar(
+        select(func.count())
+        .select_from(RebalancePlan)
+        .where(RebalancePlan.create_idempotency_key == "payload-stable-key")
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == first.json()
+    assert plan_count == 1

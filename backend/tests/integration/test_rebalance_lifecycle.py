@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import itertools
 from uuid import UUID
@@ -9,7 +9,8 @@ from uuid import UUID
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
-from app.db.models import AssetClass, Holding, MarketData, RebalancePlan, Snapshot
+from app.db.models import AssetClass, Holding, MarketData, RebalancePlan, Snapshot, SnapshotItem
+from app.db.session import SessionFactory
 from app.main import app
 
 NOW = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
@@ -239,6 +240,64 @@ async def test_concurrent_start_attempts_create_only_one_before_snapshot(
     assert snapshot_count == 1
 
 
+async def test_start_snapshot_uses_the_exact_price_row_captured_before_concurrent_append(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+    draft = await _create_draft_plan(api_client, monkeypatch)
+    captured_price = await db_session.scalar(
+        select(MarketData).where(
+            MarketData.data_type == "price",
+            MarketData.symbol == "CNY-FUND",
+        )
+    )
+    captured_price_id = str(captured_price.id)
+    appended_ids: list[str] = []
+
+    async def _append_newer_price(event: str, _capture) -> None:
+        if event != "start":
+            return
+        async with SessionFactory() as concurrent_session:
+            newer = MarketData(
+                data_type="price",
+                symbol="CNY-FUND",
+                source="concurrent",
+                value=Decimal("125.000000000000"),
+                market_time=NOW + timedelta(minutes=1),
+                fetched_at=NOW + timedelta(minutes=1),
+                status="valid",
+            )
+            concurrent_session.add(newer)
+            await concurrent_session.commit()
+            appended_ids.append(str(newer.id))
+
+    monkeypatch.setattr(
+        "app.services.rebalancing._after_lifecycle_capture",
+        _append_newer_price,
+    )
+
+    response = await api_client.post(
+        f"/api/rebalance/plans/{draft['id']}/start",
+        json={"idempotency_key": "start-captured-price"},
+    )
+    db_session.expire_all()
+    plan = await db_session.scalar(select(RebalancePlan).where(RebalancePlan.id == draft["id"]))
+    snapshot_item = await db_session.scalar(
+        select(SnapshotItem).where(
+            SnapshotItem.snapshot_id == plan.before_snapshot_id,
+            SnapshotItem.symbol == "CNY-FUND",
+        )
+    )
+
+    assert response.status_code == 200, response.text
+    assert appended_ids
+    assert plan.start_market_data_record_ids["price:CNY-FUND"] == captured_price_id
+    assert plan.start_market_data_record_ids["price:CNY-FUND"] != appended_ids[0]
+    assert snapshot_item.market_price == Decimal("100.000000000000")
+
+
 async def test_cancel_never_modifies_holdings_or_baselines(
     api_client,
     db_session,
@@ -318,6 +377,73 @@ async def test_complete_rebalance_creates_after_snapshot_and_resets_baseline(
     assert after[UUID(configured["usd_holding_id"])].cost_fx_to_cny == before_cost_fx[UUID(configured["usd_holding_id"])]
     assert after[UUID(configured["cny_holding_id"])].quantity == Decimal("5")
     assert after[UUID(configured["usd_holding_id"])].quantity == Decimal("5")
+
+
+async def test_complete_snapshot_and_baseline_use_the_exact_fx_row_captured_before_concurrent_append(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    configured = await _configure_two_class_portfolio(api_client, db_session)
+    draft = await _create_draft_plan(api_client, monkeypatch)
+    started = await api_client.post(
+        f"/api/rebalance/plans/{draft['id']}/start",
+        json={"idempotency_key": "start-before-fx-race"},
+    )
+    assert started.status_code == 200, started.text
+    captured_fx = await db_session.scalar(
+        select(MarketData).where(
+            MarketData.data_type == "fx",
+            MarketData.symbol == "USD/CNY",
+        )
+    )
+    captured_fx_id = str(captured_fx.id)
+    appended_ids: list[str] = []
+
+    async def _append_newer_fx(event: str, _capture) -> None:
+        if event != "complete":
+            return
+        async with SessionFactory() as concurrent_session:
+            newer = MarketData(
+                data_type="fx",
+                symbol="USD/CNY",
+                source="concurrent",
+                value=Decimal("6.250000000000"),
+                market_time=NOW + timedelta(minutes=1),
+                fetched_at=NOW + timedelta(minutes=1),
+                status="valid",
+            )
+            concurrent_session.add(newer)
+            await concurrent_session.commit()
+            appended_ids.append(str(newer.id))
+
+    monkeypatch.setattr(
+        "app.services.rebalancing._after_lifecycle_capture",
+        _append_newer_fx,
+    )
+
+    response = await api_client.post(
+        f"/api/rebalance/plans/{draft['id']}/complete",
+        json={"idempotency_key": "complete-captured-fx"},
+    )
+    db_session.expire_all()
+    plan = await db_session.scalar(select(RebalancePlan).where(RebalancePlan.id == draft["id"]))
+    snapshot_item = await db_session.scalar(
+        select(SnapshotItem).where(
+            SnapshotItem.snapshot_id == plan.after_snapshot_id,
+            SnapshotItem.holding_id == configured["usd_holding_id"],
+        )
+    )
+    usd_holding = await db_session.scalar(
+        select(Holding).where(Holding.id == configured["usd_holding_id"])
+    )
+
+    assert response.status_code == 200, response.text
+    assert appended_ids
+    assert plan.completion_market_data_record_ids["fx:USD/CNY"] == captured_fx_id
+    assert plan.completion_market_data_record_ids["fx:USD/CNY"] != appended_ids[0]
+    assert snapshot_item.current_fx_to_cny == Decimal("5.000000000000")
+    assert usd_holding.baseline_fx_to_cny == Decimal("5.000000000000")
 
 
 async def test_complete_rolls_back_baseline_reset_and_after_snapshot_on_failure(
