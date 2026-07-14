@@ -2,14 +2,28 @@
 
 Local portfolio calibration and rebalancing application for Docker Desktop.
 
-## Start
+## Requirements
+
+- Docker Desktop with Docker Compose v2.
+- At least 4 GB of free memory for the four containers.
+- No authentication or LAN exposure is provided; this release is local-only.
+
+## First Run
 
 ```bash
 cp .env.example .env
 docker compose up -d
 ```
 
-Open `http://localhost:8080`. Only the Nginx frontend is published, and it is bound to `127.0.0.1`. To use another local port, set `PORTFOLIO_PORT` in `.env`.
+Open `http://localhost:8080`. Only the Nginx frontend is published, and it is bound to `127.0.0.1`. To use another local port, set `PORTFOLIO_PORT` in `.env` before startup.
+
+```bash
+curl -fsS http://localhost:8080/api/health
+docker compose ps
+docker compose logs -f
+```
+
+Stop services with `docker compose down`. Do not add `-v` unless you intentionally want to delete portfolio data and the credential key. Upgrade with `git pull`, `docker compose build`, and `docker compose up -d`; the API applies database migrations during startup.
 
 ## Backup
 
@@ -33,3 +47,8 @@ The frontend bundles Noto Sans SC and IBM Plex Mono through Fontsource packages 
 
 - Noto Sans SC: [Google Fonts](https://fonts.google.com/noto/specimen/Noto+Sans+SC), SIL Open Font License 1.1.
 - IBM Plex Mono: [IBM Plex](https://github.com/IBM/plex), SIL Open Font License 1.1.
+
+## Documentation
+
+- [User guide](docs/user-guide.md)
+- [Operations and recovery](docs/operations.md)
