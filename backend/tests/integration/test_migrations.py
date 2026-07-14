@@ -93,6 +93,81 @@ async def _holding_migration_state() -> dict[str, object]:
     }
 
 
+async def _snapshot_migration_state() -> dict[str, object]:
+    async with MigrationSessionFactory() as session:
+        revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
+        columns = {
+            row["column_name"]: {
+                "nullable": row["is_nullable"],
+                "default": row["column_default"],
+            }
+            for row in (
+                await session.execute(
+                    text(
+                        """
+                        SELECT column_name, is_nullable, column_default
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name IN ('snapshots', 'snapshot_items')
+                          AND column_name IN (
+                              'has_manual_data',
+                              'holding_name',
+                              'target_weight',
+                              'fx_neutral_value_cny',
+                              'price_effect_cny',
+                              'fx_effect_cny',
+                              'price_status',
+                              'fx_status'
+                          )
+                        ORDER BY column_name
+                        """
+                    )
+                )
+            ).mappings()
+        }
+        snapshots = [
+            dict(row)
+            for row in (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, snapshot_type, local_date, captured_at, note,
+                               data_complete, has_stale_data, created_at
+                        FROM snapshots
+                        ORDER BY id
+                        """
+                    )
+                )
+            ).mappings()
+        ]
+        items = [
+            dict(row)
+            for row in (
+                await session.execute(
+                    text(
+                        """
+                        SELECT id, snapshot_id, holding_id, asset_class_name, symbol,
+                               account_name, trade_currency, quantity, market_price,
+                               current_fx_to_cny, baseline_fx_to_cny, average_cost_price,
+                               cost_fx_to_cny, market_value_cny, cost_value_cny,
+                               unrealized_pnl_amount_cny, unrealized_pnl_rate,
+                               actual_weight, fx_neutral_weight, created_at
+                        FROM snapshot_items
+                        ORDER BY id
+                        """
+                    )
+                )
+            ).mappings()
+        ]
+
+    return {
+        "revision": revision,
+        "columns": columns,
+        "snapshots": snapshots,
+        "items": items,
+    }
+
+
 async def test_initial_migration_creates_core_tables(db_session) -> None:
     rows = await db_session.execute(
         text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
@@ -183,6 +258,108 @@ async def test_market_data_duplicate_null_time_key_is_rejected(db_session) -> No
         await db_session.commit()
 
     await db_session.rollback()
+
+
+async def test_snapshot_payload_upgrade_refuses_legacy_history_without_changes(
+    _reset_database,
+) -> None:
+    snapshot_id = UUID("00000000-0000-0000-0000-000000000401")
+    item_id = UUID("00000000-0000-0000-0000-000000000402")
+
+    try:
+        await _run_alembic_downgrade("20260713_0003")
+        async with MigrationSessionFactory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO snapshots (
+                        id, snapshot_type, local_date, captured_at, note,
+                        data_complete, has_stale_data, created_at
+                    )
+                    VALUES (
+                        :snapshot_id, 'manual', DATE '2026-07-13',
+                        TIMESTAMPTZ '2026-07-13 08:00:00+00', 'legacy snapshot',
+                        true, false, TIMESTAMPTZ '2026-07-13 08:00:00+00'
+                    )
+                    """
+                ),
+                {"snapshot_id": snapshot_id},
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO snapshot_items (
+                        id, snapshot_id, holding_id, asset_class_name, symbol,
+                        account_name, trade_currency, quantity, market_price,
+                        current_fx_to_cny, baseline_fx_to_cny, average_cost_price,
+                        cost_fx_to_cny, market_value_cny, cost_value_cny,
+                        unrealized_pnl_amount_cny, unrealized_pnl_rate,
+                        actual_weight, fx_neutral_weight, created_at
+                    )
+                    VALUES (
+                        :item_id, :snapshot_id, NULL, '标普 500', 'SPY',
+                        'Brokerage', 'USD', 10, 500, 7.2, 7.1, 450, 7,
+                        36000, 31500, 4500, 0.142857142857,
+                        1, 1, TIMESTAMPTZ '2026-07-13 08:00:00+00'
+                    )
+                    """
+                ),
+                {"item_id": item_id, "snapshot_id": snapshot_id},
+            )
+            await session.commit()
+
+        before = await _snapshot_migration_state()
+
+        with pytest.raises(
+            CommandError,
+            match="cannot upgrade 20260714_0004 with existing snapshot history",
+        ):
+            await _run_alembic_upgrade("head")
+
+        assert await _snapshot_migration_state() == before
+    finally:
+        async with MigrationSessionFactory() as session:
+            await session.execute(text("TRUNCATE TABLE snapshots CASCADE"))
+            await session.commit()
+        await _run_alembic_upgrade("head")
+
+
+async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
+    _reset_database,
+) -> None:
+    expected_columns = {
+        "fx_effect_cny": {"nullable": "YES", "default": None},
+        "fx_neutral_value_cny": {"nullable": "YES", "default": None},
+        "fx_status": {"nullable": "NO", "default": None},
+        "has_manual_data": {"nullable": "NO", "default": None},
+        "holding_name": {"nullable": "NO", "default": None},
+        "price_effect_cny": {"nullable": "YES", "default": None},
+        "price_status": {"nullable": "NO", "default": None},
+        "target_weight": {"nullable": "NO", "default": None},
+    }
+
+    try:
+        await _run_alembic_downgrade("20260713_0003")
+        assert (await _snapshot_migration_state())["columns"] == {}
+
+        await _run_alembic_upgrade("head")
+        first_upgrade = await _snapshot_migration_state()
+        assert first_upgrade["revision"] == "20260714_0004"
+        assert first_upgrade["columns"] == expected_columns
+        assert first_upgrade["snapshots"] == []
+        assert first_upgrade["items"] == []
+
+        await _run_alembic_downgrade("20260713_0003")
+        assert (await _snapshot_migration_state())["columns"] == {}
+
+        await _run_alembic_upgrade("head")
+        second_upgrade = await _snapshot_migration_state()
+        assert second_upgrade["revision"] == "20260714_0004"
+        assert second_upgrade["columns"] == expected_columns
+        assert second_upgrade["snapshots"] == []
+        assert second_upgrade["items"] == []
+    finally:
+        await _run_alembic_upgrade("head")
 
 
 async def test_upgrade_from_0001_normalizes_settings_singleton() -> None:

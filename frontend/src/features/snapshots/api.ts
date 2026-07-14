@@ -23,8 +23,8 @@ function collectionPath(filters: SnapshotFilters, page: number) {
   return `/api/snapshots?${params.toString()}`;
 }
 
-async function fetchSnapshotSeries(filters: SnapshotFilters) {
-  const first = await apiRequest<SnapshotCollection>(collectionPath(filters, 1));
+async function fetchSnapshotSeries(filters: SnapshotFilters, signal: AbortSignal) {
+  const first = await apiRequest<SnapshotCollection>(collectionPath(filters, 1), { signal });
   const pageCount = Math.ceil(first.total / SERIES_PAGE_SIZE);
   if (pageCount > MAX_SERIES_PAGES) {
     throw new Error("Filtered snapshot series is too large to load safely.");
@@ -32,7 +32,7 @@ async function fetchSnapshotSeries(filters: SnapshotFilters) {
 
   const items = [...first.items];
   for (let page = 2; page <= pageCount; page += 1) {
-    const response = await apiRequest<SnapshotCollection>(collectionPath(filters, page));
+    const response = await apiRequest<SnapshotCollection>(collectionPath(filters, page), { signal });
     items.push(...response.items);
   }
   if (items.length < first.total) {
@@ -44,7 +44,7 @@ async function fetchSnapshotSeries(filters: SnapshotFilters) {
 export function useSnapshots(filters: SnapshotFilters) {
   return useQuery({
     queryKey: [...snapshotsQueryRoot, filters],
-    queryFn: () => fetchSnapshotSeries(filters),
+    queryFn: ({ signal }) => fetchSnapshotSeries(filters, signal),
   });
 }
 

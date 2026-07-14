@@ -6,7 +6,12 @@ import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
 
 import { createQueryClient } from "../src/app/providers";
-import { useCreateManualSnapshot, snapshotsQueryRoot } from "../src/features/snapshots/api";
+import {
+  useCreateManualSnapshot,
+  useSnapshots,
+  snapshotsQueryRoot,
+  type SnapshotFilters,
+} from "../src/features/snapshots/api";
 import { SnapshotsPage } from "../src/pages/SnapshotsPage";
 import { assetClassFixtures } from "./fixtures";
 import { renderWithProviders, server } from "./testProviders";
@@ -264,6 +269,73 @@ describe("SnapshotsPage", () => {
     await user.click(screen.getByRole("button", { name: "下一页" }));
     expect(screen.getByText("第 2 / 21 页 · 共 205 条")).toBeInTheDocument();
     expect(screen.getByText("事件 11")).toBeInTheDocument();
+  });
+
+  it("aborts superseded pagination before requesting later pages", async () => {
+    const oldItems = manySummaries(205);
+    const replacement = { ...summaries[0], id: "replacement", note: "新筛选事件" };
+    const oldPages: number[] = [];
+    const replacementPages: number[] = [];
+    let markOldPageTwoStarted: () => void = () => undefined;
+    let releaseOldPageTwo: () => void = () => undefined;
+    const oldPageTwoStarted = new Promise<void>((resolve) => {
+      markOldPageTwoStarted = resolve;
+    });
+    const oldPageTwoRelease = new Promise<void>((resolve) => {
+      releaseOldPageTwo = resolve;
+    });
+
+    server.use(
+      http.get("/api/snapshots", async ({ request }) => {
+        const url = new URL(request.url);
+        const page = Number(url.searchParams.get("page"));
+        const pageSize = Number(url.searchParams.get("page_size"));
+        if (url.searchParams.get("snapshot_type") === "manual") {
+          replacementPages.push(page);
+          return HttpResponse.json({
+            items: [replacement],
+            page,
+            page_size: pageSize,
+            total: 1,
+          });
+        }
+
+        oldPages.push(page);
+        if (page === 2) {
+          markOldPageTwoStarted();
+          await oldPageTwoRelease;
+        }
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          items: oldItems.slice(start, start + pageSize),
+          page,
+          page_size: pageSize,
+          total: oldItems.length,
+        });
+      }),
+    );
+    const queryClient = createQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const snapshots = renderHook(
+      ({ filters }: { filters: SnapshotFilters }) => useSnapshots(filters),
+      { initialProps: { filters: {} }, wrapper },
+    );
+
+    await oldPageTwoStarted;
+    act(() => snapshots.rerender({ filters: { snapshotType: "manual" } }));
+
+    await waitFor(() => {
+      expect(snapshots.result.current.data?.items[0]?.note).toBe("新筛选事件");
+    });
+    await act(async () => {
+      releaseOldPageTwo();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(oldPages).toEqual([1, 2]);
+    expect(replacementPages).toEqual([1]);
+    expect(snapshots.result.current.isError).toBe(false);
   });
 
   it("resets the event table to page one when filters change", async () => {

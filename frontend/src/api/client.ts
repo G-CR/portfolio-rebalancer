@@ -60,6 +60,7 @@ async function errorDetail(response: Response): Promise<ApiErrorDetail> {
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    signal: init?.signal,
     headers: {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
