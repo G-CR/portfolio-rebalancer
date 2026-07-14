@@ -5,6 +5,7 @@ import { AppShell } from "../components/AppShell/AppShell";
 import { AssetClassesPage } from "../pages/AssetClassesPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { HoldingsPage } from "../pages/HoldingsPage";
+import { MarketDataPage } from "../pages/MarketDataPage";
 import { PnlPage } from "../pages/PnlPage";
 import { RebalancePage } from "../pages/RebalancePage";
 import { SnapshotsPage } from "../pages/SnapshotsPage";
@@ -61,6 +62,8 @@ const router = createBrowserRouter([
                 ? <RebalancePage />
               : route.path === "/history"
                 ? <SnapshotsPage />
+                : route.path === "/data-sources"
+                  ? <MarketDataPage />
               : <RouteWorkspace title={route.label} description={route.description} />;
       return {
         index: route.path === "/" ? true : undefined,

@@ -98,6 +98,7 @@ class Holding(Base):
     baseline_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     lot_size: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     quantity_precision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    preferred_data_source: Mapped[str | None] = mapped_column(String(64))
     is_rebalance_preferred: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

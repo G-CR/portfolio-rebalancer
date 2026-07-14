@@ -55,6 +55,7 @@ export const holdingFixture = {
   baseline_fx_to_cny: "7.2",
   lot_size: "1",
   quantity_precision: 4,
+  preferred_data_source: null,
   is_rebalance_preferred: true,
   is_active: true,
   version: 1,
@@ -275,4 +276,53 @@ export const rebalancePlanFixture = {
   baseline_reset_at: null,
   created_at: "2026-07-14T00:12:00+00:00",
   updated_at: "2026-07-14T00:12:00+00:00",
+} as const;
+
+export const marketDataCollectionFixture = {
+  items: [
+    {
+      key: "price:SPY",
+      data_type: "price",
+      symbol: "SPY",
+      currency: "USD",
+      effective_value: "651.28",
+      source: "yahoo",
+      status: "stale",
+      market_time: "2026-07-10T20:00:00Z",
+      fetched_at: "2026-07-14T00:00:00Z",
+      error_summary: "Yahoo 请求超时，当前使用 07/10 收盘值",
+      note: null,
+    },
+    {
+      key: "fx:USD/CNY",
+      data_type: "fx",
+      symbol: "USD/CNY",
+      currency: "CNY",
+      effective_value: "7.18",
+      source: "manual",
+      status: "manual",
+      market_time: "2026-07-14T00:00:00Z",
+      fetched_at: "2026-07-14T00:00:00Z",
+      error_summary: null,
+      note: "券商结算参考",
+    },
+  ],
+  diagnostics: [],
+} as const;
+
+export const providerSettingsFixture = [
+  { provider: "akshare", display_name: "AKShare", requires_key: false, enabled: true, priority: 1, key_status: "not_required", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
+  { provider: "yahoo", display_name: "Yahoo Finance", requires_key: false, enabled: true, priority: 2, key_status: "not_required", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
+  { provider: "tushare", display_name: "Tushare", requires_key: true, enabled: false, priority: 3, key_status: "not_configured", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
+  { provider: "alpha_vantage", display_name: "Alpha Vantage", requires_key: true, enabled: true, priority: 4, key_status: "configured", masked_key: "****alue", validation_status: "valid", validation_message: "Credential validation succeeded.", last_validated_at: "2026-07-14T00:00:00Z" },
+] as const;
+
+export const generalSettingsFixture = {
+  refresh_time: "08:00",
+  provider_priority: ["akshare", "yahoo", "tushare", "alpha_vantage"],
+  default_tolerance: "0.02",
+  minimum_trade_amount_cny: "500",
+  allow_sell: true,
+  allow_fx: true,
+  updated_at: "2026-07-14T00:00:00Z",
 } as const;

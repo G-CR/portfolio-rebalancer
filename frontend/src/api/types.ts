@@ -34,6 +34,7 @@ export interface Holding {
   baseline_fx_to_cny: DecimalString;
   lot_size: DecimalString;
   quantity_precision: number;
+  preferred_data_source: ProviderName | null;
   is_rebalance_preferred: boolean;
   is_active: boolean;
   version: number;
@@ -358,5 +359,49 @@ export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | 
   after_snapshot_id: string | null;
   baseline_reset_at: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface MarketDataStatus {
+  key: string;
+  data_type: "price" | "fx" | string;
+  symbol: string;
+  currency: string;
+  effective_value: DecimalString | null;
+  source: string | null;
+  status: AnalyticsDataStatus;
+  market_time: string | null;
+  fetched_at: string | null;
+  error_summary: string | null;
+  note: string | null;
+}
+
+export interface MarketDataCollection {
+  items: MarketDataStatus[];
+  diagnostics: Array<{ code: string; message: string; holding_id: string; symbol: string; fields: string[] }>;
+}
+
+export type ProviderName = "yahoo" | "akshare" | "tushare" | "alpha_vantage";
+
+export interface ProviderSetting {
+  provider: ProviderName;
+  display_name: string;
+  requires_key: boolean;
+  enabled: boolean;
+  priority: number;
+  key_status: "not_required" | "not_configured" | "configured";
+  masked_key: string | null;
+  validation_status: "valid" | "failed" | null;
+  validation_message: string | null;
+  last_validated_at: string | null;
+}
+
+export interface GeneralSettings {
+  refresh_time: string;
+  provider_priority: ProviderName[];
+  default_tolerance: DecimalString;
+  minimum_trade_amount_cny: DecimalString;
+  allow_sell: boolean;
+  allow_fx: boolean;
   updated_at: string;
 }

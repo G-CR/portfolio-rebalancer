@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.decimal import fits_numeric_28_12
 from app.core.market import normalize_currency_code, normalize_market_code
-from app.db.models import AssetClass, Holding, HoldingDefault, MarketData, MarketDataOverride, Setting
+from app.db.models import AssetClass, Holding, MarketData, MarketDataOverride, Setting
 from app.providers.akshare import AkshareProvider
 from app.providers.alpha_vantage import AlphaVantageProvider
 from app.providers.base import (
@@ -30,6 +30,7 @@ from app.schemas.market_data import (
     MarketDataStatusResponse,
 )
 from app.services.errors import ServiceError
+from app.services.settings import load_provider_credential_reader
 
 _ONE = Decimal("1")
 _ERROR_SUMMARY_LIMIT = 200
@@ -123,6 +124,10 @@ class ProviderRegistry:
             "tushare": TushareProvider(credentials),
             "alpha_vantage": AlphaVantageProvider(credentials),
         }
+
+    def configure_credentials(self, credentials) -> None:
+        self._providers["tushare"] = TushareProvider(credentials)
+        self._providers["alpha_vantage"] = AlphaVantageProvider(credentials)
 
     async def fetch_price(
         self,
@@ -245,6 +250,8 @@ async def refresh_all_required_data(session: AsyncSession) -> MarketDataCollecti
     required = await _collect_required_market_data_items(session)
     required_items = required.items
     registry = get_provider_registry()
+    if isinstance(registry, ProviderRegistry):
+        registry.configure_credentials(await load_provider_credential_reader(session))
     provider_priority = await _load_provider_priority(session)
 
     for item in required_items:
@@ -573,9 +580,8 @@ async def _collect_required_market_data_items(
     session: AsyncSession,
 ) -> RequiredMarketDataCollection:
     rows = await session.execute(
-        select(Holding, HoldingDefault.default_data_source)
+        select(Holding)
         .join(AssetClass, Holding.asset_class_id == AssetClass.id)
-        .outerjoin(HoldingDefault, HoldingDefault.holding_id == Holding.id)
         .where(
             Holding.is_active.is_(True),
             AssetClass.is_active.is_(True),
@@ -585,7 +591,7 @@ async def _collect_required_market_data_items(
 
     deduped: dict[str, RequiredMarketDataItem] = {}
     diagnostics: list[MarketDataDiagnosticResponse] = []
-    for holding, default_data_source in rows:
+    for holding in rows.scalars():
         invalid_fields: list[str] = []
         try:
             market = normalize_market_code(holding.market)
@@ -618,7 +624,7 @@ async def _collect_required_market_data_items(
                 symbol=holding.symbol,
                 currency=trade_currency,
                 market=market,
-                preferred_source=default_data_source,
+                preferred_source=holding.preferred_data_source,
             ),
         )
 

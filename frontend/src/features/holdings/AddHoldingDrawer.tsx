@@ -32,6 +32,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   const [baselineFx, setBaselineFx] = useState("1");
   const [lotSize, setLotSize] = useState("1");
   const [precision, setPrecision] = useState("0");
+  const [preferredDataSource, setPreferredDataSource] = useState("");
   const [preferred, setPreferred] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -70,6 +71,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
       baseline_fx_to_cny: baselineFx,
       lot_size: lotSize,
       quantity_precision: Number.parseInt(precision, 10),
+      preferred_data_source: preferredDataSource || null,
       is_rebalance_preferred: preferred,
     };
     try {
@@ -100,6 +102,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
             <FormField label="上市市场" required><input type="text" value={market} onChange={(event) => setMarket(event.target.value)} /></FormField>
             <FormField label="账户名称" required><input type="text" value={accountName} onChange={(event) => setAccountName(event.target.value)} /></FormField>
             <FormField label="交易币种" required><select value={currency} onChange={(event) => { const next = event.target.value; setCurrency(next); if (next === "CNY") { setCostFx("1"); setBaselineFx("1"); } }}><option value="CNY">CNY</option><option value="USD">USD</option></select></FormField>
+            <FormField label="首选行情来源"><select value={preferredDataSource} onChange={(event) => setPreferredDataSource(event.target.value)}><option value="">跟随全局优先级</option><option value="yahoo">Yahoo Finance</option><option value="akshare">AKShare</option><option value="tushare">Tushare</option><option value="alpha_vantage">Alpha Vantage</option></select></FormField>
           </div>
         </section>
         <section className={styles.drawerSection}>

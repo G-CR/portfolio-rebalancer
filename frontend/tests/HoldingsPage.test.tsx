@@ -118,6 +118,8 @@ describe("HoldingsPage", () => {
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
     await user.type(screen.getByRole("textbox", { name: "上市市场" }), "US");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
+    expect(screen.getByRole("combobox", { name: "首选行情来源" })).toHaveValue("");
+    await user.selectOptions(screen.getByRole("combobox", { name: "首选行情来源" }), "yahoo");
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
 
     await waitFor(() => expect(body).toBeDefined());
@@ -129,6 +131,7 @@ describe("HoldingsPage", () => {
       cost_fx_to_cny: "1",
       baseline_fx_to_cny: "1",
       lot_size: "1",
+      preferred_data_source: "yahoo",
     });
     expect(await screen.findByText("SPY")).toBeInTheDocument();
     expect(queryClient.getQueryState(holdingsQueryKey(true))?.isInvalidated).toBe(true);

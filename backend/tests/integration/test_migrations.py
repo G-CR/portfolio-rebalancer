@@ -294,7 +294,7 @@ async def test_rebalance_plan_lifecycle_upgrade_preserves_existing_rows(
 
         await _run_alembic_upgrade("head")
         state = await _rebalance_plan_migration_state()
-        assert state["revision"] == "20260714_0005"
+        assert state["revision"] == "20260714_0006"
         assert state["columns"] == expected_columns
         assert state["rows"] == [
             {
@@ -335,7 +335,7 @@ async def test_rebalance_plan_lifecycle_migration_round_trip(
 
         await _run_alembic_upgrade("head")
         first = await _rebalance_plan_migration_state()
-        assert first["revision"] == "20260714_0005"
+        assert first["revision"] == "20260714_0006"
         assert first["columns"] == expected_columns
         assert first["rows"] == []
 
@@ -344,7 +344,7 @@ async def test_rebalance_plan_lifecycle_migration_round_trip(
 
         await _run_alembic_upgrade("head")
         second = await _rebalance_plan_migration_state()
-        assert second["revision"] == "20260714_0005"
+        assert second["revision"] == "20260714_0006"
         assert second["columns"] == expected_columns
         assert second["rows"] == []
     finally:
@@ -506,7 +506,7 @@ async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
 
         await _run_alembic_upgrade("head")
         first_upgrade = await _snapshot_migration_state()
-        assert first_upgrade["revision"] == "20260714_0005"
+        assert first_upgrade["revision"] == "20260714_0006"
         assert first_upgrade["columns"] == expected_columns
         assert first_upgrade["snapshots"] == []
         assert first_upgrade["items"] == []
@@ -516,7 +516,7 @@ async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
 
         await _run_alembic_upgrade("head")
         second_upgrade = await _snapshot_migration_state()
-        assert second_upgrade["revision"] == "20260714_0005"
+        assert second_upgrade["revision"] == "20260714_0006"
         assert second_upgrade["columns"] == expected_columns
         assert second_upgrade["snapshots"] == []
         assert second_upgrade["items"] == []
@@ -651,7 +651,7 @@ async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes
         state = await _holding_migration_state()
         rows = {row["id"]: row for row in state["rows"]}
 
-        assert state["revision"] == "20260714_0005"
+        assert state["revision"] == "20260714_0006"
         assert "uq_holdings_active_symbol_account_name" in state["indexes"]
         assert "uq_holdings_symbol_account_name" not in state["constraints"]
         assert rows[archived_id] == {
@@ -745,4 +745,4 @@ async def test_downgrade_0003_restores_global_identity_constraint_for_compatible
         await _run_alembic_upgrade("head")
 
     restored_state = await _holding_migration_state()
-    assert restored_state["revision"] == "20260714_0005"
+    assert restored_state["revision"] == "20260714_0006"

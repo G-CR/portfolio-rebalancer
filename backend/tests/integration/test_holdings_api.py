@@ -96,6 +96,22 @@ async def test_create_holding_normalizes_supported_market_and_currency(
     assert response.json()["trade_currency"] == "CNY"
 
 
+async def test_holding_can_override_global_market_data_provider(api_client, asset_class_id) -> None:
+    created = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, preferred_data_source="alpha_vantage"),
+    )
+    updated = await api_client.patch(
+        f"/api/holdings/{created.json()['id']}",
+        json={"preferred_data_source": "yahoo"},
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["preferred_data_source"] == "alpha_vantage"
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["preferred_data_source"] == "yahoo"
+
+
 async def test_create_holding_rejects_non_iso_trade_currency(
     api_client, asset_class_id
 ) -> None:

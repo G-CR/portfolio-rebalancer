@@ -65,6 +65,7 @@ async def create_holding(session: AsyncSession, payload: HoldingCreate) -> Holdi
         baseline_fx_to_cny=baseline_fx_to_cny,
         lot_size=payload.lot_size,
         quantity_precision=payload.quantity_precision,
+        preferred_data_source=payload.preferred_data_source,
         is_rebalance_preferred=should_prefer,
     )
     session.add(holding)
@@ -119,6 +120,8 @@ async def update_holding(
         holding.lot_size = updates["lot_size"]
     if "quantity_precision" in updates:
         holding.quantity_precision = updates["quantity_precision"]
+    if "preferred_data_source" in updates:
+        holding.preferred_data_source = updates["preferred_data_source"]
     if "is_rebalance_preferred" in updates:
         holding.is_rebalance_preferred = updates["is_rebalance_preferred"]
 

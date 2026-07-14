@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
@@ -61,6 +62,7 @@ class HoldingResponse(BaseModel):
     baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
     quantity_precision: int
+    preferred_data_source: Literal["yahoo", "akshare", "tushare", "alpha_vantage"] | None
     is_rebalance_preferred: bool
     is_active: bool
     version: int
@@ -93,6 +95,7 @@ class HoldingCreate(BaseModel):
     baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
     quantity_precision: int
+    preferred_data_source: Literal["yahoo", "akshare", "tushare", "alpha_vantage"] | None = None
     is_rebalance_preferred: bool = False
 
     @field_validator("market")
@@ -157,6 +160,7 @@ class HoldingUpdate(BaseModel):
     baseline_fx_to_cny: DecimalString | None = None
     lot_size: DecimalString | None = None
     quantity_precision: int | None = None
+    preferred_data_source: Literal["yahoo", "akshare", "tushare", "alpha_vantage"] | None = None
     is_rebalance_preferred: bool | None = None
 
     @field_validator("market")
