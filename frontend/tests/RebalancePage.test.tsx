@@ -25,6 +25,31 @@ function previewHandlers() {
   ];
 }
 
+it("waits for an explicit command before the first preview", async () => {
+  let previewRequests = 0;
+  renderWithProviders(<RebalancePage />, {
+    handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
+      http.post("/api/rebalance/preview", () => {
+        previewRequests += 1;
+        return HttpResponse.json(rebalancePreviewFixture);
+      }),
+    ],
+  });
+  const user = userEvent.setup();
+
+  expect(await screen.findByRole("button", { name: "开始测算" })).toBeEnabled();
+  expect(screen.getByText("配置本次资金与约束后开始测算")).toBeInTheDocument();
+  expect(previewRequests).toBe(0);
+
+  await user.click(screen.getByRole("button", { name: "开始测算" }));
+
+  expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
+  expect(previewRequests).toBe(1);
+  expect(screen.getByRole("button", { name: "重新测算" })).toBeEnabled();
+});
+
 it("keeps inputs visible after recalculation", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
   const user = userEvent.setup();
@@ -65,7 +90,7 @@ it("formats the comparison drift as a percentage", async () => {
   expect(await screen.findByText("0.30%")).toBeInTheDocument();
 });
 
-it("requests a fresh preview when valuation basis changes", async () => {
+it("keeps valuation-basis changes local until calculation is requested", async () => {
   const requestedBases: string[] = [];
   renderWithProviders(<RebalancePage />, {
     handlers: [
@@ -80,10 +105,12 @@ it("requests a fresh preview when valuation basis changes", async () => {
   });
   const user = userEvent.setup();
 
-  await screen.findByText("建议执行 4 笔交易");
   await user.click(screen.getByRole("radio", { name: "剔汇率口径" }));
+  expect(screen.getByText("剔汇率模拟")).toBeInTheDocument();
+  expect(requestedBases).toEqual([]);
 
-  await waitFor(() => expect(requestedBases).toEqual(["actual", "fx_neutral"]));
+  await user.click(screen.getByRole("button", { name: "开始测算" }));
+  await waitFor(() => expect(requestedBases).toEqual(["fx_neutral"]));
 });
 
 it("requires stale-data acknowledgement before saving", async () => {
