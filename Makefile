@@ -17,6 +17,7 @@ test-backend:
 		trap cleanup EXIT; \
 		cleanup; \
 		docker compose up -d db; \
+		docker compose build api; \
 		docker compose run --rm api uv run alembic upgrade head; \
 		docker compose run --rm api uv run pytest -v
 
