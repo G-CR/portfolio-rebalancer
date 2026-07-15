@@ -37,6 +37,9 @@ _ERROR_SUMMARY_LIMIT = 200
 _DOMESTIC_PROVIDER_ORDER = ("akshare", "tushare")
 _INTERNATIONAL_PROVIDER_ORDER = ("yahoo", "alpha_vantage")
 _FX_PROVIDER_ORDER = ("yahoo", "alpha_vantage")
+_PROVIDER_NAMES = frozenset(
+    {"yahoo", "akshare", "tushare", "alpha_vantage"}
+)
 _SAFE_FAILURE_DETAILS = {
     "provider_not_configured": "Market-data provider is not configured.",
     "provider_payload_invalid": "Market-data provider returned invalid data.",
@@ -115,6 +118,12 @@ class RequiredMarketDataCollection:
     diagnostics: list[MarketDataDiagnosticResponse]
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderAttempt:
+    provider_name: str
+    failure_category: str
+
+
 class ProviderRegistry:
     def __init__(self) -> None:
         credentials = NullCredentialReader()
@@ -137,8 +146,7 @@ class ProviderRegistry:
         preferred_source: str | None = None,
         provider_priority: list[str] | None = None,
     ) -> MarketQuote:
-        last_error: ProviderError | None = None
-        last_provider_name: str | None = None
+        attempts: list[ProviderAttempt] = []
         for provider_name in _provider_order_for_price(
             market=market,
             preferred_source=preferred_source,
@@ -147,16 +155,13 @@ class ProviderRegistry:
             provider = self._providers[provider_name]
             try:
                 return await provider.fetch_price(symbol)
-            except ProviderNotConfigured as exc:
-                last_provider_name = provider_name
-                last_error = exc
-                continue
             except ProviderError as exc:
-                last_provider_name = provider_name
-                last_error = exc
+                attempts.append(
+                    ProviderAttempt(provider_name, _provider_failure_category(exc))
+                )
                 continue
-        if last_error is not None:
-            raise ProviderSelectionError(last_provider_name or "unknown", last_error)
+        if attempts:
+            raise ProviderSelectionError(attempts)
         raise ProviderError(f"No configured provider could refresh price for {symbol}.")
 
     async def fetch_fx(
@@ -167,8 +172,7 @@ class ProviderRegistry:
         preferred_source: str | None = None,
         provider_priority: list[str] | None = None,
     ) -> MarketQuote:
-        last_error: ProviderError | None = None
-        last_provider_name: str | None = None
+        attempts: list[ProviderAttempt] = []
         for provider_name in _provider_order_for_fx(
             preferred_source=preferred_source,
             provider_priority=provider_priority or [],
@@ -176,24 +180,30 @@ class ProviderRegistry:
             provider = self._providers[provider_name]
             try:
                 return await provider.fetch_fx(base, quote)
-            except ProviderNotConfigured as exc:
-                last_provider_name = provider_name
-                last_error = exc
-                continue
             except ProviderError as exc:
-                last_provider_name = provider_name
-                last_error = exc
+                attempts.append(
+                    ProviderAttempt(provider_name, _provider_failure_category(exc))
+                )
                 continue
-        if last_error is not None:
-            raise ProviderSelectionError(last_provider_name or "unknown", last_error)
+        if attempts:
+            raise ProviderSelectionError(attempts)
         raise ProviderError(f"No configured provider could refresh FX for {base}/{quote}.")
 
 
 class ProviderSelectionError(ProviderError):
-    def __init__(self, provider_name: str, cause: ProviderError) -> None:
+    def __init__(self, attempts: list[ProviderAttempt]) -> None:
         super().__init__("No market-data provider returned a valid quote.")
-        self.provider_name = provider_name
-        self.failure_category = _provider_failure_category(cause)
+        self.attempts = tuple(attempts)
+        actionable = next(
+            (
+                item
+                for item in attempts
+                if item.failure_category != "provider_not_configured"
+            ),
+            attempts[0],
+        )
+        self.provider_name = actionable.provider_name
+        self.failure_category = actionable.failure_category
 
 
 def get_provider_registry() -> ProviderRegistry:
@@ -711,6 +721,21 @@ async def _acquire_transaction_lock(session: AsyncSession, lock_key: str) -> Non
 def _sanitize_error_text(value: str | None) -> str | None:
     if value is None:
         return None
+    attempts: list[str] = []
+    for raw_attempt in value.split(";"):
+        provider_name, separator, raw_category = raw_attempt.strip().partition(":")
+        category = raw_category.strip().partition(" ")[0]
+        if (
+            separator
+            and provider_name in _PROVIDER_NAMES
+            and category in _SAFE_FAILURE_DETAILS
+        ):
+            attempts.append(f"{provider_name}: {category}")
+            continue
+        attempts = []
+        break
+    if attempts:
+        return "; ".join(attempts)[:_ERROR_SUMMARY_LIMIT]
     category = value.partition(":")[0]
     if category not in _SAFE_FAILURE_DETAILS:
         category = "legacy_refresh_error"
@@ -719,7 +744,10 @@ def _sanitize_error_text(value: str | None) -> str | None:
 
 def _safe_failure_summary(exc: Exception) -> str:
     if isinstance(exc, ProviderSelectionError):
-        return _format_failure_summary(exc.failure_category)
+        return "; ".join(
+            f"{item.provider_name}: {item.failure_category}"
+            for item in exc.attempts
+        )[:_ERROR_SUMMARY_LIMIT]
     return _format_failure_summary(_provider_failure_category(exc))
 
 
@@ -792,12 +820,7 @@ def _merge_provider_order(
         if candidate is None:
             continue
         normalized = candidate.strip()
-        if normalized and normalized not in merged and normalized in {
-            "yahoo",
-            "akshare",
-            "tushare",
-            "alpha_vantage",
-        }:
+        if normalized and normalized not in merged and normalized in _PROVIDER_NAMES:
             merged.append(normalized)
     return merged
 

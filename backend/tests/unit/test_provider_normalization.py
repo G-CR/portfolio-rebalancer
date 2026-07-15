@@ -15,11 +15,24 @@ from app.providers.base import (
 )
 from app.providers.tushare import TushareProvider
 from app.providers.yahoo import YahooProvider
+from app.services.market_data import (
+    ProviderRegistry,
+    ProviderSelectionError,
+    _safe_failure_summary,
+)
 
 
 class _NoCredentialReader:
     def get_api_key(self, provider: str) -> str | None:
         return None
+
+
+class _FailedPriceProvider:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def fetch_price(self, symbol: str):
+        raise self.error
 
 
 def test_yahoo_normalizes_spy_close() -> None:
@@ -66,6 +79,35 @@ def test_akshare_runtime_dependency_is_installed() -> None:
     import akshare
 
     assert callable(akshare.fund_etf_spot_em)
+
+
+@pytest.mark.asyncio
+async def test_provider_selection_keeps_primary_failure_when_backup_is_unconfigured() -> None:
+    registry = ProviderRegistry()
+    registry._providers["akshare"] = _FailedPriceProvider(
+        ProviderRequestError("request contains https://secret.invalid")
+    )
+    registry._providers["tushare"] = _FailedPriceProvider(
+        ProviderNotConfigured("token SECRET is missing")
+    )
+
+    with pytest.raises(ProviderSelectionError) as exc_info:
+        await registry.fetch_price("563020", market="SH")
+
+    assert exc_info.value.provider_name == "akshare"
+    assert [
+        (item.provider_name, item.failure_category)
+        for item in exc_info.value.attempts
+    ] == [
+        ("akshare", "provider_request_failed"),
+        ("tushare", "provider_not_configured"),
+    ]
+    summary = _safe_failure_summary(exc_info.value)
+    assert summary == (
+        "akshare: provider_request_failed; tushare: provider_not_configured"
+    )
+    assert "secret.invalid" not in summary
+    assert "SECRET" not in summary
 
 
 def test_invalid_provider_payload_is_rejected() -> None:

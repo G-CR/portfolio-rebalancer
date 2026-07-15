@@ -104,6 +104,37 @@ class _FailingRegistry:
         raise RuntimeError(f"timeout while refreshing {base}/{quote}\nsecret detail")
 
 
+class _ProviderSelectionFailingRegistry:
+    async def fetch_price(
+        self,
+        symbol: str,
+        *,
+        market: str,
+        preferred_source: str | None = None,
+        provider_priority: list[str] | None = None,
+    ) -> MarketQuote:
+        raise market_data_service.ProviderSelectionError(
+            [
+                market_data_service.ProviderAttempt(
+                    "akshare", "provider_request_failed"
+                ),
+                market_data_service.ProviderAttempt(
+                    "tushare", "provider_not_configured"
+                ),
+            ]
+        )
+
+    async def fetch_fx(
+        self,
+        base: str,
+        quote: str,
+        *,
+        preferred_source: str | None = None,
+        provider_priority: list[str] | None = None,
+    ) -> MarketQuote:
+        raise AssertionError("CNY holdings do not require an external FX quote")
+
+
 class _OversizedQuoteRegistry(_FakeRegistry):
     async def fetch_price(
         self,
@@ -222,6 +253,41 @@ async def test_first_refresh_failure_is_reported_without_an_effective_value(
     )
     assert "secret detail" not in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+async def test_provider_attempt_diagnostics_survive_storage_round_trip(
+    api_client,
+    monkeypatch,
+) -> None:
+    asset_class_id = (await api_client.get("/api/asset-classes")).json()[0]["id"]
+    await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(
+            asset_class_id,
+            symbol="563020",
+            account_name="Broker 1",
+            market="SH",
+            trade_currency="CNY",
+        ),
+    )
+    monkeypatch.setattr(
+        market_data_service,
+        "get_provider_registry",
+        lambda: _ProviderSelectionFailingRegistry(),
+    )
+
+    refresh_response = await api_client.post("/api/market-data/refresh")
+    assert refresh_response.status_code == 200
+
+    response = await api_client.get("/api/market-data")
+    item = {item["key"]: item for item in response.json()["items"]}["price:563020"]
+    assert item["source"] == "akshare"
+    assert item["status"] == "failed"
+    assert item["error_summary"] == (
+        "akshare: provider_request_failed; tushare: provider_not_configured"
+    )
+    assert "SECRET" not in response.text
+    assert "http" not in item["error_summary"]
 
 
 async def test_active_override_takes_precedence_over_failed_only_state(
