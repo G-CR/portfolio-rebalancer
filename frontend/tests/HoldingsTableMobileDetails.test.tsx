@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { Holding, HoldingAnalytics, PortfolioIncompleteItem } from "../src/api/types";
+import { calculateMenuPosition } from "../src/features/holdings/HoldingActionMenu";
 import { HoldingsTable } from "../src/features/holdings/HoldingsTable";
 import styles from "../src/features/holdings/HoldingsTable.module.css";
 import tableCss from "../src/features/holdings/HoldingsTable.module.css?raw";
@@ -66,6 +67,39 @@ function renderTable({
 }
 
 describe("HoldingsTable mobile row details", () => {
+  it("places action menus on the side with usable viewport space", () => {
+    const nearTop = { top: 20, bottom: 52, right: 980 } as DOMRect;
+    const nearBottom = { top: 720, bottom: 752, right: 980 } as DOMRect;
+
+    expect(calculateMenuPosition(nearTop, { width: 142, height: 150 }, { width: 1024, height: 768 })).toEqual({
+      top: 56,
+      left: 838,
+      placement: "bottom",
+    });
+    expect(calculateMenuPosition(nearBottom, { width: 142, height: 150 }, { width: 1024, height: 768 })).toEqual({
+      top: 566,
+      left: 838,
+      placement: "top",
+    });
+  });
+
+  it("portals the action menu and restores trigger focus after Escape", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "更多 SPY 操作" });
+
+    await user.click(trigger);
+
+    const menu = screen.getByRole("menu");
+    expect(menu.parentElement).toBe(document.body);
+    expect(screen.getByRole("menuitem", { name: "卖出调整" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("keeps the four summary values visible and details collapsed initially", () => {
     renderTable();
 

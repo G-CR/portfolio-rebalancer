@@ -1,11 +1,12 @@
-import { Archive, ChevronDown, History, MoreHorizontal, Pencil, Plus, TrendingDown } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronDown, Plus } from "lucide-react";
+import { Fragment, useState } from "react";
 
 import type { AssetClass, Holding, HoldingAnalytics, PortfolioIncompleteItem } from "../../api/types";
 import { formatAmount, formatDecimal, formatSignedAmount, statusLabel } from "../analytics/format";
+import { HoldingActionMenu, type HoldingCommand } from "./HoldingActionMenu";
 import styles from "./HoldingsTable.module.css";
 
-export type HoldingCommand = "purchase" | "sell" | "correction" | "history" | "archive";
+export type { HoldingCommand } from "./HoldingActionMenu";
 
 type Props = {
   holdings: Holding[];
@@ -15,40 +16,6 @@ type Props = {
   showArchived: boolean;
   onCommand: (holding: Holding, command: HoldingCommand) => void;
 };
-
-function ActionMenu({ holding, onCommand }: { holding: Holding; onCommand: Props["onCommand"] }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
-  function run(command: HoldingCommand) {
-    setOpen(false);
-    onCommand(holding, command);
-  }
-
-  return (
-    <div className={styles.menuRoot} ref={root}>
-      <button className={styles.iconButton} type="button" title="更多操作" aria-label={`更多 ${holding.symbol} 操作`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <MoreHorizontal size={17} aria-hidden="true" />
-      </button>
-      {open ? (
-        <div className={styles.menu} role="menu">
-          <button type="button" role="menuitem" onClick={() => run("sell")}><TrendingDown size={15} aria-hidden="true" />卖出调整</button>
-          <button type="button" role="menuitem" onClick={() => run("correction")}><Pencil size={15} aria-hidden="true" />人工修正</button>
-          <button type="button" role="menuitem" onClick={() => run("history")}><History size={15} aria-hidden="true" />调整历史</button>
-          {holding.is_active ? <button className={styles.dangerItem} type="button" role="menuitem" onClick={() => run("archive")}><Archive size={15} aria-hidden="true" />归档持仓</button> : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function MarketValue({ value, status }: { value: string; status: string }) {
   return <div className={styles.marketValue}><span>{value}</span>{status === "valid" ? null : <small data-status={status}>{statusLabel(status)}</small>}</div>;
@@ -167,7 +134,7 @@ export function HoldingsTable({ holdings, assetClasses, analyticsById, incomplet
                         <button className={`${styles.iconButton} ${styles.addButton}`} type="button" title="追加买入" aria-label={`追加买入 ${holding.symbol}`} onClick={() => onCommand(holding, "purchase")}>
                           <Plus size={17} aria-hidden="true" />
                         </button>
-                        <ActionMenu holding={holding} onCommand={onCommand} />
+                        <HoldingActionMenu holding={holding} onCommand={onCommand} />
                       </div>
                     ) : <span className={styles.archivedActions}>已归档，无可用操作</span>}
                   </td>
@@ -199,7 +166,7 @@ export function HoldingsTable({ holdings, assetClasses, analyticsById, incomplet
                               <button className={`${styles.iconButton} ${styles.addButton}`} type="button" title="追加买入" aria-label={`追加买入 ${holding.symbol}`} onClick={() => onCommand(holding, "purchase")}>
                                 <Plus size={17} aria-hidden="true" />
                               </button>
-                              <ActionMenu holding={holding} onCommand={onCommand} />
+                              <HoldingActionMenu holding={holding} onCommand={onCommand} />
                             </>
                           ) : <span className={styles.archivedActions}>已归档，无可用操作</span>}
                         </div>
