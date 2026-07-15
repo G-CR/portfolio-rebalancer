@@ -14,6 +14,8 @@
 
 worker 按设置中的 Asia/Shanghai 时间刷新必需行情。供应商优先级可以全局调整，每个持仓可单独覆盖。失败记录不会覆盖最近有效数值；页面会显示旧值、失败状态和来源。手动覆盖带有备注和可选失效时间。
 
+API 镜像内置 AKShare，用于默认获取国内 ETF 行情。持仓页发现必需数据缺失时还会发起一次即时刷新。数据源全部失败时，数据库只保存数据源名称和 `provider_request_failed`、`provider_payload_invalid`、`provider_not_configured`、`provider_internal_error` 等安全类别，不保存请求 URL、密钥、原始响应或异常堆栈。外部网络不可用时应先重试，再按需要设置手动覆盖。
+
 ## 凭据
 
 Tushare 与 Alpha Vantage 密钥使用 Fernet 加密后写入数据库，密钥文件权限为 0600。日志只记录供应商、状态和异常类别。数据库备份不导出密钥卷，因此灾难恢复需要同时保留 `secret_data`。
