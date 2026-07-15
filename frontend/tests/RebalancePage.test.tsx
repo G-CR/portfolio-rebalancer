@@ -57,7 +57,7 @@ it("keeps inputs visible after recalculation", async () => {
 
   await user.clear(cny);
   await user.type(cny, "20000");
-  await user.click(screen.getByRole("button", { name: "重新测算" }));
+  await user.click(screen.getByRole("button", { name: "开始测算" }));
 
   expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
   expect(screen.getByLabelText("人民币")).toHaveValue("20000");
@@ -65,6 +65,9 @@ it("keeps inputs visible after recalculation", async () => {
 
 it("distinguishes current and projected allocation markers", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   expect(await screen.findAllByLabelText(/当前占比/)).toHaveLength(5);
   expect(screen.getAllByLabelText(/预计占比/)).toHaveLength(5);
@@ -72,6 +75,9 @@ it("distinguishes current and projected allocation markers", async () => {
 
 it("shows a reason for every sell suggestion", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   const sellRow = await screen.findByRole("row", { name: /SPY 卖出/ });
   expect(within(sellRow).getByText("新增资金不足以消除高配")).toBeInTheDocument();
@@ -79,6 +85,9 @@ it("shows a reason for every sell suggestion", async () => {
 
 it("shows the user-entered holding name beside the trade symbol", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   const sellRow = await screen.findByRole("row", { name: /SPY 卖出/ });
   expect(within(sellRow).getByText("SPDR S&P 500 ETF Trust")).toBeInTheDocument();
@@ -86,6 +95,9 @@ it("shows the user-entered holding name beside the trade symbol", async () => {
 
 it("formats the comparison drift as a percentage", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   expect(await screen.findByText("0.30%")).toBeInTheDocument();
 });
@@ -128,6 +140,9 @@ it("requires stale-data acknowledgement before saving", async () => {
       }, { status: 409 })),
     ],
   });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   expect(await screen.findByText("部分行情数据已过期")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
@@ -137,6 +152,7 @@ it("requires recalculation after any strategy input changes", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
   const user = userEvent.setup();
 
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
   await screen.findByText("建议执行 4 笔交易");
   await user.clear(screen.getByLabelText("人民币"));
   await user.type(screen.getByLabelText("人民币"), "30000");
@@ -148,6 +164,8 @@ it("requires recalculation after any strategy input changes", async () => {
 
 it("has no serious accessibility violations", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
   await screen.findByText("建议执行 4 笔交易");
 
   const result = await axe.run(document.body, { rules: { "color-contrast": { enabled: false } } });

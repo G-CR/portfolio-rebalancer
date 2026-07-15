@@ -31,6 +31,7 @@ it("saves, starts, and completes a formal rebalance plan", async () => {
   renderWithProviders(<RebalancePage />, { handlers: handlers() });
   const user = userEvent.setup();
 
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
   await screen.findByText("建议执行 4 笔交易");
   await user.click(screen.getByRole("button", { name: "保存方案" }));
   expect(await screen.findByText("方案已保存，尚未开始")).toBeInTheDocument();
@@ -47,6 +48,7 @@ it("can start directly by creating a plan first", async () => {
   renderWithProviders(<RebalancePage />, { handlers: handlers() });
   const user = userEvent.setup();
 
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
   await screen.findByText("建议执行 4 笔交易");
   await user.click(screen.getByRole("button", { name: "开始本次再平衡" }));
 

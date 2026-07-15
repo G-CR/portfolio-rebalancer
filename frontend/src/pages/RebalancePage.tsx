@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { useRef, useState } from "react";
+import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
 import type { RebalancePlan, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
@@ -82,15 +82,10 @@ export function RebalancePage() {
     }
   };
 
-  useEffect(() => {
-    void runPreview(initialForm);
-  }, []);
-
   const changeBasis = (valuationBasis: RebalanceValuationBasis) => {
-    const next = { ...form, valuationBasis };
-    setForm(next);
-    setIsDirty(true);
-    void runPreview(next);
+    setForm((current) => ({ ...current, valuationBasis }));
+    setIsDirty(Boolean(preview.data));
+    setPlan(null);
   };
 
   const save = async () => {
@@ -154,8 +149,11 @@ export function RebalancePage() {
         <div className={styles.basisStatus}><span>当前口径</span><strong>{form.valuationBasis === "actual" ? "实际人民币占比" : "剔汇率模拟"}</strong></div>
       </header>
       <div className={styles.workspace}>
-        <RebalanceInputs value={form} pending={preview.isPending} onChange={(next) => { setForm(next); setIsDirty(true); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
+        <RebalanceInputs value={form} pending={preview.isPending} hasPreview={Boolean(currentPreview)} onChange={(next) => { setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
         <main className={styles.results}>
+          {!preview.isPending && !currentPreview && !preview.error ? <div className={styles.previewPrompt}>
+            <Calculator size={18} aria-hidden="true" /><div><strong>配置本次资金与约束后开始测算</strong><span>行情刷新将在你点击开始测算后执行。</span></div>
+          </div> : null}
           {preview.isPending && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入行情并计算方案</div> : null}
           {staleError ? <section className={styles.stale} role="alert">
             <AlertTriangle size={20} aria-hidden="true" /><div><h2>部分行情数据已过期</h2><p>保存正式方案前，需要明确确认使用当前旧值。重新测算后，结果会保留过期数据标记。</p><label><input type="checkbox" checked={form.acknowledgeStaleData} onChange={(event) => { setForm({ ...form, acknowledgeStaleData: event.target.checked }); setIsDirty(true); }} />我已了解数据时效风险</label></div>

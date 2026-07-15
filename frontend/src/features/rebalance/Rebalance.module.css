@@ -29,6 +29,10 @@
 .recalculate { width: 100%; border: 1px solid var(--color-ink); background: var(--color-ink); color: white; }
 .recalculate:disabled, .primary:disabled, .secondary:disabled, .ghost:disabled { cursor: not-allowed; opacity: .46; }
 .results { min-width: 0; }
+.previewPrompt { display: flex; min-height: 180px; align-items: center; justify-content: center; gap: var(--space-3); color: var(--color-muted); }
+.previewPrompt div { display: grid; gap: var(--space-1); }
+.previewPrompt strong { color: var(--color-ink); font-size: 13px; }
+.previewPrompt span { font-size: 11px; }
 .loading { display: flex; min-height: 180px; align-items: center; justify-content: center; gap: var(--space-3); color: var(--color-muted); }
 .loading svg { animation: spin 1.2s linear infinite; }
 .summary { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(420px, 1.3fr); align-items: stretch; border-bottom: 1px solid var(--color-rule); background: rgb(46 116 88 / 5%); }

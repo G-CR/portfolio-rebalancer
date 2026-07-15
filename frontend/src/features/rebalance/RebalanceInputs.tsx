@@ -18,12 +18,13 @@ export type RebalanceFormState = {
 type Props = {
   value: RebalanceFormState;
   pending: boolean;
+  hasPreview: boolean;
   onChange: (value: RebalanceFormState) => void;
   onBasisChange: (basis: RebalanceValuationBasis) => void;
   onSubmit: () => void;
 };
 
-export function RebalanceInputs({ value, pending, onChange, onBasisChange, onSubmit }: Props) {
+export function RebalanceInputs({ value, pending, hasPreview, onChange, onBasisChange, onSubmit }: Props) {
   const set = <K extends keyof RebalanceFormState>(key: K, next: RebalanceFormState[K]) => onChange({ ...value, [key]: next });
   return (
     <aside className={styles.inputs} aria-labelledby="rebalance-inputs-title">
@@ -52,7 +53,7 @@ export function RebalanceInputs({ value, pending, onChange, onBasisChange, onSub
 
       {value.acknowledgeStaleData ? <p className={styles.acknowledged}>已确认使用过期行情进行本次测算。</p> : null}
       <button className={styles.recalculate} type="button" onClick={onSubmit} disabled={pending}>
-        <Calculator size={16} aria-hidden="true" />{pending ? "测算中" : "重新测算"}
+        <Calculator size={16} aria-hidden="true" />{pending ? "测算中" : hasPreview ? "重新测算" : "开始测算"}
       </button>
     </aside>
   );
