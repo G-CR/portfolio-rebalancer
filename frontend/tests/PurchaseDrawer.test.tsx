@@ -40,9 +40,15 @@ const preview = {
   adjustment_id: null,
 };
 
+function currentLocalDate() {
+  const date = new Date();
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
 async function fillTransaction(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByRole("textbox", { name: "新增份额" }), "5.000000000001");
-  expect(screen.getByLabelText(/成交日期/)).toHaveValue("2026-07-14");
+  expect(screen.getByLabelText(/成交日期/)).toHaveValue(currentLocalDate());
   await user.type(screen.getByRole("textbox", { name: "成交价" }), "650.200000000001");
   await user.type(screen.getByRole("textbox", { name: "本次汇率" }), "7.185000000001");
 }
