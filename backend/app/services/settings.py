@@ -24,12 +24,14 @@ from app.services.errors import ServiceError
 _PROVIDER_ORDER: tuple[ProviderName, ...] = (
     "akshare",
     "yahoo",
+    "sina",
     "tushare",
     "alpha_vantage",
 )
 _PROVIDER_LABELS: dict[ProviderName, str] = {
     "akshare": "AKShare",
     "yahoo": "Yahoo Finance",
+    "sina": "新浪财经",
     "tushare": "Tushare",
     "alpha_vantage": "Alpha Vantage",
 }
@@ -200,9 +202,15 @@ async def _get_setting(session: AsyncSession, *, lock: bool = False) -> Setting:
 
 def _normalized_priority(value: list[str]) -> list[ProviderName]:
     result: list[ProviderName] = []
-    for candidate in [*value, *_PROVIDER_ORDER]:
+    for candidate in value:
         if candidate in _PROVIDER_ORDER and candidate not in result:
             result.append(candidate)  # type: ignore[arg-type]
+    if result and "sina" not in result:
+        insertion_index = result.index("yahoo") + 1 if "yahoo" in result else len(result)
+        result.insert(insertion_index, "sina")
+    for candidate in _PROVIDER_ORDER:
+        if candidate not in result:
+            result.append(candidate)
     return result
 
 

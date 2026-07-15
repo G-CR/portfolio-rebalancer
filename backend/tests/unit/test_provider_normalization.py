@@ -22,6 +22,8 @@ from app.providers.yahoo import YahooProvider
 from app.services.market_data import (
     ProviderRegistry,
     ProviderSelectionError,
+    _provider_order_for_fx,
+    _provider_order_for_price,
     _safe_failure_summary,
 )
 
@@ -242,6 +244,18 @@ async def test_provider_selection_keeps_primary_failure_when_backup_is_unconfigu
     )
     assert "secret.invalid" not in summary
     assert "SECRET" not in summary
+
+
+def test_international_default_order_uses_sina_before_alpha_vantage() -> None:
+    assert _provider_order_for_price(
+        market="US",
+        preferred_source=None,
+        provider_priority=[],
+    ) == ["yahoo", "sina", "alpha_vantage"]
+    assert _provider_order_for_fx(
+        preferred_source=None,
+        provider_priority=[],
+    ) == ["yahoo", "sina", "alpha_vantage"]
 
 
 def test_invalid_provider_payload_is_rejected() -> None:

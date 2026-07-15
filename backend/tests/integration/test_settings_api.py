@@ -31,7 +31,13 @@ async def test_general_settings_round_trip_decimal_strings(api_client, db_sessio
         "/api/settings/general",
         json={
             "refresh_time": "09:15",
-            "provider_priority": ["akshare", "yahoo", "tushare", "alpha_vantage"],
+            "provider_priority": [
+                "akshare",
+                "yahoo",
+                "sina",
+                "tushare",
+                "alpha_vantage",
+            ],
             "default_tolerance": "0.025",
             "minimum_trade_amount_cny": "800",
             "allow_sell": False,
@@ -51,6 +57,26 @@ async def test_general_settings_round_trip_decimal_strings(api_client, db_sessio
     assert stored.refresh_hour == 9
     assert stored.refresh_minute == 15
     assert stored.default_tolerance == Decimal("0.025")
+
+
+async def test_legacy_provider_priority_inserts_sina_after_yahoo(
+    api_client,
+    db_session,
+) -> None:
+    setting = await db_session.scalar(select(Setting).limit(1))
+    setting.provider_priority = ["akshare", "yahoo", "tushare", "alpha_vantage"]
+    await db_session.commit()
+
+    response = await api_client.get("/api/settings/general")
+
+    assert response.status_code == 200
+    assert response.json()["provider_priority"] == [
+        "akshare",
+        "yahoo",
+        "sina",
+        "tushare",
+        "alpha_vantage",
+    ]
 
 
 async def test_provider_validation_updates_only_safe_status(

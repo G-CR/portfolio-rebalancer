@@ -22,6 +22,7 @@ from app.providers.base import (
     ProviderPayloadError,
     ProviderRequestError,
 )
+from app.providers.sina import SinaProvider
 from app.providers.tushare import TushareProvider
 from app.providers.yahoo import YahooProvider
 from app.schemas.market_data import (
@@ -35,10 +36,10 @@ from app.services.settings import load_provider_credential_reader
 _ONE = Decimal("1")
 _ERROR_SUMMARY_LIMIT = 200
 _DOMESTIC_PROVIDER_ORDER = ("akshare", "tushare")
-_INTERNATIONAL_PROVIDER_ORDER = ("yahoo", "alpha_vantage")
-_FX_PROVIDER_ORDER = ("yahoo", "alpha_vantage")
+_INTERNATIONAL_PROVIDER_ORDER = ("yahoo", "sina", "alpha_vantage")
+_FX_PROVIDER_ORDER = ("yahoo", "sina", "alpha_vantage")
 _PROVIDER_NAMES = frozenset(
-    {"yahoo", "akshare", "tushare", "alpha_vantage"}
+    {"yahoo", "sina", "akshare", "tushare", "alpha_vantage"}
 )
 _SAFE_FAILURE_DETAILS = {
     "provider_not_configured": "Market-data provider is not configured.",
@@ -129,6 +130,7 @@ class ProviderRegistry:
         credentials = NullCredentialReader()
         self._providers = {
             "yahoo": YahooProvider(),
+            "sina": SinaProvider(),
             "akshare": AkshareProvider(),
             "tushare": TushareProvider(credentials),
             "alpha_vantage": AlphaVantageProvider(credentials),

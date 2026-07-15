@@ -313,13 +313,14 @@ export const marketDataCollectionFixture = {
 export const providerSettingsFixture = [
   { provider: "akshare", display_name: "AKShare", requires_key: false, enabled: true, priority: 1, key_status: "not_required", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
   { provider: "yahoo", display_name: "Yahoo Finance", requires_key: false, enabled: true, priority: 2, key_status: "not_required", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
-  { provider: "tushare", display_name: "Tushare", requires_key: true, enabled: false, priority: 3, key_status: "not_configured", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
-  { provider: "alpha_vantage", display_name: "Alpha Vantage", requires_key: true, enabled: true, priority: 4, key_status: "configured", masked_key: "****alue", validation_status: "valid", validation_message: "Credential validation succeeded.", last_validated_at: "2026-07-14T00:00:00Z" },
+  { provider: "sina", display_name: "新浪财经", requires_key: false, enabled: true, priority: 3, key_status: "not_required", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
+  { provider: "tushare", display_name: "Tushare", requires_key: true, enabled: false, priority: 4, key_status: "not_configured", masked_key: null, validation_status: null, validation_message: null, last_validated_at: null },
+  { provider: "alpha_vantage", display_name: "Alpha Vantage", requires_key: true, enabled: true, priority: 5, key_status: "configured", masked_key: "****alue", validation_status: "valid", validation_message: "Credential validation succeeded.", last_validated_at: "2026-07-14T00:00:00Z" },
 ] as const;
 
 export const generalSettingsFixture = {
   refresh_time: "08:00",
-  provider_priority: ["akshare", "yahoo", "tushare", "alpha_vantage"],
+  provider_priority: ["akshare", "yahoo", "sina", "tushare", "alpha_vantage"],
   default_tolerance: "0.02",
   minimum_trade_amount_cny: "500",
   allow_sell: true,

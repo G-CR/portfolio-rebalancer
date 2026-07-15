@@ -9,6 +9,7 @@ import styles from "./HoldingsMarketDataNotice.module.css";
 const providerLabels: Record<string, string> = {
   akshare: "AKShare",
   yahoo: "Yahoo",
+  sina: "新浪财经",
   tushare: "Tushare",
   alpha_vantage: "Alpha Vantage",
 };

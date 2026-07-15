@@ -381,7 +381,7 @@ export interface MarketDataCollection {
   diagnostics: Array<{ code: string; message: string; holding_id: string; symbol: string; fields: string[] }>;
 }
 
-export type ProviderName = "yahoo" | "akshare" | "tushare" | "alpha_vantage";
+export type ProviderName = "yahoo" | "sina" | "akshare" | "tushare" | "alpha_vantage";
 
 export interface ProviderSetting {
   provider: ProviderName;

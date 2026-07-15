@@ -9,14 +9,14 @@ from pydantic_core import PydanticCustomError
 
 from app.schemas.common import DecimalString
 
-ProviderName = Literal["yahoo", "akshare", "tushare", "alpha_vantage"]
+ProviderName = Literal["yahoo", "sina", "akshare", "tushare", "alpha_vantage"]
 
 
 class ProviderSettingUpdate(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     api_key: str | None = Field(default=None, max_length=512)
-    priority: int = Field(ge=1, le=4)
+    priority: int = Field(ge=1, le=5)
     enabled: bool
 
 
@@ -59,7 +59,7 @@ class GeneralSettingsUpdate(BaseModel):
     @field_validator("provider_priority")
     @classmethod
     def validate_provider_priority(cls, value: list[ProviderName]) -> list[ProviderName]:
-        expected = {"yahoo", "akshare", "tushare", "alpha_vantage"}
+        expected = {"yahoo", "sina", "akshare", "tushare", "alpha_vantage"}
         if len(value) != len(expected) or set(value) != expected:
             raise PydanticCustomError(
                 "settings_provider_priority_invalid",

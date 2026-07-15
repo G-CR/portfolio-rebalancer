@@ -51,7 +51,7 @@ it("saves provider keys without rendering plaintext after the request", async ()
         const payload = await request.json() as { api_key: string };
         receivedKey = payload.api_key;
         return HttpResponse.json({
-          ...providerSettingsFixture[2],
+          ...providerSettingsFixture.find((item) => item.provider === "tushare")!,
           enabled: true,
           key_status: "configured",
           masked_key: "****oken",
