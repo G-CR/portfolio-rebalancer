@@ -62,6 +62,12 @@ def test_akshare_normalizes_cn_etf_code() -> None:
     assert quote.source == "akshare"
 
 
+def test_akshare_runtime_dependency_is_installed() -> None:
+    import akshare
+
+    assert callable(akshare.fund_etf_spot_em)
+
+
 def test_invalid_provider_payload_is_rejected() -> None:
     payload = {
         "chart": {

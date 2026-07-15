@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local portfolio rebalancing API"
 requires-python = ">=3.13"
 dependencies = [
+    "akshare>=1.18.64,<2",
     "alembic>=1.16,<2",
     "apscheduler>=3.10.4,<4",
     "asyncpg>=0.30,<1",
