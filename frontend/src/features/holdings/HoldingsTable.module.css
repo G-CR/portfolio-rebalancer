@@ -2,15 +2,16 @@
 .table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
 .table th { height: 38px; padding: 0 var(--space-3); border-bottom: 1px solid var(--color-rule); color: var(--color-muted); font-size: 10px; font-weight: 650; text-align: left; white-space: nowrap; }
 .table td { height: 56px; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-rule); vertical-align: middle; }
-.table th:nth-child(1) { width: 162px; }
-.table th:nth-child(2) { width: 142px; }
-.table th:nth-child(3) { width: 66px; }
-.table th:nth-child(4) { width: 98px; }
-.table th:nth-child(5) { width: 100px; }
-.table th:nth-child(6) { width: 88px; }
-.table th:nth-child(7), .table th:nth-child(8) { width: 82px; }
-.table th:nth-child(9), .table th:nth-child(10) { width: 96px; }
-.table th:last-child { width: 88px; }
+.symbolCol { width: 162px; }
+.accountCol { width: 142px; }
+.currencyCol { width: 66px; }
+.quantityCol { width: 98px; }
+.costPriceCol { width: 100px; }
+.costFxCol { width: 88px; }
+.currentPriceCol, .currentFxCol { width: 82px; }
+.marketValueCol, .pnlCol { width: 96px; }
+.actionsCol { width: 88px; }
+.table th.numericHeader { text-align: right; }
 .table tr[data-archived="true"] { color: var(--color-muted); background: rgb(24 34 29 / 3%); }
 .symbol, .stack { display: grid; gap: 2px; min-width: 0; }
 .symbolHeading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-1); }
@@ -58,6 +59,7 @@
 @media (max-width: 1100px) {
   .table { min-width: 860px; }
   .marketColumn { display: none; }
+  .currentPriceCol, .currentFxCol { width: 0; visibility: collapse; }
 }
 @media (min-width: 760px) {
   .mobileDisclosure { display: none; }
@@ -72,11 +74,13 @@
   .table th:nth-child(6),
   .table th:nth-child(7),
   .table th:nth-child(8) { display: none; }
+  .accountCol, .currencyCol, .costPriceCol, .costFxCol, .currentPriceCol, .currentFxCol { width: 0; visibility: collapse; }
   .desktopActionsColumn { display: none; }
   .table th, .table td { padding-inline: var(--space-1); }
-  .table th:nth-child(1) { width: 100px; }
-  .table th:nth-child(4) { width: 60px; }
-  .table th:nth-child(9), .table th:nth-child(10) { width: 100px; }
+  .symbolCol { width: 100px; }
+  .quantityCol { width: 60px; }
+  .marketValueCol, .pnlCol { width: 100px; }
+  .actionsCol { width: 0; visibility: collapse; }
   .symbol span { max-width: 92px; }
   .actions { gap: 2px; }
   .iconButton { width: 28px; min-height: 28px; }

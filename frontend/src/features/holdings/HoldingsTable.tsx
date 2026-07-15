@@ -89,18 +89,31 @@ export function HoldingsTable({ holdings, assetClasses, analyticsById, incomplet
   return (
     <div className={styles.tableWrap} role="region" aria-label="持仓与成本表格" tabIndex={0}>
       <table className={styles.table}>
+        <colgroup>
+          <col className={styles.symbolCol} />
+          <col className={styles.accountCol} />
+          <col className={styles.currencyCol} />
+          <col className={styles.quantityCol} />
+          <col className={styles.costPriceCol} />
+          <col className={styles.costFxCol} />
+          <col className={styles.currentPriceCol} />
+          <col className={styles.currentFxCol} />
+          <col className={styles.marketValueCol} />
+          <col className={styles.pnlCol} />
+          <col className={styles.actionsCol} />
+        </colgroup>
         <thead>
           <tr>
             <th scope="col">标的</th>
             <th scope="col">账户 / 类别</th>
             <th scope="col">币种</th>
-            <th scope="col">份额</th>
-            <th scope="col">成本价</th>
-            <th scope="col">成本汇率</th>
-            <th scope="col">当前价</th>
-            <th scope="col">当前汇率</th>
-            <th scope="col">市值</th>
-            <th scope="col">浮动盈亏</th>
+            <th className={styles.numericHeader} scope="col">份额</th>
+            <th className={styles.numericHeader} scope="col">成本价</th>
+            <th className={styles.numericHeader} scope="col">成本汇率</th>
+            <th className={`${styles.numericHeader} ${styles.marketColumn}`} scope="col">当前价</th>
+            <th className={`${styles.numericHeader} ${styles.marketColumn}`} scope="col">当前汇率</th>
+            <th className={styles.numericHeader} scope="col">市值</th>
+            <th className={styles.numericHeader} scope="col">浮动盈亏</th>
             <th className={styles.desktopActionsColumn} scope="col"><span className={styles.srOnly}>操作</span></th>
           </tr>
         </thead>

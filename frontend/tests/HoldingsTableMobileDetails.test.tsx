@@ -84,6 +84,16 @@ describe("HoldingsTable mobile row details", () => {
     expect(within(summaryRow).getByText("+7,049")).toBeInTheDocument();
   });
 
+  it("shares fixed columns and right-aligns every numeric heading", () => {
+    renderTable();
+
+    expect(document.querySelectorAll("colgroup col")).toHaveLength(11);
+    for (const label of ["份额", "成本价", "成本汇率", "当前价", "当前汇率", "市值", "浮动盈亏"]) {
+      expect(screen.getByRole("columnheader", { name: label })).toHaveClass(styles.numericHeader);
+    }
+    expect(tableCss).toMatch(/\.numericHeader[^\{]*\{[^}]*text-align:\s*right/s);
+  });
+
   it("expands all hidden fields and routes mobile actions without changing table semantics", async () => {
     const user = userEvent.setup();
     const { onCommand } = renderTable();
@@ -182,6 +192,7 @@ describe("HoldingsTable mobile row details", () => {
     expect(tableCss).toMatch(/\.mobileDetailRow:not\(\[hidden\]\)\s*\{[^}]*display:\s*table-row/s);
     expect(tableCss).toMatch(/\.desktopActionsColumn\s*\{[^}]*display:\s*none/s);
     expect(tableCss).toContain(".table th:nth-child(2)");
-    expect(tableCss).toContain(".table th:nth-child(10)");
+    expect(tableCss).toContain(".accountCol");
+    expect(tableCss).toContain(".marketValueCol, .pnlCol");
   });
 });
