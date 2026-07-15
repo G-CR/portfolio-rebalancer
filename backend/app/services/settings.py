@@ -18,6 +18,8 @@ from app.schemas.settings import (
     ProviderName,
     ProviderSettingResponse,
     ProviderSettingUpdate,
+    RebalanceDefaultsResponse,
+    RebalanceDefaultsUpdate,
 )
 from app.services.errors import ServiceError
 
@@ -190,6 +192,27 @@ async def update_general_settings(
     return _general_response(setting)
 
 
+async def get_rebalance_defaults(session: AsyncSession) -> RebalanceDefaultsResponse:
+    return _rebalance_defaults_response(await _get_setting(session))
+
+
+async def update_rebalance_defaults(
+    session: AsyncSession,
+    payload: RebalanceDefaultsUpdate,
+) -> RebalanceDefaultsResponse:
+    setting = await _get_setting(session, lock=True)
+    setting.rebalance_available_cny = payload.available_cny
+    setting.rebalance_available_usd = payload.available_usd
+    setting.rebalance_valuation_basis = payload.valuation_basis
+    setting.default_tolerance = payload.tolerance
+    setting.minimum_trade_amount_cny = payload.minimum_trade_cny
+    setting.allow_sell = payload.allow_sell
+    setting.allow_fx = payload.allow_fx
+    setting.updated_at = datetime.now(UTC)
+    await session.flush()
+    return _rebalance_defaults_response(setting)
+
+
 async def _get_setting(session: AsyncSession, *, lock: bool = False) -> Setting:
     statement = select(Setting).limit(1)
     if lock:
@@ -245,6 +268,19 @@ def _general_response(setting: Setting) -> GeneralSettingsResponse:
         provider_priority=_normalized_priority(setting.provider_priority),
         default_tolerance=setting.default_tolerance,
         minimum_trade_amount_cny=setting.minimum_trade_amount_cny,
+        allow_sell=setting.allow_sell,
+        allow_fx=setting.allow_fx,
+        updated_at=setting.updated_at,
+    )
+
+
+def _rebalance_defaults_response(setting: Setting) -> RebalanceDefaultsResponse:
+    return RebalanceDefaultsResponse(
+        available_cny=setting.rebalance_available_cny,
+        available_usd=setting.rebalance_available_usd,
+        valuation_basis=setting.rebalance_valuation_basis,
+        tolerance=setting.default_tolerance,
+        minimum_trade_cny=setting.minimum_trade_amount_cny,
         allow_sell=setting.allow_sell,
         allow_fx=setting.allow_fx,
         updated_at=setting.updated_at,

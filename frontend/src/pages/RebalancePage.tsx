@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
@@ -6,6 +6,7 @@ import type { RebalancePlan, RebalancePreviewPayload, RebalanceValuationBasis } 
 import { useAssetClasses } from "../features/assetClasses/api";
 import { formatPercent } from "../features/analytics/format";
 import { useHoldings } from "../features/holdings/api";
+import { useRebalanceDefaults, useSaveRebalanceDefaults } from "../features/settings/api";
 import {
   useCancelRebalancePlan,
   useCompleteRebalancePlan,
@@ -41,6 +42,25 @@ function ratioFromPercent(value: string) {
   return Number.isFinite(parsed) ? String(parsed / 100) : value;
 }
 
+function percentFromRatio(value: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return value;
+  const formatted = (parsed * 100).toFixed(8).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  return formatted || "0";
+}
+
+function defaultsPayloadFor(form: RebalanceFormState) {
+  return {
+    available_cny: form.availableCny || "0",
+    available_usd: form.availableUsd || "0",
+    valuation_basis: form.valuationBasis,
+    tolerance: ratioFromPercent(form.tolerance),
+    minimum_trade_cny: form.minimumTradeCny || "0",
+    allow_sell: form.allowSell,
+    allow_fx: form.allowFx,
+  };
+}
+
 function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePreviewPayload {
   return {
     session_token: sessionToken,
@@ -62,7 +82,12 @@ export function RebalancePage() {
   const [isDirty, setIsDirty] = useState(false);
   const [plan, setPlan] = useState<RebalancePlan | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [defaultsWarning, setDefaultsWarning] = useState<string | null>(null);
+  const [defaultsReady, setDefaultsReady] = useState(false);
   const preview = useRebalancePreview();
+  const defaults = useRebalanceDefaults();
+  const saveDefaults = useSaveRebalanceDefaults();
+  const defaultsHydrated = useRef(false);
   const assetClasses = useAssetClasses();
   const holdings = useHoldings();
   const createPlan = useCreateRebalancePlan();
@@ -71,10 +96,36 @@ export function RebalancePage() {
   const completePlan = useCompleteRebalancePlan();
   const transitionPending = createPlan.isPending || startPlan.isPending || cancelPlan.isPending || completePlan.isPending;
 
+  useEffect(() => {
+    if (defaultsHydrated.current || (!defaults.data && !defaults.isError)) return;
+    defaultsHydrated.current = true;
+    if (defaults.data) {
+      setForm({
+        availableCny: defaults.data.available_cny,
+        availableUsd: defaults.data.available_usd,
+        tolerance: percentFromRatio(defaults.data.tolerance),
+        minimumTradeCny: defaults.data.minimum_trade_cny,
+        allowSell: defaults.data.allow_sell,
+        allowFx: defaults.data.allow_fx,
+        valuationBasis: defaults.data.valuation_basis,
+        acknowledgeStaleData: false,
+      });
+    }
+    setDefaultsReady(true);
+  }, [defaults.data, defaults.isError]);
+
   const runPreview = async (nextForm = form) => {
     setOperationError(null);
+    setDefaultsWarning(null);
+    let defaultsSaveFailed = false;
+    try {
+      await saveDefaults.mutateAsync(defaultsPayloadFor(nextForm));
+    } catch {
+      defaultsSaveFailed = true;
+    }
     try {
       await preview.mutateAsync(payloadFor(nextForm, sessionToken.current));
+      if (defaultsSaveFailed) setDefaultsWarning("测算成功，但默认配置保存失败。");
       setPlan(null);
       setIsDirty(false);
     } catch {
@@ -149,8 +200,11 @@ export function RebalancePage() {
         <div className={styles.basisStatus}><span>当前口径</span><strong>{form.valuationBasis === "actual" ? "实际人民币占比" : "剔汇率模拟"}</strong></div>
       </header>
       <div className={styles.workspace}>
-        <RebalanceInputs value={form} pending={preview.isPending} hasPreview={Boolean(currentPreview)} onChange={(next) => { setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
-        <main className={styles.results}>
+        {!defaultsReady ? <div className={styles.defaultsLoading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入上次使用的资金与约束</div> : <>
+          <RebalanceInputs value={form} pending={preview.isPending || saveDefaults.isPending} hasPreview={Boolean(currentPreview)} onChange={(next) => { setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
+          <main className={styles.results}>
+          {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
+          {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
           {!preview.isPending && !currentPreview && !preview.error ? <div className={styles.previewPrompt}>
             <Calculator size={18} aria-hidden="true" /><div><strong>配置本次资金与约束后开始测算</strong><span>行情刷新将在你点击开始测算后执行。</span></div>
           </div> : null}
@@ -172,8 +226,9 @@ export function RebalancePage() {
             </section>
           </> : null}
           {operationError ? <p className={styles.error} role="alert">{operationError}</p> : null}
-          <RebalanceLifecycle plan={plan} disabled={lifecycleDisabled} pending={transitionPending} onSave={() => void save()} onStart={() => void start()} onCancel={() => void cancel()} onComplete={() => void complete()} />
-        </main>
+            <RebalanceLifecycle plan={plan} disabled={lifecycleDisabled} pending={transitionPending} onSave={() => void save()} onStart={() => void start()} onCancel={() => void cancel()} onComplete={() => void complete()} />
+          </main>
+        </>}
       </div>
     </section>
   );

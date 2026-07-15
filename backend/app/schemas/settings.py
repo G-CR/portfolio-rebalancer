@@ -91,3 +91,50 @@ class GeneralSettingsResponse(GeneralSettingsUpdate):
     def serialize_decimal(self, value: Decimal) -> str:
         normalized = format(value.normalize(), "f")
         return "0" if normalized == "-0" else normalized
+
+
+class RebalanceDefaultsUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    available_cny: DecimalString
+    available_usd: DecimalString
+    valuation_basis: Literal["actual", "fx_neutral"]
+    tolerance: DecimalString
+    minimum_trade_cny: DecimalString
+    allow_sell: bool
+    allow_fx: bool
+
+    @field_validator(
+        "available_cny",
+        "available_usd",
+        "tolerance",
+        "minimum_trade_cny",
+    )
+    @classmethod
+    def validate_numeric_defaults(cls, value: Decimal, info) -> Decimal:
+        if not value.is_finite() or value < 0:
+            raise PydanticCustomError(
+                "negative_numeric_field",
+                "{field} must be non-negative.",
+                {"field": info.field_name},
+            )
+        if info.field_name == "tolerance" and value > 1:
+            raise PydanticCustomError(
+                "settings_tolerance_out_of_range",
+                "tolerance must not exceed 1.",
+            )
+        return value
+
+
+class RebalanceDefaultsResponse(RebalanceDefaultsUpdate):
+    updated_at: datetime
+
+    @field_serializer(
+        "available_cny",
+        "available_usd",
+        "tolerance",
+        "minimum_trade_cny",
+    )
+    def serialize_decimal(self, value: Decimal) -> str:
+        normalized = format(value.normalize(), "f")
+        return "0" if normalized == "-0" else normalized

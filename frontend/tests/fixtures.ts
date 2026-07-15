@@ -327,3 +327,14 @@ export const generalSettingsFixture = {
   allow_fx: true,
   updated_at: "2026-07-14T00:00:00Z",
 } as const;
+
+export const rebalanceDefaultsFixture = {
+  available_cny: "0",
+  available_usd: "0",
+  valuation_basis: "actual",
+  tolerance: "0.02",
+  minimum_trade_cny: "500",
+  allow_sell: true,
+  allow_fx: true,
+  updated_at: "2026-07-14T00:00:00Z",
+} as const;

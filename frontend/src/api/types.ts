@@ -405,3 +405,14 @@ export interface GeneralSettings {
   allow_fx: boolean;
   updated_at: string;
 }
+
+export interface RebalanceDefaults {
+  available_cny: DecimalString;
+  available_usd: DecimalString;
+  valuation_basis: RebalanceValuationBasis;
+  tolerance: DecimalString;
+  minimum_trade_cny: DecimalString;
+  allow_sell: boolean;
+  allow_fx: boolean;
+  updated_at: string;
+}

@@ -10,6 +10,8 @@ test("rebalance workflow switches basis and completes baseline lifecycle", async
   });
   await page.goto("/rebalance");
   await expect(page.getByText("配置本次资金与约束后开始测算")).toBeVisible();
+  await page.getByRole("textbox", { name: "人民币" }).fill("12500");
+  await page.getByRole("checkbox", { name: /允许卖出/ }).uncheck();
   await page.getByRole("radio", { name: "剔汇率口径" }).click();
   await expect(page.getByText("剔汇率模拟")).toBeVisible();
   await page.getByRole("button", { name: "开始测算" }).click();
@@ -20,4 +22,11 @@ test("rebalance workflow switches basis and completes baseline lifecycle", async
   await expect(page.getByText("再平衡进行中")).toBeVisible();
   await page.getByRole("button", { name: "完成再平衡并建立新基准" }).click();
   await expect(page.getByText("本次再平衡已完成，新汇率基准已建立")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "人民币" })).toHaveValue("12500");
+  await expect(page.getByRole("radio", { name: "剔汇率口径" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /允许卖出/ })).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "开始测算" })).toBeVisible();
+  await expect(page.getByText("配置本次资金与约束后开始测算")).toBeVisible();
 });

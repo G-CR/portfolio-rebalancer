@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
-import type { GeneralSettings, ProviderName, ProviderSetting } from "../../api/types";
+import type { GeneralSettings, ProviderName, ProviderSetting, RebalanceDefaults } from "../../api/types";
 
 export const providerSettingsQueryKey = ["settings", "providers"] as const;
 export const generalSettingsQueryKey = ["settings", "general"] as const;
+export const rebalanceDefaultsQueryKey = ["settings", "rebalance-defaults"] as const;
 
 export function useProviderSettings() {
   return useQuery({
@@ -60,5 +61,33 @@ export function useSaveGeneralSettings() {
       body: jsonBody(payload),
     }),
     onSuccess: (saved) => queryClient.setQueryData(generalSettingsQueryKey, saved),
+  });
+}
+
+export function useRebalanceDefaults() {
+  return useQuery({
+    queryKey: rebalanceDefaultsQueryKey,
+    queryFn: () => apiRequest<RebalanceDefaults>("/api/settings/rebalance-defaults"),
+  });
+}
+
+export function useSaveRebalanceDefaults() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: Omit<RebalanceDefaults, "updated_at">) => apiRequest<RebalanceDefaults>("/api/settings/rebalance-defaults", {
+      method: "PUT",
+      body: jsonBody(payload),
+    }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(rebalanceDefaultsQueryKey, saved);
+      queryClient.setQueryData<GeneralSettings>(generalSettingsQueryKey, (current) => current ? {
+        ...current,
+        default_tolerance: saved.tolerance,
+        minimum_trade_amount_cny: saved.minimum_trade_cny,
+        allow_sell: saved.allow_sell,
+        allow_fx: saved.allow_fx,
+        updated_at: saved.updated_at,
+      } : current);
+    },
   });
 }

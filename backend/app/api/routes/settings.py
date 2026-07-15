@@ -13,13 +13,17 @@ from app.schemas.settings import (
     ProviderName,
     ProviderSettingResponse,
     ProviderSettingUpdate,
+    RebalanceDefaultsResponse,
+    RebalanceDefaultsUpdate,
 )
 from app.services.errors import ServiceError
 from app.services.settings import (
     get_general_settings,
+    get_rebalance_defaults,
     list_provider_settings,
     test_provider_setting,
     update_general_settings,
+    update_rebalance_defaults,
     update_provider_setting,
 )
 
@@ -67,6 +71,24 @@ async def put_general_setting(
     session: AsyncSession = Depends(get_session),
 ) -> GeneralSettingsResponse:
     return await _run_write(session, lambda: update_general_settings(session, payload))
+
+
+@router.get("/rebalance-defaults", response_model=RebalanceDefaultsResponse)
+async def get_rebalance_default_setting(
+    session: AsyncSession = Depends(get_session),
+) -> RebalanceDefaultsResponse:
+    return await get_rebalance_defaults(session)
+
+
+@router.put("/rebalance-defaults", response_model=RebalanceDefaultsResponse)
+async def put_rebalance_default_setting(
+    payload: RebalanceDefaultsUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> RebalanceDefaultsResponse:
+    return await _run_write(
+        session,
+        lambda: update_rebalance_defaults(session, payload),
+    )
 
 
 async def _run_write(session: AsyncSession, operation):

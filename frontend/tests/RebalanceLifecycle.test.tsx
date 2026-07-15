@@ -3,13 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 
 import { RebalancePage } from "../src/pages/RebalancePage";
-import { assetClassFixtures, holdingFixture, rebalancePlanFixture, rebalancePreviewFixture } from "./fixtures";
+import { assetClassFixtures, holdingFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
 function handlers() {
   return [
     http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
     http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
+    http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
+    http.put("/api/settings/rebalance-defaults", async ({ request }) => HttpResponse.json({ ...await request.json() as object, updated_at: "2026-07-15T00:00:00Z" })),
     http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
     http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
     http.post(`/api/rebalance/plans/${rebalancePlanFixture.id}/start`, () => HttpResponse.json({

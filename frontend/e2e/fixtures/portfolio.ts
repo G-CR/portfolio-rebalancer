@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { assetClassFixtures, generalSettingsFixture, holdingFixture, marketDataCollectionFixture, portfolioFixture, providerSettingsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "../../tests/fixtures";
+import { assetClassFixtures, generalSettingsFixture, holdingFixture, marketDataCollectionFixture, portfolioFixture, providerSettingsFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "../../tests/fixtures";
 
 type SeedPortfolioOptions = {
   holdings?: object[];
@@ -16,6 +16,7 @@ export async function seedPortfolio(
   options: SeedPortfolioOptions = {},
 ) {
   let planStatus = "draft";
+  let rebalanceDefaults = { ...rebalanceDefaultsFixture };
   const holdings = options.holdings ?? (state === "empty" ? [] : [holdingFixture]);
   const analytics = options.analytics ?? (state === "empty" ? { ...portfolioFixture, decision: { ...portfolioFixture.decision, status: "setup", title: "开始建立组合", primary_action: "add_holding" }, asset_classes: [], holdings: [] } : portfolioFixture);
   await page.route("**/*", async (route) => {
@@ -32,6 +33,11 @@ export async function seedPortfolio(
     if (path === "/api/market-data") return route.fulfill({ json: marketDataCollectionFixture });
     if (path === "/api/settings/providers") return route.fulfill({ json: providerSettingsFixture });
     if (path === "/api/settings/general") return route.fulfill({ json: generalSettingsFixture });
+    if (path === "/api/settings/rebalance-defaults" && route.request().method() === "PUT") {
+      rebalanceDefaults = { ...rebalanceDefaults, ...route.request().postDataJSON(), updated_at: new Date().toISOString() };
+      return route.fulfill({ json: rebalanceDefaults });
+    }
+    if (path === "/api/settings/rebalance-defaults") return route.fulfill({ json: rebalanceDefaults });
     if (path === "/api/rebalance/preview") return route.fulfill({ json: rebalancePreviewFixture });
     if (path === "/api/rebalance/plans" && route.request().method() === "POST") return route.fulfill({ status: 201, json: { ...rebalancePlanFixture, status: planStatus } });
     if (path.endsWith("/start")) { planStatus = "in_progress"; return route.fulfill({ json: { ...rebalancePlanFixture, status: planStatus, before_snapshot_id: "snapshot-before" } }); }

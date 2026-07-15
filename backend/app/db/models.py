@@ -356,6 +356,10 @@ class Setting(Base):
             f"id = {DEFAULT_SETTINGS_ID_SQL}",
             name="ck_settings_singleton_id",
         ),
+        CheckConstraint(
+            "rebalance_valuation_basis IN ('actual', 'fx_neutral')",
+            name="ck_settings_rebalance_valuation_basis",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -373,6 +377,24 @@ class Setting(Base):
     )
     allow_sell: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     allow_fx: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    rebalance_available_cny: Mapped[Decimal] = mapped_column(
+        MONEY_PRECISION,
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    rebalance_available_usd: Mapped[Decimal] = mapped_column(
+        MONEY_PRECISION,
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    rebalance_valuation_basis: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="actual",
+        server_default="actual",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

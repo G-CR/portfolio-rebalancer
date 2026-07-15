@@ -9,6 +9,20 @@ import { MemoryRouter } from "react-router-dom";
 import { createQueryClient } from "../src/app/providers";
 
 export const server = setupServer(
+  http.get("/api/settings/rebalance-defaults", () => HttpResponse.json({
+    available_cny: "0",
+    available_usd: "0",
+    valuation_basis: "actual",
+    tolerance: "0.02",
+    minimum_trade_cny: "500",
+    allow_sell: true,
+    allow_fx: true,
+    updated_at: "2026-07-14T00:00:00Z",
+  })),
+  http.put("/api/settings/rebalance-defaults", async ({ request }) => HttpResponse.json({
+    ...await request.json() as object,
+    updated_at: "2026-07-15T00:00:00Z",
+  })),
   http.get("/api/analytics/portfolio", () => HttpResponse.json({
     as_of: null,
     data_status: "setup",
