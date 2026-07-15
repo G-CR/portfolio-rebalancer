@@ -40,6 +40,7 @@ from app.services.snapshots import (
 logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
+_PREVIEW_REFRESH_TIMEOUT_SECONDS = 20
 _SESSION_REFRESH_LOCK = asyncio.Lock()
 _REFRESHED_PREVIEW_SESSIONS: set[str] = set()
 _REASON_TEXT = {
@@ -375,7 +376,8 @@ async def _refresh_before_first_preview(session: AsyncSession, session_token: st
             return False
         _REFRESHED_PREVIEW_SESSIONS.add(session_token)
     try:
-        await refresh_all_required_data(session)
+        async with asyncio.timeout(_PREVIEW_REFRESH_TIMEOUT_SECONDS):
+            await refresh_all_required_data(session)
     except Exception:
         logger.warning("Rebalance preview refresh failed session_token=%s", session_token, exc_info=True)
     return True

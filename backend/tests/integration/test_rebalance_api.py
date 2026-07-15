@@ -214,6 +214,29 @@ async def test_preview_refreshes_once_per_browser_session_and_includes_basis_com
     assert second_payload["refresh_attempted"] is False
 
 
+async def test_preview_uses_existing_values_when_initial_refresh_times_out(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+
+    async def _slow_refresh(_session) -> None:
+        await asyncio.sleep(0.1)
+
+    monkeypatch.setattr(rebalancing_service, "refresh_all_required_data", _slow_refresh)
+    monkeypatch.setattr(rebalancing_service, "_PREVIEW_REFRESH_TIMEOUT_SECONDS", 0.01)
+
+    response = await api_client.post(
+        "/api/rebalance/preview",
+        json=_preview_payload(session_token="refresh-timeout-session"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["refresh_attempted"] is True
+    assert response.json()["data_status"] == "valid"
+
+
 async def test_preview_requires_acknowledgement_before_using_stale_market_data(
     api_client,
     db_session,
