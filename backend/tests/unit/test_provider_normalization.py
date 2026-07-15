@@ -97,7 +97,7 @@ def test_yahoo_sends_headers_accepted_by_chart_api(monkeypatch) -> None:
     def fake_urlopen(request, *, timeout):
         nonlocal captured_request
         captured_request = request
-        assert timeout == 15
+        assert timeout == 5
         return _Response()
 
     monkeypatch.setattr(yahoo_module, "urlopen", fake_urlopen)

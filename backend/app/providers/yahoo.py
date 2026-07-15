@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from app.providers.base import MarketQuote, ProviderPayloadError, ProviderRequestError, decimal_from_value
 
 _STORAGE_QUANTUM = Decimal("0.000000000001")
+_REQUEST_TIMEOUT_SECONDS = 5
 
 
 class YahooProvider:
@@ -108,7 +109,7 @@ class YahooProvider:
             },
         )
         try:
-            with urlopen(request, timeout=15) as response:
+            with urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:  # pragma: no cover - network behavior
             raise ProviderRequestError("Yahoo request failed.") from exc
