@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
+import { portfolioAnalyticsKey } from "../../api/queryKeys";
 import type { MarketDataCollection, MarketDataStatus } from "../../api/types";
 
 export const marketDataQueryKey = ["market-data"] as const;
@@ -16,7 +17,10 @@ export function useRefreshMarketData() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => apiRequest<MarketDataCollection>("/api/market-data/refresh", { method: "POST" }),
-    onSuccess: (data) => queryClient.setQueryData(marketDataQueryKey, data),
+    onSuccess: (data) => {
+      queryClient.setQueryData(marketDataQueryKey, data);
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+    },
   });
 }
 

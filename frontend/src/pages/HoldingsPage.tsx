@@ -9,6 +9,7 @@ import { AddHoldingDrawer } from "../features/holdings/AddHoldingDrawer";
 import { AdjustmentHistoryDrawer } from "../features/holdings/AdjustmentHistoryDrawer";
 import { CorrectionDrawer } from "../features/holdings/CorrectionDrawer";
 import { HoldingsTable, type HoldingCommand } from "../features/holdings/HoldingsTable";
+import { HoldingsMarketDataNotice } from "../features/holdings/HoldingsMarketDataNotice";
 import { PurchaseDrawer } from "../features/holdings/PurchaseDrawer";
 import { SaleDrawer } from "../features/holdings/SaleDrawer";
 import { useArchiveHolding, useHoldings } from "../features/holdings/api";
@@ -85,7 +86,7 @@ export function HoldingsPage() {
         </div>
       </header>
       {error ? <div className={styles.alert} role="alert">{error}</div> : null}
-      {analyticsIncomplete ? <div className={styles.alert} role="alert">{incompleteItems.map((item) => `${item.symbol} ${item.input === "price" ? "行情" : "汇率"}数据不完整`).join("；")}</div> : null}
+      {analyticsIncomplete ? <HoldingsMarketDataNotice items={incompleteItems} /> : null}
       {filterLoading ? <div className={styles.filterStatus} role="status">正在载入已归档持仓...</div> : null}
       {!showArchived && activeCount === 0 ? (
         <div className={styles.emptyState}>
