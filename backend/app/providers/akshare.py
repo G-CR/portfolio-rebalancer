@@ -30,7 +30,9 @@ class AkshareProvider:
             raise ProviderPayloadError("AKShare payload did not include the requested symbol.")
 
         timestamp_text = (
-            row.get("时间")
+            row.get("更新时间")
+            or row.get("数据日期")
+            or row.get("时间")
             or row.get("最新交易日")
             or row.get("日期")
             or row.get("date")

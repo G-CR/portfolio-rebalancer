@@ -75,6 +75,22 @@ def test_akshare_normalizes_cn_etf_code() -> None:
     assert quote.source == "akshare"
 
 
+def test_akshare_normalizes_current_etf_spot_timestamp_fields() -> None:
+    payload = [
+        {
+            "代码": "563020",
+            "最新价": 1.136,
+            "数据日期": "2026-07-15 00:00:00",
+            "更新时间": "2026-07-15 10:21:26+08:00",
+        }
+    ]
+
+    quote = AkshareProvider().normalize_price("563020", payload)
+
+    assert quote.value == Decimal("1.136")
+    assert quote.as_of == datetime.fromisoformat("2026-07-15 10:21:26+08:00")
+
+
 def test_akshare_runtime_dependency_is_installed() -> None:
     import akshare
 
