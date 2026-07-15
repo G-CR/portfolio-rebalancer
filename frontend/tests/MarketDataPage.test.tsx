@@ -32,6 +32,16 @@ it("keeps the last value visible when a source failed", async () => {
   expect(within(row).getByText("Yahoo 请求超时，当前使用 07\/10 收盘值")).toBeInTheDocument();
 });
 
+it("uses consistent credential and status columns for every provider", async () => {
+  renderWithProviders(<MarketDataPage />, { handlers: pageHandlers() });
+
+  for (const name of ["AKShare", "Tushare"]) {
+    const provider = await screen.findByRole("group", { name: `${name} 设置` });
+    expect(within(provider).getByText("凭据")).toBeInTheDocument();
+    expect(within(provider).getByText("状态")).toBeInTheDocument();
+  }
+});
+
 it("requires a note for a manual override", async () => {
   renderWithProviders(<OverrideDrawer marketKey="fx:USD/CNY" symbol="USD/CNY" open onClose={() => undefined} />);
   const user = userEvent.setup();

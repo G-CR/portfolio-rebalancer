@@ -4,6 +4,8 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { RebalancePlan, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
 import { useAssetClasses } from "../features/assetClasses/api";
+import { formatPercent } from "../features/analytics/format";
+import { useHoldings } from "../features/holdings/api";
 import {
   useCancelRebalancePlan,
   useCompleteRebalancePlan,
@@ -62,6 +64,7 @@ export function RebalancePage() {
   const [operationError, setOperationError] = useState<string | null>(null);
   const preview = useRebalancePreview();
   const assetClasses = useAssetClasses();
+  const holdings = useHoldings();
   const createPlan = useCreateRebalancePlan();
   const startPlan = useStartRebalancePlan();
   const cancelPlan = useCancelRebalancePlan();
@@ -139,6 +142,9 @@ export function RebalancePage() {
   const staleError = preview.error instanceof ApiError && preview.error.code === "REBALANCE_STALE_DATA_ACK_REQUIRED";
   const generalError = preview.error instanceof ApiError && !staleError ? preview.error.message : null;
   const currentPreview = preview.data;
+  const holdingNames = Object.fromEntries(
+    (holdings.data ?? []).map((holding) => [holding.symbol, holding.name]),
+  );
   const lifecycleDisabled = isDirty || !currentPreview || staleError || (currentPreview.data_status === "stale" && !form.acknowledgeStaleData);
 
   return (
@@ -161,10 +167,10 @@ export function RebalancePage() {
             {currentPreview.data_status === "stale" ? <div className={styles.dataWarning}><AlertTriangle size={16} aria-hidden="true" />本方案使用了已确认的过期行情数据。</div> : null}
             <RebalanceSummary preview={currentPreview} />
             <ProjectedAllocation preview={currentPreview} assetClasses={assetClasses.data ?? []} tolerance={ratioFromPercent(form.tolerance)} />
-            <TradeSuggestions trades={currentPreview.result.trades} />
+            <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} />
             <section className={styles.comparison} aria-labelledby="fx-comparison-title">
               <header className={styles.sectionHeading}><div><p>FX COMPARISON</p><h2 id="fx-comparison-title">汇率口径对照</h2></div></header>
-              <p>切换为{currentPreview.fx_comparison.valuation_basis === "actual" ? "实际占比" : "剔汇率口径"}时，建议交易为 <b>{currentPreview.fx_comparison.result.trades.length}</b> 笔，最大偏离为 <b>{currentPreview.fx_comparison.result.max_drift_after}</b>。用于判断比例变化是否主要来自汇率。</p>
+              <p>切换为{currentPreview.fx_comparison.valuation_basis === "actual" ? "实际占比" : "剔汇率口径"}时，建议交易为 <b>{currentPreview.fx_comparison.result.trades.length}</b> 笔，最大偏离为 <b>{formatPercent(currentPreview.fx_comparison.result.max_drift_after, 2)}</b>。用于判断比例变化是否主要来自汇率。</p>
             </section>
           </> : null}
           {operationError ? <p className={styles.error} role="alert">{operationError}</p> : null}

@@ -4,12 +4,13 @@ import { http, HttpResponse } from "msw";
 import axe from "axe-core";
 
 import { RebalancePage } from "../src/pages/RebalancePage";
-import { assetClassFixtures, rebalancePreviewFixture } from "./fixtures";
+import { assetClassFixtures, holdingFixture, rebalancePreviewFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
 function previewHandlers() {
   return [
     http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+    http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
     http.post("/api/rebalance/preview", async ({ request }) => {
       const payload = await request.json() as { valuation_basis: string };
       return HttpResponse.json({
@@ -51,11 +52,25 @@ it("shows a reason for every sell suggestion", async () => {
   expect(within(sellRow).getByText("新增资金不足以消除高配")).toBeInTheDocument();
 });
 
+it("shows the user-entered holding name beside the trade symbol", async () => {
+  renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+
+  const sellRow = await screen.findByRole("row", { name: /SPY 卖出/ });
+  expect(within(sellRow).getByText("SPDR S&P 500 ETF Trust")).toBeInTheDocument();
+});
+
+it("formats the comparison drift as a percentage", async () => {
+  renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+
+  expect(await screen.findByText("0.30%")).toBeInTheDocument();
+});
+
 it("requests a fresh preview when valuation basis changes", async () => {
   const requestedBases: string[] = [];
   renderWithProviders(<RebalancePage />, {
     handlers: [
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
       http.post("/api/rebalance/preview", async ({ request }) => {
         const payload = await request.json() as { valuation_basis: string };
         requestedBases.push(payload.valuation_basis);
@@ -75,6 +90,7 @@ it("requires stale-data acknowledgement before saving", async () => {
   renderWithProviders(<RebalancePage />, {
     handlers: [
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
       http.post("/api/rebalance/preview", () => HttpResponse.json({
         detail: {
           code: "REBALANCE_STALE_DATA_ACK_REQUIRED",

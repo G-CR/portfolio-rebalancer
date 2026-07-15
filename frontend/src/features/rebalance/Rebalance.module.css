@@ -53,6 +53,9 @@
 .trades th, .trades td { height: 48px; padding: 0 var(--space-3); border-bottom: 1px solid var(--color-rule); text-align: left; }
 .trades thead th { height: 34px; color: var(--color-muted); font-size: 10px; font-weight: 500; }
 .trades tbody th, .trades tbody td:nth-child(-n+5) { font-family: var(--font-data); }
+.tradeIdentity { display: grid; gap: 2px; }
+.tradeIdentity strong { font-size: 12px; }
+.tradeIdentity small { color: var(--color-muted); font-family: var(--font-ui); font-size: 10px; font-weight: 400; }
 .trades tbody td:last-child { min-width: 220px; color: var(--color-muted); font-family: var(--font-ui); font-size: 11px; line-height: 1.45; }
 .buy { color: var(--color-actual); }
 .sell { color: var(--color-fx); }

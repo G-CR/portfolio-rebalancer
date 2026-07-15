@@ -18,10 +18,12 @@
 .table { width: 100%; min-width: 920px; border-collapse: collapse; }
 .table th, .table td { height: 54px; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-rule); text-align: left; vertical-align: middle; }
 .table thead th { height: 34px; color: var(--color-muted); font-size: 10px; font-weight: 500; }
-.table tbody th { display: grid; align-content: center; gap: 2px; }
 .table tbody th strong, .table tbody td:nth-child(-n+5) { font-family: var(--font-data); }
 .table tbody th span, .table td small { color: var(--color-muted); font-family: var(--font-ui); font-size: 10px; font-weight: 400; }
-.table td:nth-child(6) { display: grid; align-content: center; gap: 3px; max-width: 280px; }
+.dataIdentity, .statusStack { display: grid; align-content: center; gap: 2px; }
+.dataIdentity strong { color: var(--color-ink); font-family: var(--font-data); font-size: 12px; }
+.table td:nth-child(6) { max-width: 280px; }
+.statusStack { gap: 3px; }
 .goodStatus { color: var(--color-planned); }
 .badStatus { color: var(--color-fx); }
 .manualStatus { color: var(--color-target); }
@@ -30,12 +32,14 @@
 .rowActions button { cursor: pointer; }
 .loading, .muted { margin: var(--space-4) 0 0; padding: var(--space-5); color: var(--color-muted); }
 .providerList { margin-top: var(--space-4); border-top: 1px solid var(--color-rule); }
-.providerRow { display: grid; grid-template-columns: minmax(150px, 1fr) 88px minmax(180px, 1.3fr) 90px auto; align-items: end; gap: var(--space-4); margin: 0; padding: var(--space-4) 0; border: 0; border-bottom: 1px solid var(--color-rule); }
+.providerRow { display: grid; grid-template-columns: minmax(150px, 1fr) 88px minmax(180px, 1.3fr) 90px auto; align-items: stretch; gap: var(--space-4); margin: 0; padding: var(--space-4) 0; border: 0; border-bottom: 1px solid var(--color-rule); }
 .providerIdentity { display: grid; align-self: center; gap: 2px; }
 .providerIdentity span { color: var(--color-muted); font-family: var(--font-data); font-size: 10px; }
+.providerField { display: grid; grid-template-rows: auto 36px; gap: var(--space-1); min-width: 0; }
+.providerFieldLabel { font-size: 12px; font-weight: 650; }
 .noKey, .enabled { display: flex; min-height: 36px; align-items: center; gap: var(--space-2); color: var(--color-muted); }
 .enabled input { accent-color: var(--color-actual); }
-.providerActions { display: flex; gap: var(--space-2); }
+.providerActions { display: flex; min-height: 36px; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 .validationGood, .validationBad { grid-column: 1 / -1; margin-top: calc(var(--space-2) * -1); }
 .validationGood { color: var(--color-planned); }
 .validationBad { color: var(--color-fx); }
