@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.providers import alpha_vantage as alpha_vantage_module
+from app.providers import sina as sina_module
 from app.providers import yahoo as yahoo_module
 from app.providers.akshare import AkshareProvider
 from app.providers.alpha_vantage import AlphaVantageProvider
@@ -14,6 +16,7 @@ from app.providers.base import (
     ProviderPayloadError,
     ProviderRequestError,
 )
+from app.providers.sina import SinaProvider
 from app.providers.tushare import TushareProvider
 from app.providers.yahoo import YahooProvider
 from app.services.market_data import (
@@ -101,6 +104,75 @@ def test_yahoo_sends_headers_accepted_by_chart_api(monkeypatch) -> None:
 
     assert captured_request.get_header("User-agent")
     assert captured_request.get_header("Accept") == "application/json"
+
+
+def test_sina_normalizes_us_etf_quote() -> None:
+    payload = (
+        'var hq_str_gb_spy="SPDR标普500 ETF,751.8300,0.36,'
+        '2026-07-15 09:48:43,2.6600,750.9100";'
+    )
+
+    quote = SinaProvider().normalize_price("SPY", payload)
+
+    assert quote.symbol == "SPY"
+    assert quote.value == Decimal("751.8300")
+    assert quote.currency == "USD"
+    assert quote.source == "sina"
+    assert quote.as_of == datetime(
+        2026, 7, 15, 9, 48, 43, tzinfo=ZoneInfo("Asia/Shanghai")
+    )
+
+
+def test_sina_normalizes_usd_cny_quote() -> None:
+    payload = (
+        'var hq_str_fx_susdcny="11:13:41,6.7683000000,6.7693000000,'
+        '6.7766000000,202.0000000000,6.7731000000,6.7731000000,'
+        '6.7529000000,6.7688000000,在岸人民币,-0.1151,-0.0078,'
+        '0.0202,此行情由新浪财经计算得出,0.0000,0.0000,,2026-07-15";'
+    )
+
+    quote = SinaProvider().normalize_fx("USD", "CNY", payload)
+
+    assert quote.symbol == "USD/CNY"
+    assert quote.value == Decimal("6.7683000000")
+    assert quote.currency == "CNY"
+    assert quote.source == "sina"
+    assert quote.as_of == datetime(
+        2026, 7, 15, 11, 13, 41, tzinfo=ZoneInfo("Asia/Shanghai")
+    )
+
+
+def test_sina_sends_required_headers(monkeypatch) -> None:
+    captured_request = None
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'var hq_str_gb_spy="SPY,1.0,0,2026-07-15 09:00:00";'
+
+    def fake_urlopen(request, *, timeout):
+        nonlocal captured_request
+        captured_request = request
+        assert timeout == 15
+        return _Response()
+
+    monkeypatch.setattr(sina_module, "urlopen", fake_urlopen)
+
+    SinaProvider()._blocking_get_text("https://hq.sinajs.cn/list=gb_spy")
+
+    assert captured_request.get_header("User-agent")
+    assert captured_request.get_header("Referer") == "https://finance.sina.com.cn/"
+
+
+@pytest.mark.asyncio
+async def test_sina_rejects_unsupported_fx_pair() -> None:
+    with pytest.raises(ProviderNotConfigured, match="USD/CNY"):
+        await SinaProvider().fetch_fx("EUR", "CNY")
 
 
 def test_akshare_normalizes_cn_etf_code() -> None:
