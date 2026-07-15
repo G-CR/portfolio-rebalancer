@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal, ROUND_HALF_EVEN
 import json
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from app.providers.base import MarketQuote, ProviderPayloadError, ProviderRequestError, decimal_from_value
+
+_STORAGE_QUANTUM = Decimal("0.000000000001")
 
 
 class YahooProvider:
@@ -42,7 +45,7 @@ class YahooProvider:
         return MarketQuote(
             key=f"price:{symbol}",
             symbol=symbol,
-            value=decimal_from_value(close_value),
+            value=_normalized_yahoo_value(close_value),
             currency=currency,
             source=self.source,
             as_of=datetime.fromtimestamp(timestamp, tz=UTC),
@@ -63,7 +66,7 @@ class YahooProvider:
         return MarketQuote(
             key=f"fx:{base}/{quote}",
             symbol=f"{base}/{quote}",
-            value=decimal_from_value(close_value),
+            value=_normalized_yahoo_value(close_value),
             currency=quote,
             source=self.source,
             as_of=datetime.fromtimestamp(timestamp, tz=UTC),
@@ -93,8 +96,26 @@ class YahooProvider:
         return close_value
 
     def _blocking_get_json(self, url: str) -> dict[str, Any]:
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0 Safari/537.36"
+                ),
+            },
+        )
         try:
-            with urlopen(url, timeout=15) as response:
+            with urlopen(request, timeout=15) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:  # pragma: no cover - network behavior
             raise ProviderRequestError("Yahoo request failed.") from exc
+
+
+def _normalized_yahoo_value(value: object) -> Decimal:
+    return decimal_from_value(value).quantize(
+        _STORAGE_QUANTUM,
+        rounding=ROUND_HALF_EVEN,
+    )

@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 
 from app.providers import alpha_vantage as alpha_vantage_module
+from app.providers import yahoo as yahoo_module
 from app.providers.akshare import AkshareProvider
 from app.providers.alpha_vantage import AlphaVantageProvider
 from app.providers.base import (
@@ -55,6 +56,51 @@ def test_yahoo_normalizes_spy_close() -> None:
     assert quote.currency == "USD"
     assert quote.source == "yahoo"
     assert quote.as_of == datetime(2026, 7, 13, 10, 40, tzinfo=UTC)
+
+
+def test_yahoo_rounds_binary_float_noise_to_storage_scale() -> None:
+    payload = {
+        "chart": {
+            "result": [
+                {
+                    "meta": {"currency": "USD"},
+                    "timestamp": [1784035800],
+                    "indicators": {"quote": [{"close": [751.8300170898438]}]},
+                }
+            ]
+        }
+    }
+
+    quote = YahooProvider().normalize_price("SPY", payload)
+
+    assert quote.value == Decimal("751.830017089844")
+
+
+def test_yahoo_sends_headers_accepted_by_chart_api(monkeypatch) -> None:
+    captured_request = None
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"chart":{"result":[]}}'
+
+    def fake_urlopen(request, *, timeout):
+        nonlocal captured_request
+        captured_request = request
+        assert timeout == 15
+        return _Response()
+
+    monkeypatch.setattr(yahoo_module, "urlopen", fake_urlopen)
+
+    YahooProvider()._blocking_get_json("https://query1.finance.yahoo.com/chart/SPY")
+
+    assert captured_request.get_header("User-agent")
+    assert captured_request.get_header("Accept") == "application/json"
 
 
 def test_akshare_normalizes_cn_etf_code() -> None:
