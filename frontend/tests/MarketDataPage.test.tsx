@@ -2,6 +2,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import axe from "axe-core";
+import { useLocation } from "react-router-dom";
 
 import { OverrideDrawer } from "../src/features/marketData/OverrideDrawer";
 import { MarketDataPage } from "../src/pages/MarketDataPage";
@@ -15,6 +16,11 @@ function pageHandlers() {
     http.get("/api/settings/general", () => HttpResponse.json(generalSettingsFixture)),
     http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
   ];
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
 }
 
 it("keeps the last value visible when a source failed", async () => {
@@ -72,6 +78,22 @@ it("opens the correct override drawer from the status table", async () => {
   await user.click(within(row).getByRole("button", { name: "覆盖 USD/CNY" }));
 
   expect(screen.getByRole("heading", { name: "手动覆盖 · USD/CNY" })).toBeInTheDocument();
+});
+
+it("opens and clears a deep-linked override", async () => {
+  renderWithProviders(<><MarketDataPage /><LocationProbe /></>, {
+    route: "/data-sources?override=price%3ASPY",
+    handlers: pageHandlers(),
+  });
+  const user = userEvent.setup();
+
+  const dialog = await screen.findByRole("dialog", { name: "手动覆盖 · SPY" });
+  expect(screen.getByTestId("location-search")).toHaveTextContent("override=price%3ASPY");
+
+  await user.click(within(dialog).getByRole("button", { name: "取消" }));
+
+  expect(screen.queryByRole("dialog", { name: "手动覆盖 · SPY" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("location-search")).toHaveTextContent("");
 });
 
 it("has no serious accessibility violations", async () => {

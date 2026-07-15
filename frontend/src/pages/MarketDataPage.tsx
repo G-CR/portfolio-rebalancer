@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import type { MarketDataStatus } from "../api/types";
 import { MarketDataTable } from "../features/marketData/MarketDataTable";
@@ -12,6 +13,24 @@ export function MarketDataPage() {
   const marketData = useMarketData();
   const refresh = useRefreshMarketData();
   const [overrideItem, setOverrideItem] = useState<MarketDataStatus | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedOverride = searchParams.get("override");
+
+  useEffect(() => {
+    if (!requestedOverride || !marketData.data) return;
+    const match = marketData.data.items.find((item) => item.key === requestedOverride);
+    if (match) setOverrideItem(match);
+  }, [marketData.data, requestedOverride]);
+
+  function closeOverride() {
+    setOverrideItem(null);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("override");
+      return next;
+    }, { replace: true });
+  }
+
   return (
     <section className={styles.page} aria-label="数据源设置">
       <header className={styles.pageHeader}>
@@ -23,7 +42,7 @@ export function MarketDataPage() {
         {marketData.isPending ? <div className={styles.loading} role="status">正在载入数据状态</div> : marketData.isError ? <p className={styles.error} role="alert">行情与汇率状态载入失败。</p> : <MarketDataTable items={marketData.data.items} onOverride={setOverrideItem} />}
       </section>
       <ProviderSettings />
-      {overrideItem ? <OverrideDrawer marketKey={overrideItem.key} symbol={overrideItem.symbol} open onClose={() => setOverrideItem(null)} /> : null}
+      {overrideItem ? <OverrideDrawer marketKey={overrideItem.key} symbol={overrideItem.symbol} open onClose={closeOverride} /> : null}
     </section>
   );
 }
