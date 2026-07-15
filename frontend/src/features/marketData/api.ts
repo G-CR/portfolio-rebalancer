@@ -19,7 +19,12 @@ export function useRefreshMarketData() {
     mutationFn: () => apiRequest<MarketDataCollection>("/api/market-data/refresh", { method: "POST" }),
     onSuccess: (data) => {
       queryClient.setQueryData(marketDataQueryKey, data);
-      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      const hasIncompleteRequiredData = data.items.some(
+        (item) => item.effective_value === null,
+      );
+      if (!hasIncompleteRequiredData) {
+        void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      }
     },
   });
 }

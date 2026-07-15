@@ -1,8 +1,8 @@
 import { Pencil, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import type { MarketDataStatus, PortfolioIncompleteItem } from "../../api/types";
+import type { MarketDataCollection, MarketDataStatus, PortfolioIncompleteItem } from "../../api/types";
 import { useRefreshMarketData } from "../marketData/api";
 import styles from "./HoldingsMarketDataNotice.module.css";
 
@@ -49,22 +49,35 @@ export function formatMarketDataFailure(summary: string | null | undefined) {
 
 export function HoldingsMarketDataNotice({ items }: { items: PortfolioIncompleteItem[] }) {
   const navigate = useNavigate();
-  const refresh = useRefreshMarketData();
+  const { mutateAsync } = useRefreshMarketData();
   const automaticStarted = useRef(false);
-  const [attempted, setAttempted] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "pending" | "settled">("idle");
+  const [result, setResult] = useState<MarketDataCollection | null>(null);
+  const [requestFailed, setRequestFailed] = useState(false);
   const symbols = symbolsFor(items);
+
+  const runRefresh = useCallback(async () => {
+    setPhase("pending");
+    setRequestFailed(false);
+    try {
+      const data = await mutateAsync();
+      setResult(data);
+    } catch {
+      setResult(null);
+      setRequestFailed(true);
+    } finally {
+      setPhase("settled");
+    }
+  }, [mutateAsync]);
 
   useEffect(() => {
     if (automaticStarted.current) return;
     automaticStarted.current = true;
-    setAttempted(true);
-    refresh.mutate();
-  }, [refresh]);
+    void runRefresh();
+  }, [runRefresh]);
 
-  const failedStatus = failedStatusFor(items, refresh.data?.items);
-  const refreshing = !attempted || refresh.isPending || (
-    refresh.isSuccess && !failedStatus
-  );
+  const failedStatus = failedStatusFor(items, result?.items);
+  const refreshing = phase !== "settled" || (Boolean(result) && !failedStatus);
 
   if (refreshing) {
     return (
@@ -77,7 +90,7 @@ export function HoldingsMarketDataNotice({ items }: { items: PortfolioIncomplete
     );
   }
 
-  const reason = refresh.isError
+  const reason = requestFailed
     ? "自动获取请求失败"
     : formatMarketDataFailure(failedStatus?.error_summary);
   const firstItem = items[0];
@@ -88,7 +101,7 @@ export function HoldingsMarketDataNotice({ items }: { items: PortfolioIncomplete
         <span>{symbols} 行情获取失败。{reason}。</span>
       </div>
       <div className={styles.actions}>
-        <button type="button" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+        <button type="button" disabled={phase === "pending"} onClick={() => void runRefresh()}>
           <RefreshCw size={14} aria-hidden="true" />立即重试
         </button>
         <button type="button" onClick={() => navigate(`/data-sources?override=${encodeURIComponent(firstItem.key)}`)}>
