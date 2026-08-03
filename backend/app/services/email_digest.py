@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
+from zoneinfo import ZoneInfo
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
 from app.schemas.analytics import PortfolioAnalyticsResponse
 from app.schemas.rebalance import RebalancePreviewResponse
+from app.services.analytics import get_portfolio_analytics
+from app.services.email_sender import send_email
+from app.services.email_settings import load_email_config
+from app.services.errors import ServiceError
+from app.services.rebalancing import preview_rebalance_with_defaults
 
 
 def _esc(value: object) -> str:
@@ -188,3 +197,50 @@ def build_anomaly_html(*, items: list[dict[str, object]], local_date: date) -> s
   </div>
 </body>
 </html>"""
+
+
+def _is_trading_day(local_date: date) -> bool:
+    return local_date.weekday() < 5
+
+
+async def send_daily_digest_if_configured(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> None:
+    config = await load_email_config(session)
+    if config is None:
+        return
+    local_now = now or datetime.now(UTC)
+    local_date = local_now.astimezone(ZoneInfo(get_settings().timezone)).date()
+    if not _is_trading_day(local_date):
+        return
+
+    try:
+        analytics = await get_portfolio_analytics(session)
+    except ServiceError as exc:
+        if exc.code == "PORTFOLIO_DATA_INCOMPLETE":
+            await send_email(
+                config,
+                subject=f"投资组合日报 {local_date.isoformat()}（数据异常）",
+                html=build_anomaly_html(items=exc.extra["items"], local_date=local_date),
+            )
+            return
+        raise
+    if analytics.data_status == "setup" or not analytics.holdings:
+        return
+
+    rebalance: RebalancePreviewResponse | None = None
+    try:
+        rebalance = await preview_rebalance_with_defaults(session)
+    except ServiceError:
+        rebalance = None
+    await send_email(
+        config,
+        subject=f"投资组合日报 {local_date.isoformat()}",
+        html=build_digest_html(
+            analytics=analytics,
+            rebalance=rebalance,
+            local_date=local_date,
+        ),
+    )

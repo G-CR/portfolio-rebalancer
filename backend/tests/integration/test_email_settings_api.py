@@ -1,3 +1,6 @@
+from smtplib import SMTPAuthenticationError
+from unittest.mock import AsyncMock
+
 from sqlalchemy import select
 
 from app.db.models import EncryptedSecret, Setting
@@ -85,3 +88,40 @@ async def test_email_settings_validation_errors(api_client) -> None:
     assert bad_email.status_code == 422
     assert incomplete.status_code == 422
     assert bad_port.status_code == 422
+
+
+async def test_email_test_endpoint_returns_ok(api_client, db_session, monkeypatch) -> None:
+    await api_client.put("/api/settings/email", json=_email_payload())
+    send = AsyncMock()
+    monkeypatch.setattr("app.services.email_settings.send_email", send)
+
+    response = await api_client.post("/api/settings/email/test")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "ok", "error_category": None}
+    send.assert_awaited_once()
+
+
+async def test_email_test_endpoint_reports_failure_category(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await api_client.put("/api/settings/email", json=_email_payload())
+
+    async def _fail(*args, **kwargs):
+        raise SMTPAuthenticationError(535, b"auth")
+
+    monkeypatch.setattr("app.services.email_settings.send_email", _fail)
+
+    response = await api_client.post("/api/settings/email/test")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "failed", "error_category": "smtp_auth_failed"}
+
+
+async def test_email_test_endpoint_not_configured(api_client) -> None:
+    response = await api_client.post("/api/settings/email/test")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "failed", "error_category": "not_configured"}

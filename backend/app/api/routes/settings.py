@@ -19,6 +19,7 @@ from app.schemas.settings import (
 from app.schemas.email_settings import (
     EmailSettingsResponse,
     EmailSettingsUpdate,
+    EmailTestResult,
 )
 from app.services.errors import ServiceError
 from app.services.settings import (
@@ -32,6 +33,7 @@ from app.services.settings import (
 )
 from app.services.email_settings import (
     get_email_settings,
+    test_email_settings,
     update_email_settings,
 )
 
@@ -112,6 +114,13 @@ async def put_email_setting(
     session: AsyncSession = Depends(get_session),
 ) -> EmailSettingsResponse:
     return await _run_write(session, lambda: update_email_settings(session, payload))
+
+
+@router.post("/email/test", response_model=EmailTestResult)
+async def post_email_test(
+    session: AsyncSession = Depends(get_session),
+) -> EmailTestResult:
+    return await _run_write(session, lambda: test_email_settings(session))
 
 
 async def _run_write(session: AsyncSession, operation):

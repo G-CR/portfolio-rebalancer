@@ -73,3 +73,17 @@ class EmailSettingsResponse(BaseModel):
     from_address: str | None
     password_masked: str | None
     updated_at: datetime
+
+
+class EmailTestResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["ok", "failed"]
+    error_category: Literal[
+        "not_configured",
+        "smtp_connect_failed",
+        "smtp_auth_failed",
+        "smtp_recipient_rejected",
+        "smtp_timeout",
+        "smtp_send_failed",
+    ] | None

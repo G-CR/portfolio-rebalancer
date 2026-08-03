@@ -12,8 +12,9 @@ from app.db.models import EncryptedSecret, Setting
 from app.schemas.email_settings import (
     EmailSettingsResponse,
     EmailSettingsUpdate,
+    EmailTestResult,
 )
-from app.services.errors import ServiceError
+from app.services.email_sender import EmailConfig, classify_smtp_error, send_email
 
 
 def _secret_store() -> SecretStore:
@@ -92,8 +93,38 @@ async def update_email_settings(
     return await get_email_settings(session)
 
 
-async def require_email_configured(session: AsyncSession) -> EncryptedSecret:
+async def load_email_config(session: AsyncSession) -> EmailConfig | None:
+    setting = await _get_setting(session)
     secret = await _smtp_secret(session)
-    if secret is None:
-        raise ServiceError(409, "EMAIL_NOT_CONFIGURED", "SMTP authorization code is not configured.")
-    return secret
+    if (
+        not setting.email_enabled
+        or not setting.email_recipient
+        or not setting.email_smtp_host
+        or not setting.email_smtp_username
+        or secret is None
+    ):
+        return None
+    try:
+        password = _secret_store().decrypt(secret.encrypted_value.encode("ascii"))
+    except Exception as exc:
+        raise RuntimeError("Stored SMTP authorization code cannot be decrypted.") from exc
+    return EmailConfig(
+        host=setting.email_smtp_host,
+        port=setting.email_smtp_port,
+        security=setting.email_smtp_security,  # type: ignore[arg-type]
+        username=setting.email_smtp_username,
+        password=password,
+        from_address=setting.email_from or setting.email_smtp_username,
+        recipient=setting.email_recipient,
+    )
+
+
+async def test_email_settings(session: AsyncSession) -> EmailTestResult:
+    config = await load_email_config(session)
+    if config is None:
+        return EmailTestResult(status="failed", error_category="not_configured")
+    try:
+        await send_email(config, subject="[测试] 投资组合日报邮件通知", html="<p>这是一封测试邮件。</p>")
+    except Exception as exc:
+        return EmailTestResult(status="failed", error_category=classify_smtp_error(exc))
+    return EmailTestResult(status="ok", error_category=None)
