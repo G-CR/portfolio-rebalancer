@@ -48,7 +48,9 @@ class HoldingAnalyticsResponse(BaseModel):
     asset_class_id: UUID
     symbol: str
     name: str
+    account_name: str
     trade_currency: str
+    quantity: DecimalString
     current_price: DecimalString
     current_fx_to_cny: DecimalString
     price_status: str
