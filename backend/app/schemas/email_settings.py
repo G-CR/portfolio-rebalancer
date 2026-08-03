@@ -87,3 +87,10 @@ class EmailTestResult(BaseModel):
         "smtp_timeout",
         "smtp_send_failed",
     ] | None
+
+
+class EmailDigestTriggerResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["sent", "anomaly_sent", "skipped_empty", "not_configured"]
+    sent_at: datetime | None

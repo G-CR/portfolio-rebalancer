@@ -1,9 +1,14 @@
 import { Mail, Save, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { EmailSecurity, EmailTestResult } from "../../api/types";
+import type { EmailDigestTriggerResult, EmailSecurity, EmailTestResult } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
-import { useEmailSettings, useSaveEmailSettings, useTestEmailSettings } from "./api";
+import {
+  useEmailSettings,
+  useSaveEmailSettings,
+  useTestEmailSettings,
+  useTriggerEmailDigest,
+} from "./api";
 import styles from "../marketData/MarketData.module.css";
 
 const TEST_ERROR_LABELS: Record<string, string> = {
@@ -15,10 +20,18 @@ const TEST_ERROR_LABELS: Record<string, string> = {
   smtp_send_failed: "邮件发送失败",
 };
 
+const DIGEST_RESULT_LABELS: Record<EmailDigestTriggerResult["status"], string> = {
+  sent: "日报已发送",
+  anomaly_sent: "数据不完整，已发送数据异常通知",
+  skipped_empty: "暂无持仓，未发送",
+  not_configured: "请先完成邮件配置",
+};
+
 export function EmailSettingsForm() {
   const settings = useEmailSettings();
   const save = useSaveEmailSettings();
   const test = useTestEmailSettings();
+  const digest = useTriggerEmailDigest();
   const [enabled, setEnabled] = useState(false);
   const [recipient, setRecipient] = useState("");
   const [host, setHost] = useState("");
@@ -75,10 +88,13 @@ export function EmailSettingsForm() {
         <FormField label="发件人（可选）"><input type="email" value={fromAddress} onChange={(event) => setFromAddress(event.target.value)} /></FormField>
       </div> : null}
       <div className={styles.providerActions}>
+        <button type="button" className={styles.secondary} onClick={() => void digest.mutateAsync()} disabled={digest.isPending || save.isPending || test.isPending}><Mail size={15} aria-hidden="true" />{digest.isPending ? "正在刷新并发送..." : "立即发送日报"}</button>
         <button type="button" className={styles.secondary} onClick={() => void test.mutateAsync()} disabled={test.isPending || save.isPending}><Send size={15} aria-hidden="true" />{test.isPending ? "正在发送" : "发送测试邮件"}</button>
         <button type="button" className={styles.primary} onClick={() => void submit()} disabled={save.isPending}><Save size={16} aria-hidden="true" />保存邮件设置</button>
       </div>
       {test.data ? <small className={test.data.status === "ok" ? styles.validationGood : styles.validationBad}>{test.data.status === "ok" ? "测试邮件已发送" : testLabel(test.data)}</small> : null}
+      {digest.data ? <small className={styles.validationGood}>{DIGEST_RESULT_LABELS[digest.data.status]}</small> : null}
+      {digest.isError ? <small className={styles.validationBad}>{digest.error instanceof Error ? digest.error.message : "日报发送失败。"}</small> : null}
       {save.isError ? <small className={styles.validationBad}>{save.error instanceof Error ? save.error.message : "邮件设置保存失败。"}</small> : null}
       <small className={styles.muted}><Mail size={12} aria-hidden="true" /> 每日刷新完成后，在工作日自动发送盈亏分析与再平衡建议邮件。</small>
     </section>

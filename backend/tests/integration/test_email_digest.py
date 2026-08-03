@@ -1,9 +1,18 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock
 
+from sqlalchemy import select, update
+
+from app.core.config import get_settings
+from app.core.secrets import SecretStore
 from app.db.models import MarketData
-from app.services.email_digest import send_daily_digest_if_configured
+from app.db.models import AssetClass, EncryptedSecret, Holding, Setting
+from app.services.email_digest import (
+    run_manual_digest,
+    send_daily_digest_if_configured,
+)
 
 
 async def _enable_email(api_client, db_session) -> None:
@@ -148,3 +157,164 @@ async def test_digest_skipped_for_empty_portfolio(api_client, db_session, monkey
     await send_daily_digest_if_configured(db_session)
 
     send.assert_not_awaited()
+
+
+async def _enable_email_using_session(db_session) -> None:
+    store = SecretStore(Path(get_settings().secret_key_path))
+    await db_session.execute(
+        update(Setting).values(
+            email_enabled=True,
+            email_recipient="owner@example.com",
+            email_smtp_host="smtp.qq.com",
+            email_smtp_port=465,
+            email_smtp_security="ssl",
+            email_smtp_username="owner@qq.com",
+            email_from=None,
+        )
+    )
+    db_session.add(
+        EncryptedSecret(
+            provider="smtp",
+            encrypted_value=store.encrypt("smtp-auth-code").decode("ascii"),
+            masked_value="****code",
+        )
+    )
+    await db_session.commit()
+
+
+async def _seed_portfolio_using_session(db_session) -> None:
+    asset_classes = list(
+        await db_session.scalars(
+            select(AssetClass).where(AssetClass.is_active.is_(True)).order_by(AssetClass.id)
+        )
+    )
+    now = datetime.now(UTC)
+    for index, asset_class in enumerate(asset_classes):
+        db_session.add(
+            Holding(
+                asset_class=asset_class,
+                symbol=f"51010{index}",
+                name=f"标的{index}",
+                market="SH",
+                account_name=f"账户{index}",
+                trade_currency="CNY",
+                quantity=Decimal("20"),
+                average_cost_price=Decimal("1"),
+                cost_fx_to_cny=Decimal("1"),
+                baseline_fx_to_cny=Decimal("1"),
+                lot_size=Decimal("1"),
+                quantity_precision=12,
+                is_rebalance_preferred=True,
+            )
+        )
+        db_session.add(
+            MarketData(
+                data_type="price",
+                symbol=f"51010{index}",
+                source="test-provider",
+                value=Decimal("1"),
+                market_time=now,
+                fetched_at=now,
+                status="valid",
+            )
+        )
+    await db_session.commit()
+
+
+async def test_manual_digest_not_configured(api_client, monkeypatch) -> None:
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "not_configured", "sent_at": None}
+    send.assert_not_awaited()
+
+
+async def test_manual_digest_skipped_for_empty_portfolio(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _enable_email(api_client, db_session)
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "skipped_empty", "sent_at": None}
+    send.assert_not_awaited()
+
+
+async def test_manual_digest_sends_anomaly_email(api_client, db_session, monkeypatch) -> None:
+    await _enable_email(api_client, db_session)
+    asset_classes = (await api_client.get("/api/asset-classes")).json()
+    await api_client.post(
+        "/api/holdings",
+        json={
+            "asset_class_id": asset_classes[0]["id"],
+            "symbol": "MISSING",
+            "name": "缺失标的",
+            "market": "SH",
+            "account_name": "账户",
+            "trade_currency": "CNY",
+            "quantity": "10",
+            "average_cost_price": "1",
+            "cost_fx_to_cny": "1",
+            "baseline_fx_to_cny": "1",
+            "lot_size": "1",
+            "quantity_precision": 12,
+            "is_rebalance_preferred": True,
+        },
+    )
+    await db_session.commit()
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "anomaly_sent"
+    assert response.json()["sent_at"] is not None
+    send.assert_awaited_once()
+    assert "数据异常" in send.await_args.kwargs["subject"]
+
+
+async def test_manual_digest_sends_full_digest(api_client, db_session, monkeypatch) -> None:
+    await _enable_email(api_client, db_session)
+    await _seed_portfolio(api_client, db_session)
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "sent"
+    send.assert_awaited_once()
+    assert send.await_args.kwargs["subject"].startswith("投资组合日报")
+
+
+async def test_manual_digest_ignores_weekend(api_client, db_session, monkeypatch) -> None:
+    await _enable_email_using_session(db_session)
+    await _seed_portfolio_using_session(db_session)
+    send = AsyncMock()
+    refresh = AsyncMock()
+    snapshot = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+    monkeypatch.setattr("app.services.email_digest.create_daily_snapshot_if_complete", snapshot)
+
+    result = await run_manual_digest(now=datetime(2026, 8, 2, 8, 0, tzinfo=UTC))  # Sunday
+
+    assert result.status == "sent"
+    send.assert_awaited_once()

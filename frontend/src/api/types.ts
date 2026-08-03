@@ -442,3 +442,10 @@ export interface EmailTestResult {
     | "smtp_send_failed"
     | null;
 }
+
+export type EmailDigestTriggerStatus = "sent" | "anomaly_sent" | "skipped_empty" | "not_configured";
+
+export interface EmailDigestTriggerResult {
+  status: EmailDigestTriggerStatus;
+  sent_at: string | null;
+}

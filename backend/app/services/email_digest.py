@@ -3,18 +3,25 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
+import logging
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.db.session import SessionFactory
 from app.schemas.analytics import PortfolioAnalyticsResponse
+from app.schemas.email_settings import EmailDigestTriggerResult
 from app.schemas.rebalance import RebalancePreviewResponse
 from app.services.analytics import get_portfolio_analytics
 from app.services.email_sender import send_email
 from app.services.email_settings import load_email_config
 from app.services.errors import ServiceError
+from app.services.market_data import refresh_all_required_data
 from app.services.rebalancing import preview_rebalance_with_defaults
+from app.services.snapshots import create_daily_snapshot_if_complete
+
+logger = logging.getLogger(__name__)
 
 
 def _esc(value: object) -> str:
@@ -215,7 +222,10 @@ async def send_daily_digest_if_configured(
     local_date = local_now.astimezone(ZoneInfo(get_settings().timezone)).date()
     if not _is_trading_day(local_date):
         return
+    await _run_digest(session, config, local_date)
 
+
+async def _run_digest(session: AsyncSession, config, local_date: date) -> str:
     try:
         analytics = await get_portfolio_analytics(session)
     except ServiceError as exc:
@@ -225,10 +235,10 @@ async def send_daily_digest_if_configured(
                 subject=f"投资组合日报 {local_date.isoformat()}（数据异常）",
                 html=build_anomaly_html(items=exc.extra["items"], local_date=local_date),
             )
-            return
+            return "anomaly_sent"
         raise
     if analytics.data_status == "setup" or not analytics.holdings:
-        return
+        return "skipped_empty"
 
     rebalance: RebalancePreviewResponse | None = None
     try:
@@ -244,3 +254,34 @@ async def send_daily_digest_if_configured(
             local_date=local_date,
         ),
     )
+    return "sent"
+
+
+async def trigger_manual_digest(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> EmailDigestTriggerResult:
+    config = await load_email_config(session)
+    if config is None:
+        return EmailDigestTriggerResult(status="not_configured", sent_at=None)
+    local_now = now or datetime.now(UTC)
+    local_date = local_now.astimezone(ZoneInfo(get_settings().timezone)).date()
+    status = await _run_digest(session, config, local_date)
+    sent_at = datetime.now(UTC) if status in {"sent", "anomaly_sent"} else None
+    return EmailDigestTriggerResult(status=status, sent_at=sent_at)
+
+
+async def run_manual_digest(*, now: datetime | None = None) -> EmailDigestTriggerResult:
+    async with SessionFactory() as session:
+        async with session.begin():
+            await refresh_all_required_data(session)
+    try:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await create_daily_snapshot_if_complete(session)
+    except Exception:
+        logger.exception("Daily snapshot creation failed before manual email digest")
+    async with SessionFactory() as session:
+        async with session.begin():
+            return await trigger_manual_digest(session, now=now)

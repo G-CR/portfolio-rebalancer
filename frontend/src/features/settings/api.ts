@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
 import type {
+  EmailDigestTriggerResult,
   EmailSettings,
   EmailTestResult,
   GeneralSettings,
@@ -119,5 +120,11 @@ export function useSaveEmailSettings() {
 export function useTestEmailSettings() {
   return useMutation({
     mutationFn: () => apiRequest<EmailTestResult>("/api/settings/email/test", { method: "POST" }),
+  });
+}
+
+export function useTriggerEmailDigest() {
+  return useMutation({
+    mutationFn: () => apiRequest<EmailDigestTriggerResult>("/api/email/digest", { method: "POST" }),
   });
 }

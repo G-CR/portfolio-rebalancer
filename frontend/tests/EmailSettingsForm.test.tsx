@@ -63,3 +63,33 @@ it("sends a test email and shows the result", async () => {
 
   expect(await screen.findByText("测试邮件已发送")).toBeInTheDocument();
 });
+
+it("triggers a manual digest and shows the sent result", async () => {
+  renderWithProviders(<EmailSettingsForm />, {
+    handlers: [
+      ...handlers(),
+      http.post("/api/email/digest", () => HttpResponse.json({ status: "sent", sent_at: "2026-08-04T00:00:00Z" })),
+    ],
+  });
+  const user = userEvent.setup();
+
+  await screen.findByRole("heading", { name: "邮件通知" });
+  await user.click(screen.getByRole("button", { name: "立即发送日报" }));
+
+  expect(await screen.findByText("日报已发送")).toBeInTheDocument();
+});
+
+it("shows the not-configured result for a manual digest", async () => {
+  renderWithProviders(<EmailSettingsForm />, {
+    handlers: [
+      ...handlers(),
+      http.post("/api/email/digest", () => HttpResponse.json({ status: "not_configured", sent_at: null })),
+    ],
+  });
+  const user = userEvent.setup();
+
+  await screen.findByRole("heading", { name: "邮件通知" });
+  await user.click(screen.getByRole("button", { name: "立即发送日报" }));
+
+  expect(await screen.findByText("请先完成邮件配置")).toBeInTheDocument();
+});
