@@ -16,6 +16,10 @@ from app.schemas.settings import (
     RebalanceDefaultsResponse,
     RebalanceDefaultsUpdate,
 )
+from app.schemas.email_settings import (
+    EmailSettingsResponse,
+    EmailSettingsUpdate,
+)
 from app.services.errors import ServiceError
 from app.services.settings import (
     get_general_settings,
@@ -25,6 +29,10 @@ from app.services.settings import (
     update_general_settings,
     update_rebalance_defaults,
     update_provider_setting,
+)
+from app.services.email_settings import (
+    get_email_settings,
+    update_email_settings,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -89,6 +97,21 @@ async def put_rebalance_default_setting(
         session,
         lambda: update_rebalance_defaults(session, payload),
     )
+
+
+@router.get("/email", response_model=EmailSettingsResponse)
+async def get_email_setting(
+    session: AsyncSession = Depends(get_session),
+) -> EmailSettingsResponse:
+    return await get_email_settings(session)
+
+
+@router.put("/email", response_model=EmailSettingsResponse)
+async def put_email_setting(
+    payload: EmailSettingsUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> EmailSettingsResponse:
+    return await _run_write(session, lambda: update_email_settings(session, payload))
 
 
 async def _run_write(session: AsyncSession, operation):
