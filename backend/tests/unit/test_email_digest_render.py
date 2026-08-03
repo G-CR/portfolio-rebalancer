@@ -26,7 +26,7 @@ def _holding() -> HoldingAnalyticsResponse:
         trade_currency="USD",
         quantity="3",
         current_price="100",
-        current_fx_to_cny="7.2",
+        current_fx_to_cny="7.26",
         price_status="valid",
         fx_status="valid",
         cost_trade_currency="270",
@@ -153,6 +153,16 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "建议再平衡" in html
     assert "买入" in html
     assert "72.00" in html
+    assert "2,160.00" in html
+    assert "216.00" in html
+    assert "11.1%" in html
+    assert "11.11%" not in html
+    assert "50.0%" in html
+    assert "+0.0%" in html
+    assert "3.0" in html
+    assert "100.0" in html
+    assert "7.3" in html
+    assert "7.26" not in html
     assert "当前配置在容差内" not in html
 
 

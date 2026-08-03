@@ -36,8 +36,12 @@ def _signed_money(value: object) -> str:
     return f"{Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):+,.2f}"
 
 
+def _one_decimal(value: object) -> str:
+    return f"{Decimal(str(value)):.1f}"
+
+
 def _percent(value: object) -> str:
-    return f"{Decimal(str(value)) * 100:.2f}%"
+    return f"{Decimal(str(value)) * 100:.1f}%"
 
 
 def _table(headers: list[str], rows: list[list[str]]) -> str:
@@ -87,7 +91,7 @@ def build_digest_html(
             _esc(item.name),
             _percent(item.target_weight),
             _percent(item.actual_weight),
-            f"{Decimal(item.drift) * 100:+.2f}%",
+            f"{Decimal(item.drift) * 100:+.1f}%",
             _signed_money(item.unrealized_pnl),
         ]
         for item in analytics.asset_classes
@@ -109,9 +113,9 @@ def build_digest_html(
                 _esc(holding.name),
                 _esc(holding.symbol),
                 _esc(holding.account_name),
-                _esc(holding.quantity),
-                _esc(holding.current_price),
-                _esc(holding.current_fx_to_cny),
+                _one_decimal(holding.quantity),
+                _one_decimal(holding.current_price),
+                _one_decimal(holding.current_fx_to_cny),
                 _money(holding.market_value_cny),
                 _signed_money(holding.unrealized_pnl),
                 _percent(holding.unrealized_return),
@@ -145,7 +149,7 @@ def build_digest_html(
             [
                 _esc(trade.symbol),
                 "买入" if trade.action == "buy" else "卖出",
-                _esc(trade.quantity),
+                _one_decimal(trade.quantity),
                 _money(trade.amount_cny),
                 _esc(trade.reason),
             ]

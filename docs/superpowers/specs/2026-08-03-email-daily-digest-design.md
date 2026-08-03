@@ -75,6 +75,8 @@ Normal digest:
 4. Rebalance suggestions from the default-constraint preview: decision summary, max drift before/after, trade list (symbol, action, quantity, amount CNY, reason text) when trades exist; "当前配置在容差内，无需调整" when none; infeasible notice when infeasible.
 5. Footer: data cutoff time; stale data adds a yellow banner "部分行情数据可能过期" at the top while content is still sent.
 
+Number formatting: CNY money values keep two decimals; prices, FX rates, quantities, and percentages (PnL rate, weights, drift) keep one decimal.
+
 Data-anomaly email:
 
 - Subject: `投资组合日报 <YYYY-MM-DD>（数据异常）`
