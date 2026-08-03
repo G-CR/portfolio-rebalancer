@@ -478,7 +478,7 @@ async def test_sell_confirm_preserves_average_cost_and_cost_fx(api_client, db_se
     assert preview.json()["operation"] == "sell"
     assert preview.json()["after"]["quantity"] == "8"
     assert preview.json()["after"]["average_cost_price"] == "500.00"
-    assert preview.json()["after"]["cost_fx_to_cny"] == "7.2"
+    assert preview.json()["after"]["cost_fx_to_cny"] == "7.20"
 
     confirm = await api_client.post(
         f"/api/cost-adjustments/{spy_holding['id']}/confirm",
@@ -538,7 +538,7 @@ async def test_zero_quantity_holding_defaults_can_preview_correction(api_client)
     assert preview.json()["before"] == {
         "quantity": "0",
         "average_cost_price": "0.00",
-        "cost_fx_to_cny": "0",
+            "cost_fx_to_cny": "0.00",
         "total_cost_cny": "0.00",
     }
     assert preview.json()["after"] == preview.json()["before"]
