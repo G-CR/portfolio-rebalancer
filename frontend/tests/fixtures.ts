@@ -338,3 +338,15 @@ export const rebalanceDefaultsFixture = {
   allow_fx: true,
   updated_at: "2026-07-14T00:00:00Z",
 } as const;
+
+export const emailSettingsFixture = {
+  enabled: false,
+  recipient: null,
+  smtp_host: null,
+  smtp_port: 465,
+  smtp_security: "ssl",
+  smtp_username: null,
+  from_address: null,
+  password_masked: null,
+  updated_at: "2026-07-15T08:00:00Z",
+} as const;

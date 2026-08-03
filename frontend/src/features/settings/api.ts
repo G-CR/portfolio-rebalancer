@@ -1,11 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
-import type { GeneralSettings, ProviderName, ProviderSetting, RebalanceDefaults } from "../../api/types";
+import type {
+  EmailSettings,
+  EmailTestResult,
+  GeneralSettings,
+  ProviderName,
+  ProviderSetting,
+  RebalanceDefaults,
+} from "../../api/types";
 
 export const providerSettingsQueryKey = ["settings", "providers"] as const;
 export const generalSettingsQueryKey = ["settings", "general"] as const;
 export const rebalanceDefaultsQueryKey = ["settings", "rebalance-defaults"] as const;
+export const emailSettingsQueryKey = ["settings", "email"] as const;
 
 export function useProviderSettings() {
   return useQuery({
@@ -89,5 +97,27 @@ export function useSaveRebalanceDefaults() {
         updated_at: saved.updated_at,
       } : current);
     },
+  });
+}
+
+export function useEmailSettings() {
+  return useQuery({
+    queryKey: emailSettingsQueryKey,
+    queryFn: () => apiRequest<EmailSettings>("/api/settings/email"),
+  });
+}
+
+export function useSaveEmailSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: Omit<EmailSettings, "password_masked" | "updated_at"> & { password: string | null }) =>
+      apiRequest<EmailSettings>("/api/settings/email", { method: "PUT", body: jsonBody(payload) }),
+    onSuccess: (saved) => queryClient.setQueryData(emailSettingsQueryKey, saved),
+  });
+}
+
+export function useTestEmailSettings() {
+  return useMutation({
+    mutationFn: () => apiRequest<EmailTestResult>("/api/settings/email/test", { method: "POST" }),
   });
 }

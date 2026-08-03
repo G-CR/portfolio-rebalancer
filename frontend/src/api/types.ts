@@ -416,3 +416,29 @@ export interface RebalanceDefaults {
   allow_fx: boolean;
   updated_at: string;
 }
+
+export type EmailSecurity = "ssl" | "starttls";
+
+export interface EmailSettings {
+  enabled: boolean;
+  recipient: string | null;
+  smtp_host: string | null;
+  smtp_port: number;
+  smtp_security: EmailSecurity;
+  smtp_username: string | null;
+  from_address: string | null;
+  password_masked: string | null;
+  updated_at: string;
+}
+
+export interface EmailTestResult {
+  status: "ok" | "failed";
+  error_category:
+    | "not_configured"
+    | "smtp_connect_failed"
+    | "smtp_auth_failed"
+    | "smtp_recipient_rejected"
+    | "smtp_timeout"
+    | "smtp_send_failed"
+    | null;
+}

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import type { GeneralSettings, ProviderSetting } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
+import { EmailSettingsForm } from "./EmailSettingsForm";
 import {
   useGeneralSettings,
   useProviderSettings,
@@ -76,6 +77,7 @@ export function ProviderSettings() {
       <header className={styles.sectionHeading}><div><p>PROVIDER SETTINGS</p><h2 id="provider-settings-title">供应商与密钥</h2></div><span>密钥加密保存在本机数据卷</span></header>
       {providers.isPending ? <p className={styles.muted}>正在载入供应商设置</p> : providers.isError ? <p className={styles.error} role="alert">供应商设置载入失败。</p> : <div className={styles.providerList}>{providers.data.map((item) => <ProviderRow item={item} key={item.provider} />)}</div>}
       {general.data ? <GeneralSettingsForm value={general.data} key={general.data.updated_at} /> : null}
+      <EmailSettingsForm />
     </section>
   );
 }

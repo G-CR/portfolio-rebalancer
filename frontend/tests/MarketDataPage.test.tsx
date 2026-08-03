@@ -6,7 +6,7 @@ import { useLocation } from "react-router-dom";
 
 import { OverrideDrawer } from "../src/features/marketData/OverrideDrawer";
 import { MarketDataPage } from "../src/pages/MarketDataPage";
-import { generalSettingsFixture, marketDataCollectionFixture, providerSettingsFixture } from "./fixtures";
+import { emailSettingsFixture, generalSettingsFixture, marketDataCollectionFixture, providerSettingsFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
 function pageHandlers() {
@@ -14,6 +14,7 @@ function pageHandlers() {
     http.get("/api/market-data", () => HttpResponse.json(marketDataCollectionFixture)),
     http.get("/api/settings/providers", () => HttpResponse.json(providerSettingsFixture)),
     http.get("/api/settings/general", () => HttpResponse.json(generalSettingsFixture)),
+    http.get("/api/settings/email", () => HttpResponse.json(emailSettingsFixture)),
     http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
   ];
 }
