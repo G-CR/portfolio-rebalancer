@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ApiError } from "../../api/client";
 import type { CostAdjustmentHistoryItem, Holding, RestorePayload } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
+import { formatDecimal } from "../analytics/format";
 import { WorkDrawer } from "../../components/WorkDrawer/WorkDrawer";
 import {
   isStaleCostPreview,
@@ -37,7 +38,7 @@ function formatTime(value: string) {
 }
 
 function HistoryBasis({ label, item }: { label: string; item: CostAdjustmentHistoryItem["before"] }) {
-  return <div className={styles.historyBasis}><span>{label}</span><strong>{item.quantity}</strong><small>成本价 {item.average_cost_price} · 汇率 {item.cost_fx_to_cny}</small></div>;
+  return <div className={styles.historyBasis}><span>{label}</span><strong>{item.quantity}</strong><small>成本价 {formatDecimal(item.average_cost_price, 3)} · 汇率 {item.cost_fx_to_cny}</small></div>;
 }
 
 export function AdjustmentHistoryDrawer({ holding, open, onClose, onUpdated }: Props) {

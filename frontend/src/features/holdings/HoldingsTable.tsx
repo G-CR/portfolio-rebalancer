@@ -122,7 +122,7 @@ export function HoldingsTable({ holdings, assetClasses, analyticsById, incomplet
                   <td className={styles.secondaryColumn}><div className={styles.stack}><span>{holding.account_name}</span><small>{assetNames.get(holding.asset_class_id) ?? "未分类"}</small></div></td>
                   <td className={styles.secondaryColumn}><span className={styles.currency}>{holding.trade_currency}</span></td>
                   <td className={styles.numeric}>{holding.quantity}</td>
-                  <td className={`${styles.numeric} ${styles.costColumn}`}>{holding.average_cost_price}</td>
+                  <td className={`${styles.numeric} ${styles.costColumn}`}>{formatDecimal(holding.average_cost_price, 3)}</td>
                   <td className={`${styles.numeric} ${styles.costColumn}`}>{holding.cost_fx_to_cny}</td>
                   <td className={`${styles.numeric} ${styles.marketColumn}`}>{analytics ? <MarketValue value={formatDecimal(analytics.current_price)} status={analytics.price_status} /> : <span className={styles.pendingData}>{priceMissing ? "数据缺失" : "--"}</span>}</td>
                   <td className={`${styles.numeric} ${styles.marketColumn}`}>{analytics ? <MarketValue value={formatDecimal(analytics.current_fx_to_cny)} status={analytics.fx_status} /> : <span className={styles.pendingData}>{fxMissing ? "数据缺失" : "--"}</span>}</td>
@@ -153,7 +153,7 @@ export function HoldingsTable({ holdings, assetClasses, analyticsById, incomplet
                           <div><dt>账户</dt><dd>{holding.account_name}</dd></div>
                           <div><dt>资产类别</dt><dd>{assetNames.get(holding.asset_class_id) ?? "未分类"}</dd></div>
                           <div><dt>币种 / 市场</dt><dd>{holding.trade_currency} / {holding.market}</dd></div>
-                          <div><dt>平均成本价</dt><dd>{holding.average_cost_price}</dd></div>
+                          <div><dt>平均成本价</dt><dd>{formatDecimal(holding.average_cost_price, 3)}</dd></div>
                           <div><dt>成本汇率</dt><dd>{holding.cost_fx_to_cny}</dd></div>
                           <div><dt>当前价</dt><dd><DetailMarketValue value={analytics ? formatDecimal(analytics.current_price) : undefined} status={analytics?.price_status} fallbackStatus={priceFallback} /></dd></div>
                           <div><dt>当前汇率</dt><dd><DetailMarketValue value={analytics ? formatDecimal(analytics.current_fx_to_cny) : undefined} status={analytics?.fx_status} fallbackStatus={fxFallback} /></dd></div>

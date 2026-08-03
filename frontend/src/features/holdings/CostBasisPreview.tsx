@@ -2,7 +2,11 @@ import { CheckCircle2, XCircle } from "lucide-react";
 
 import type { CostAdjustmentPreview } from "../../api/types";
 import { costBasisIdentityMatches } from "./decimalIdentity";
+import { formatDecimal } from "../analytics/format";
 import styles from "./Holdings.module.css";
+
+const COST_KEYS = new Set(['average_cost_price', 'cost_fx_to_cny']);
+function fmtRawValue(key, value) { return COST_KEYS.has(key) ? formatDecimal(value, 3) : value; }
 
 const rows = [
   ["份额", "quantity"],
@@ -36,8 +40,8 @@ export function CostBasisPreview({ preview }: { preview: CostAdjustmentPreview }
         {rows.map(([label, key]) => (
           <div className={styles.comparisonRow} key={key}>
             <span>{label}</span>
-            <strong>{preview.before[key]}</strong>
-            <strong>{preview.after[key]}</strong>
+            <strong>{fmtRawValue(key, preview.before[key])}</strong>
+            <strong>{fmtRawValue(key, preview.after[key])}</strong>
           </div>
         ))}
       </div>

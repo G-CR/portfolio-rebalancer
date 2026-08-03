@@ -507,7 +507,7 @@ def _basis_response(value: CostBasis, quantity_precision: int) -> CostBasisState
     return CostBasisStateResponse(
         quantity=_scale_decimal(value.quantity, quantity_precision),
         average_cost_price=_price_decimal(value.average_price),
-        cost_fx_to_cny=_trim_decimal(value.cost_fx),
+        cost_fx_to_cny=_price_decimal(value.cost_fx),
         total_cost_cny=_money_decimal(value.total_cost_cny),
     )
 
@@ -516,7 +516,7 @@ def _history_basis_response(value: CostBasis) -> CostBasisStateResponse:
     return CostBasisStateResponse(
         quantity=_trim_decimal(value.quantity),
         average_cost_price=_price_decimal(value.average_price),
-        cost_fx_to_cny=_trim_decimal(value.cost_fx),
+        cost_fx_to_cny=_price_decimal(value.cost_fx),
         total_cost_cny=_money_decimal(value.total_cost_cny),
     )
 
@@ -665,11 +665,16 @@ def _storage_basis(value: CostBasis) -> CostBasis:
     quantity = value.quantity.quantize(_STORAGE_SCALE)
     average_price = value.average_price.quantize(_STORAGE_SCALE)
     cost_fx = value.cost_fx.quantize(_STORAGE_SCALE)
+    _total_cost_cny = (
+        value._total_cost_cny
+        if value._total_cost_cny is not None
+        else quantity * average_price * cost_fx
+    )
     return CostBasis(
         quantity=quantity,
         average_price=average_price,
         cost_fx=cost_fx,
-        _total_cost_cny=quantity * average_price * cost_fx,
+        _total_cost_cny=_total_cost_cny,
     )
 
 
