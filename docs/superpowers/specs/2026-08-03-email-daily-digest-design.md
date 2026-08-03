@@ -41,12 +41,27 @@ The SMTP authorization code is stored in the existing `encrypted_secrets` table 
 - `GET /api/settings/email` -> email settings (password masked).
 - `PUT /api/settings/email` -> save settings; an empty password field leaves the stored password unchanged, a non-empty value encrypts and replaces it.
 - `POST /api/settings/email/test` -> send a test email with the current configuration; returns `ok` or an error category (`smtp_connect_failed`, `smtp_auth_failed`, `smtp_recipient_rejected`).
+- `POST /api/email/digest` -> manually run the full pipeline now: refresh market data, create the daily snapshot, then send the digest. Ignores the trading-day restriction. Returns a status:
+  - `sent` - the full digest was sent
+  - `anomaly_sent` - data was incomplete, so a data-anomaly email was sent instead
+  - `skipped_empty` - the portfolio has no positions, nothing was sent
+  - `not_configured` - email is disabled or incompletely configured, nothing was sent
+  - plus `sent_at` when an email was sent.
 
 Validation: recipient format via `email.utils.parseaddr`, port in range, `security` one of the enum values. Missing host/port/username/recipient with `email_enabled = true` is rejected with 422.
 
 ## Frontend
 
 Add an "邮件通知" section to the existing `ProviderSettings` component on the data-source page (`/data-sources`), next to the existing "自动刷新与再平衡默认值" section. Fields: enable switch, recipient, SMTP host, port, security mode (SSL/STARTTLS), username, authorization code (password input, masked value placeholder), optional sender, save button, and a "发送测试邮件" button with inline success/failure result. Reuse `FormField` and existing market-data styles.
+
+Add a "立即发送日报" button next to the test-email button. It triggers `POST /api/email/digest`, shows a pending state ("正在刷新并发送..."), and maps the returned status to inline feedback:
+
+- `sent` -> "日报已发送"
+- `anomaly_sent` -> "数据不完整，已发送数据异常通知"
+- `skipped_empty` -> "暂无持仓，未发送"
+- `not_configured` -> "请先完成邮件配置"
+
+The scheduled worker path keeps the trading-day restriction; only the manual trigger ignores it.
 
 ## Email Content
 
@@ -88,7 +103,8 @@ Backend integration tests:
 - Settings API: saved password is ciphertext in DB, masked in responses; empty password preserves the stored value.
 - Test-email API: mock SMTP returns `ok` or the matching error category.
 - Worker pipeline with a mocked send function: disabled skip, non-trading-day skip, incomplete data sends the anomaly email, complete data sends the full digest; a send failure does not affect snapshot creation.
+- Manual digest API: `not_configured`, `skipped_empty`, `anomaly_sent`, and `sent` statuses; a manual trigger on a weekend still sends, while the scheduled path skips weekends.
 
 Frontend tests (existing RTL patterns):
 
-- `EmailSettingsForm` rendering, save calls, test-button success/failure feedback, empty authorization-code behavior.
+- `EmailSettingsForm` rendering, save calls, test-button success/failure feedback, manual-digest button status feedback, empty authorization-code behavior.

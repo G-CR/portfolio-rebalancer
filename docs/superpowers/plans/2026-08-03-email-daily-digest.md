@@ -2627,6 +2627,473 @@ git commit -m "feat: email notification settings form"
 
 ---
 
+### Task 8: Manual Digest Trigger
+
+**Files:**
+- Modify: `backend/app/schemas/email_settings.py` (add `EmailDigestTriggerResult`)
+- Modify: `backend/app/services/email_digest.py` (extract `_run_digest`, add `run_manual_digest` and `trigger_manual_digest`)
+- Create: `backend/app/api/routes/email.py`
+- Modify: `backend/app/api/router.py`
+- Modify: `frontend/src/api/types.ts`
+- Modify: `frontend/src/features/settings/api.ts`
+- Modify: `frontend/src/features/settings/EmailSettingsForm.tsx`
+- Modify: `frontend/tests/EmailSettingsForm.test.tsx`
+- Test: extend `backend/tests/integration/test_email_digest.py`
+
+**Interfaces:**
+- Consumes: `load_email_config`, `build_digest_html`, `build_anomaly_html`, `preview_rebalance_with_defaults`, `get_portfolio_analytics`, `refresh_all_required_data`, `create_daily_snapshot_if_complete`, `SessionFactory` (Task 5).
+- Produces: `EmailDigestTriggerResult` (`status` in `sent`/`anomaly_sent`/`skipped_empty`/`not_configured`, `sent_at`), `run_manual_digest(*, now: datetime | None = None) -> EmailDigestTriggerResult`, `trigger_manual_digest(session, *, now=None) -> EmailDigestTriggerResult`, route `POST /api/email/digest`.
+
+- [ ] **Step 1: Write the failing backend integration tests**
+
+Append to `backend/tests/integration/test_email_digest.py`:
+
+```python
+async def test_manual_digest_not_configured(api_client, monkeypatch) -> None:
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "not_configured", "sent_at": None}
+    send.assert_not_awaited()
+
+
+async def test_manual_digest_skipped_for_empty_portfolio(api_client, db_session, monkeypatch) -> None:
+    await _enable_email(api_client, db_session)
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "skipped_empty", "sent_at": None}
+    send.assert_not_awaited()
+
+
+async def test_manual_digest_sends_anomaly_email(api_client, db_session, monkeypatch) -> None:
+    await _enable_email(api_client, db_session)
+    asset_classes = (await api_client.get("/api/asset-classes")).json()
+    await api_client.post(
+        "/api/holdings",
+        json={
+            "asset_class_id": asset_classes[0]["id"],
+            "symbol": "MISSING",
+            "name": "缺失标的",
+            "market": "SH",
+            "account_name": "账户",
+            "trade_currency": "CNY",
+            "quantity": "10",
+            "average_cost_price": "1",
+            "cost_fx_to_cny": "1",
+            "baseline_fx_to_cny": "1",
+            "lot_size": "1",
+            "quantity_precision": 12,
+            "is_rebalance_preferred": True,
+        },
+    )
+    await db_session.commit()
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "anomaly_sent"
+    assert response.json()["sent_at"] is not None
+    send.assert_awaited_once()
+    assert "数据异常" in send.await_args.kwargs["subject"]
+
+
+async def test_manual_digest_sends_full_digest(api_client, db_session, monkeypatch) -> None:
+    await _enable_email(api_client, db_session)
+    await _seed_portfolio(api_client, db_session)
+    send = AsyncMock()
+    refresh = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+
+    response = await api_client.post("/api/email/digest")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "sent"
+    send.assert_awaited_once()
+    assert send.await_args.kwargs["subject"].startswith("投资组合日报")
+
+
+async def test_manual_digest_ignores_weekend(db_session, monkeypatch) -> None:
+    await _enable_email_using_session(db_session)
+    await _seed_portfolio_using_session(db_session)
+    send = AsyncMock()
+    refresh = AsyncMock()
+    snapshot = AsyncMock()
+    monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr("app.services.email_digest.refresh_all_required_data", refresh)
+    monkeypatch.setattr("app.services.email_digest.create_daily_snapshot_if_complete", snapshot)
+
+    result = await run_manual_digest(now=datetime(2026, 8, 2, 8, 0, tzinfo=UTC))  # Sunday
+
+    assert result.status == "sent"
+    send.assert_awaited_once()
+```
+
+The `_enable_email_using_session` and `_seed_portfolio_using_session` helpers write directly through the session so `run_manual_digest` (which opens its own `SessionFactory` sessions) sees the same data. Add them near the other helpers:
+
+```python
+async def _enable_email_using_session(db_session) -> None:
+    from sqlalchemy import update
+
+    from app.db.models import EncryptedSecret, Setting
+    from app.core.secrets import SecretStore
+    from app.core.config import get_settings
+    from pathlib import Path
+
+    store = SecretStore(Path(get_settings().secret_key_path))
+    await db_session.execute(
+        update(Setting).values(
+            email_enabled=True,
+            email_recipient="owner@example.com",
+            email_smtp_host="smtp.qq.com",
+            email_smtp_port=465,
+            email_smtp_security="ssl",
+            email_smtp_username="owner@qq.com",
+            email_from=None,
+        )
+    )
+    db_session.add(
+        EncryptedSecret(
+            provider="smtp",
+            encrypted_value=store.encrypt("smtp-auth-code").decode("ascii"),
+            masked_value="****code",
+        )
+    )
+    await db_session.commit()
+
+
+async def _seed_portfolio_using_session(db_session) -> None:
+    from app.db.models import AssetClass, Holding, MarketData
+
+    asset_classes = list(
+        await db_session.scalars(
+            select(AssetClass).where(AssetClass.is_active.is_(True)).order_by(AssetClass.id)
+        )
+    )
+    now = datetime.now(UTC)
+    for index, asset_class in enumerate(asset_classes):
+        db_session.add(
+            Holding(
+                asset_class=asset_class,
+                symbol=f"51010{index}",
+                name=f"标的{index}",
+                market="SH",
+                account_name=f"账户{index}",
+                trade_currency="CNY",
+                quantity=Decimal("20"),
+                average_cost_price=Decimal("1"),
+                cost_fx_to_cny=Decimal("1"),
+                baseline_fx_to_cny=Decimal("1"),
+                lot_size=Decimal("1"),
+                quantity_precision=12,
+                is_rebalance_preferred=True,
+            )
+        )
+        db_session.add(
+            MarketData(
+                data_type="price",
+                symbol=f"51010{index}",
+                source="test-provider",
+                value=Decimal("1"),
+                market_time=now,
+                fetched_at=now,
+                status="valid",
+            )
+        )
+    await db_session.commit()
+```
+
+Update the import at the top of the test file to include `run_manual_digest` and `select`:
+
+```python
+from sqlalchemy import select
+
+from app.services.email_digest import run_manual_digest, send_daily_digest_if_configured
+```
+
+- [ ] **Step 2: Run the manual digest tests to verify they fail**
+
+Run: `pytest tests/integration/test_email_digest.py -v`
+
+Expected: FAIL - route `/api/email/digest` returns 404 and `run_manual_digest` cannot be imported.
+
+- [ ] **Step 3: Add the result schema**
+
+In `backend/app/schemas/email_settings.py`, add:
+
+```python
+class EmailDigestTriggerResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["sent", "anomaly_sent", "skipped_empty", "not_configured"]
+    sent_at: datetime | None
+```
+
+- [ ] **Step 4: Refactor the digest service**
+
+In `backend/app/services/email_digest.py`, extend the imports:
+
+```python
+import logging
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.db.session import SessionFactory
+from app.schemas.analytics import PortfolioAnalyticsResponse
+from app.schemas.email_settings import EmailDigestTriggerResult
+from app.schemas.rebalance import RebalancePreviewResponse
+from app.services.analytics import get_portfolio_analytics
+from app.services.email_sender import send_email
+from app.services.email_settings import load_email_config
+from app.services.errors import ServiceError
+from app.services.market_data import refresh_all_required_data
+from app.services.rebalancing import preview_rebalance_with_defaults
+from app.services.snapshots import create_daily_snapshot_if_complete
+
+logger = logging.getLogger(__name__)
+```
+
+Replace the body of `send_daily_digest_if_configured` and append the new functions so the module contains:
+
+```python
+async def _run_digest(session: AsyncSession, config, local_date: date) -> str:
+    try:
+        analytics = await get_portfolio_analytics(session)
+    except ServiceError as exc:
+        if exc.code == "PORTFOLIO_DATA_INCOMPLETE":
+            await send_email(
+                config,
+                subject=f"投资组合日报 {local_date.isoformat()}（数据异常）",
+                html=build_anomaly_html(items=exc.extra["items"], local_date=local_date),
+            )
+            return "anomaly_sent"
+        raise
+    if analytics.data_status == "setup" or not analytics.holdings:
+        return "skipped_empty"
+
+    rebalance: RebalancePreviewResponse | None = None
+    try:
+        rebalance = await preview_rebalance_with_defaults(session)
+    except ServiceError:
+        rebalance = None
+    await send_email(
+        config,
+        subject=f"投资组合日报 {local_date.isoformat()}",
+        html=build_digest_html(
+            analytics=analytics,
+            rebalance=rebalance,
+            local_date=local_date,
+        ),
+    )
+    return "sent"
+
+
+async def send_daily_digest_if_configured(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> None:
+    config = await load_email_config(session)
+    if config is None:
+        return
+    local_now = now or datetime.now(UTC)
+    local_date = local_now.astimezone(ZoneInfo(get_settings().timezone)).date()
+    if not _is_trading_day(local_date):
+        return
+    await _run_digest(session, config, local_date)
+
+
+async def trigger_manual_digest(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> EmailDigestTriggerResult:
+    config = await load_email_config(session)
+    if config is None:
+        return EmailDigestTriggerResult(status="not_configured", sent_at=None)
+    local_now = now or datetime.now(UTC)
+    local_date = local_now.astimezone(ZoneInfo(get_settings().timezone)).date()
+    status = await _run_digest(session, config, local_date)
+    sent_at = datetime.now(UTC) if status in {"sent", "anomaly_sent"} else None
+    return EmailDigestTriggerResult(status=status, sent_at=sent_at)
+
+
+async def run_manual_digest(*, now: datetime | None = None) -> EmailDigestTriggerResult:
+    async with SessionFactory() as session:
+        async with session.begin():
+            await refresh_all_required_data(session)
+    try:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await create_daily_snapshot_if_complete(session)
+    except Exception:
+        logger.exception("Daily snapshot creation failed before manual email digest")
+    async with SessionFactory() as session:
+        async with session.begin():
+            return await trigger_manual_digest(session, now=now)
+```
+
+- [ ] **Step 5: Add the route and register it**
+
+Create `backend/app/api/routes/email.py`:
+
+```python
+from fastapi import APIRouter
+
+from app.schemas.email_settings import EmailDigestTriggerResult
+from app.services.email_digest import run_manual_digest
+
+router = APIRouter(prefix="/email", tags=["email"])
+
+
+@router.post("/digest", response_model=EmailDigestTriggerResult)
+async def post_email_digest() -> EmailDigestTriggerResult:
+    return await run_manual_digest()
+```
+
+In `backend/app/api/router.py`, add the import and registration:
+
+```python
+from app.api.routes.email import router as email_router
+
+api_router.include_router(email_router)
+```
+
+- [ ] **Step 6: Run the backend manual digest tests to verify they pass**
+
+Run: `pytest tests/integration/test_email_digest.py -v`
+
+Expected: PASS (all digest tests including the scheduled-path ones).
+
+- [ ] **Step 7: Write the failing frontend tests**
+
+Append to `frontend/tests/EmailSettingsForm.test.tsx`:
+
+```tsx
+it("triggers a manual digest and shows the sent result", async () => {
+  renderWithProviders(<EmailSettingsForm />, {
+    handlers: [
+      ...handlers(),
+      http.post("/api/email/digest", () => HttpResponse.json({ status: "sent", sent_at: "2026-08-04T00:00:00Z" })),
+    ],
+  });
+  const user = userEvent.setup();
+
+  await screen.findByRole("heading", { name: "邮件通知" });
+  await user.click(screen.getByRole("button", { name: "立即发送日报" }));
+
+  expect(await screen.findByText("日报已发送")).toBeInTheDocument();
+});
+
+it("shows the not-configured result for a manual digest", async () => {
+  renderWithProviders(<EmailSettingsForm />, {
+    handlers: [
+      ...handlers(),
+      http.post("/api/email/digest", () => HttpResponse.json({ status: "not_configured", sent_at: null })),
+    ],
+  });
+  const user = userEvent.setup();
+
+  await screen.findByRole("heading", { name: "邮件通知" });
+  await user.click(screen.getByRole("button", { name: "立即发送日报" }));
+
+  expect(await screen.findByText("请先完成邮件配置")).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 8: Run the frontend tests to verify they fail**
+
+Run: `cd frontend && npm test -- --run EmailSettingsForm.test.tsx`
+
+Expected: FAIL - button `立即发送日报` does not exist.
+
+- [ ] **Step 9: Add the frontend type, hook, and button**
+
+In `frontend/src/api/types.ts`, add:
+
+```ts
+export type EmailDigestTriggerStatus = "sent" | "anomaly_sent" | "skipped_empty" | "not_configured";
+
+export interface EmailDigestTriggerResult {
+  status: EmailDigestTriggerStatus;
+  sent_at: string | null;
+}
+```
+
+In `frontend/src/features/settings/api.ts`, add:
+
+```ts
+import type { EmailDigestTriggerResult, EmailSettings, EmailTestResult } from "../../api/types";
+
+export function useTriggerEmailDigest() {
+  return useMutation({
+    mutationFn: () => apiRequest<EmailDigestTriggerResult>("/api/email/digest", { method: "POST" }),
+  });
+}
+```
+
+In `frontend/src/features/settings/EmailSettingsForm.tsx`, add the hook import, the status labels, and the button. Update the imports and component:
+
+```tsx
+import type { EmailDigestTriggerResult, EmailSecurity, EmailTestResult } from "../../api/types";
+import { useEmailSettings, useSaveEmailSettings, useTestEmailSettings, useTriggerEmailDigest } from "./api";
+
+const DIGEST_RESULT_LABELS: Record<EmailDigestTriggerResult["status"], string> = {
+  sent: "日报已发送",
+  anomaly_sent: "数据不完整，已发送数据异常通知",
+  skipped_empty: "暂无持仓，未发送",
+  not_configured: "请先完成邮件配置",
+};
+
+const digest = useTriggerEmailDigest();
+```
+
+In the action row, before the test-email button, add:
+
+```tsx
+        <button type="button" className={styles.secondary} onClick={() => void digest.mutateAsync()} disabled={digest.isPending || save.isPending || test.isPending}><Mail size={15} aria-hidden="true" />{digest.isPending ? "正在刷新并发送..." : "立即发送日报"}</button>
+```
+
+And after the test-result feedback, add:
+
+```tsx
+      {digest.data ? <small className={styles.validationGood}>{DIGEST_RESULT_LABELS[digest.data.status]}</small> : null}
+      {digest.isError ? <small className={styles.validationBad}>{digest.error instanceof Error ? digest.error.message : "日报发送失败。"}</small> : null}
+```
+
+Remove the now-unused `Mail` icon from the test-email button if it conflicts, and keep `Mail` imported (it is used by the new button).
+
+- [ ] **Step 10: Run the frontend tests to verify they pass**
+
+Run: `cd frontend && npm test -- --run`
+
+Expected: PASS (all frontend suites).
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add backend/app/schemas/email_settings.py backend/app/services/email_digest.py backend/app/api/routes/email.py backend/app/api/router.py backend/tests/integration/test_email_digest.py frontend/src/api/types.ts frontend/src/features/settings/api.ts frontend/src/features/settings/EmailSettingsForm.tsx frontend/tests/EmailSettingsForm.test.tsx
+git commit -m "feat: manual daily digest trigger"
+```
+
+---
+
 ## Final Verification
 
 - [ ] Run `make test-backend` (full backend suite in the isolated Compose project).
