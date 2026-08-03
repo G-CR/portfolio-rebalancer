@@ -920,3 +920,23 @@ def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
         created_at=plan.created_at.isoformat(),
         updated_at=plan.updated_at.isoformat(),
     )
+
+
+async def preview_rebalance_with_defaults(session: AsyncSession) -> RebalancePreviewResponse:
+    setting = await session.scalar(select(Setting).limit(1))
+    if setting is None:
+        raise RuntimeError("Default settings row is missing.")
+    payload = RebalancePreviewRequest(
+        session_token="daily-email-digest",
+        request_token=uuid4().hex,
+        available_cny=setting.rebalance_available_cny,
+        available_usd=setting.rebalance_available_usd,
+        valuation_basis=setting.rebalance_valuation_basis,
+        allow_sell=setting.allow_sell,
+        allow_fx=setting.allow_fx,
+        tolerance=setting.default_tolerance,
+        minimum_trade_cny=setting.minimum_trade_amount_cny,
+        acknowledge_stale_data=True,
+    )
+    prepared = await _prepare_rebalance(session, payload=payload, allow_stale=True)
+    return _preview_response(payload=payload, prepared=prepared, refresh_attempted=False)
