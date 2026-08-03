@@ -360,6 +360,10 @@ class Setting(Base):
             "rebalance_valuation_basis IN ('actual', 'fx_neutral')",
             name="ck_settings_rebalance_valuation_basis",
         ),
+        CheckConstraint(
+            "email_smtp_security IN ('ssl', 'starttls')",
+            name="ck_settings_email_smtp_security",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -395,6 +399,28 @@ class Setting(Base):
         default="actual",
         server_default="actual",
     )
+    email_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    email_recipient: Mapped[str | None] = mapped_column(String(320))
+    email_smtp_host: Mapped[str | None] = mapped_column(String(255))
+    email_smtp_port: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=465,
+        server_default="465",
+    )
+    email_smtp_security: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="ssl",
+        server_default="ssl",
+    )
+    email_smtp_username: Mapped[str | None] = mapped_column(String(320))
+    email_from: Mapped[str | None] = mapped_column(String(320))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
