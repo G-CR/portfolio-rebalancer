@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.db.models import Setting
 from app.db.session import SessionFactory
+from app.services.email_digest import send_daily_digest_if_configured
 from app.services.market_data import refresh_all_required_data
 from app.services.snapshots import create_daily_snapshot_if_complete
 
@@ -38,6 +39,13 @@ async def scheduled_refresh() -> None:
                 await create_daily_snapshot_if_complete(session)
     except Exception:
         logger.exception("Daily snapshot creation failed after successful market refresh")
+
+    try:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await send_daily_digest_if_configured(session)
+    except Exception:
+        logger.exception("Daily email digest failed after successful market refresh")
 
 
 def build_scheduler(*, refresh_hour: int | None = None, refresh_minute: int | None = None):
