@@ -71,7 +71,7 @@ Normal digest:
 
 1. Summary: data date/time, total market value (CNY), total unrealized PnL and return, decision status (保持现状 / 建议补仓 / 建议再平衡).
 2. Asset-class table: name, target weight, actual weight, drift, class PnL.
-3. Per-holding PnL table grouped by asset class: name/symbol, account, quantity, cost price, current price, cost FX, current FX, market value (CNY), unrealized PnL (CNY), PnL rate, price effect, FX effect. Reuses `analytics.py` per-position results.
+3. Per-holding PnL table grouped by asset class: quantity, current price, market value (CNY), unrealized PnL (CNY), PnL rate, price effect, FX effect. Reuses `analytics.py` per-position results.
 4. Rebalance suggestions from the default-constraint preview: decision summary, max drift before/after, trade list (symbol, action, quantity, amount CNY, reason text) when trades exist; "当前配置在容差内，无需调整" when none; infeasible notice when infeasible.
 5. Footer: data cutoff time; stale data adds a yellow banner "部分行情数据可能过期" at the top while content is still sent.
 

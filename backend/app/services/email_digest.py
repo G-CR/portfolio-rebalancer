@@ -110,12 +110,8 @@ def build_digest_html(
     for class_name, holdings in holdings_by_class:
         rows = [
             [
-                _esc(holding.name),
-                _esc(holding.symbol),
-                _esc(holding.account_name),
                 _one_decimal(holding.quantity),
                 _one_decimal(holding.current_price),
-                _one_decimal(holding.current_fx_to_cny),
                 _money(holding.market_value_cny),
                 _signed_money(holding.unrealized_pnl),
                 _percent(holding.unrealized_return),
@@ -128,12 +124,8 @@ def build_digest_html(
             f"<h3 style=\"margin:18px 0 6px;font-size:14px;\">{_esc(class_name)}</h3>"
             + _table(
                 [
-                    "名称",
-                    "代码",
-                    "账户",
                     "份额",
                     "现价",
-                    "汇率",
                     "市值 (CNY)",
                     "浮动盈亏 (CNY)",
                     "盈亏率",

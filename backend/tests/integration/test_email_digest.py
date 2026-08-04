@@ -145,7 +145,7 @@ async def test_digest_sends_full_analysis_email(api_client, db_session, monkeypa
     html = send.await_args.kwargs["html"]
     assert subject.startswith("投资组合日报")
     assert "总市值" in html
-    assert "标的0" in html
+    assert "份额" in html
     assert "再平衡建议" in html
 
 

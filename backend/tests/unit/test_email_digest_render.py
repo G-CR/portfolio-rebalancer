@@ -148,7 +148,7 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "投资组合日报" in html
     assert "2026-08-03" in html
     assert "总市值" in html
-    assert "标普 500" in html
+    assert "美股" in html
     assert "SPY" in html
     assert "建议再平衡" in html
     assert "买入" in html
@@ -161,8 +161,7 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "+0.0%" in html
     assert "3.0" in html
     assert "100.0" in html
-    assert "7.3" in html
-    assert "7.26" not in html
+    assert "账户A" not in html
     assert "当前配置在容差内" not in html
 
 
@@ -190,9 +189,9 @@ def test_digest_html_no_trades_shows_hold_copy() -> None:
     assert "当前配置在容差内，无需调整" in html
 
 
-def test_digest_html_escapes_holding_names() -> None:
-    holding = _holding().model_copy(update={"name": "A&B <ETF>"})
-    analytics = _analytics().model_copy(update={"holdings": [holding]})
+def test_digest_html_escapes_asset_class_names() -> None:
+    asset_class = _asset_class().model_copy(update={"name": "A&B <ETF>"})
+    analytics = _analytics().model_copy(update={"asset_classes": [asset_class]})
 
     html = build_digest_html(
         analytics=analytics,
