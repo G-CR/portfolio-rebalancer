@@ -38,7 +38,7 @@ function formatTime(value: string) {
 }
 
 function HistoryBasis({ label, item }: { label: string; item: CostAdjustmentHistoryItem["before"] }) {
-  return <div className={styles.historyBasis}><span>{label}</span><strong>{item.quantity}</strong><small>成本价 {formatDecimal(item.average_cost_price, 3)} · 汇率 {item.cost_fx_to_cny}</small></div>;
+  return <div className={styles.historyBasis}><span>{label}</span><strong>{item.quantity}</strong><small>成本价 {formatDecimal(item.average_cost_price, 3)} · 汇率 {formatDecimal(item.cost_fx_to_cny, 2)}</small></div>;
 }
 
 export function AdjustmentHistoryDrawer({ holding, open, onClose, onUpdated }: Props) {

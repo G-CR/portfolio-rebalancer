@@ -124,7 +124,7 @@ describe("sale, correction, and history drawers", () => {
     const historyItem = {
       id: "50000000-0000-4000-8000-000000000001",
       operation_type: "PURCHASE",
-      before: basis,
+      before: { ...basis, cost_fx_to_cny: "7.181846190522" },
       after: { ...basis, quantity: "17.0000", total_cost_cny: "62281.12" },
       input_summary: { quantity: "5" },
       note: "定投",
@@ -160,11 +160,15 @@ describe("sale, correction, and history drawers", () => {
     expect(within(item).getByText("定投")).toBeInTheDocument();
     expect(within(item).getByText("12.0000")).toBeInTheDocument();
     expect(within(item).getByText("17.0000")).toBeInTheDocument();
+    expect(within(item).getAllByText(/汇率 7\.18(?!\d)/).length).toBeGreaterThanOrEqual(1);
+    expect(within(item).queryByText(/7\.181846190522/)).not.toBeInTheDocument();
     await user.click(within(item).getByRole("button", { name: "恢复到此状态" }));
 
     const restoreDialog = await screen.findByRole("dialog", { name: "恢复 SPY 成本状态" });
     expect(within(restoreDialog).getByText("将新增一条人工修正记录，原历史不会删除。"))
       .toBeInTheDocument();
+    expect(within(restoreDialog).getAllByText("7.18").length).toBeGreaterThanOrEqual(1);
+    expect(within(restoreDialog).queryByText("7.181846190522")).not.toBeInTheDocument();
     expect(within(restoreDialog).getByRole("button", { name: "确认恢复为新修正" })).toBeEnabled();
   });
 

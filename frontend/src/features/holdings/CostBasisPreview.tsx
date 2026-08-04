@@ -5,8 +5,13 @@ import { costBasisIdentityMatches } from "./decimalIdentity";
 import { formatDecimal } from "../analytics/format";
 import styles from "./Holdings.module.css";
 
-const COST_KEYS = new Set(['average_cost_price', 'cost_fx_to_cny']);
-function fmtRawValue(key, value) { return COST_KEYS.has(key) ? formatDecimal(value, 3) : value; }
+const COST_PRICE_KEYS = new Set(['average_cost_price']);
+const COST_FX_KEYS = new Set(['cost_fx_to_cny']);
+function fmtRawValue(key, value) {
+  if (COST_PRICE_KEYS.has(key)) return formatDecimal(value, 3);
+  if (COST_FX_KEYS.has(key)) return formatDecimal(value, 2);
+  return value;
+}
 
 const rows = [
   ["份额", "quantity"],

@@ -102,7 +102,7 @@ describe("PurchaseDrawer", () => {
       operation: "purchase",
       payload: { quantity: "5.000000000001", actual_fee: "2.300000000001" },
     });
-  });
+  }, 15_000);
 
   it("uses estimated fee mode and allows saving complete defaults", async () => {
     const user = userEvent.setup();

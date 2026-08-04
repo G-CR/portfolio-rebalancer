@@ -156,6 +156,21 @@ describe("HoldingsTable mobile row details", () => {
     expect(onCommand).toHaveBeenCalledWith(holdingFixture, "purchase");
   });
 
+  it("formats cost FX to two decimals in summary and details", async () => {
+    const user = userEvent.setup();
+    const precise = { ...holdingFixture, cost_fx_to_cny: "6.769073520399" };
+    renderTable({ holdings: [precise] });
+
+    const summaryRow = screen.getByText("SPY").closest("tr")!;
+    expect(within(summaryRow).getByText("6.77")).toBeInTheDocument();
+    expect(within(summaryRow).queryByText("6.769073520399")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "查看 SPY 持仓详情" }));
+    const detailRow = document.getElementById(screen.getByRole("button", { name: "收起 SPY 持仓详情" }).getAttribute("aria-controls")!)!;
+    expect(detailRow).toHaveTextContent("6.77");
+    expect(detailRow).not.toHaveTextContent("6.769073520399");
+  });
+
   it("uses unique independent controls for multiple rows", async () => {
     const user = userEvent.setup();
     renderTable({ holdings: [holdingFixture, secondHolding], analytics: [spyAnalytics, qqqAnalytics] });
