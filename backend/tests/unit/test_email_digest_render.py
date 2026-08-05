@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 from app.schemas.analytics import (
     AssetClassAnalyticsResponse,
@@ -214,6 +214,21 @@ def test_digest_html_stale_banner() -> None:
     )
 
     assert "部分行情数据可能过期" in html
+
+
+def test_digest_html_shows_data_time_in_shanghai() -> None:
+    analytics = _analytics().model_copy(
+        update={"as_of": datetime(2026, 8, 3, 16, 0, tzinfo=UTC)}
+    )
+
+    html = build_digest_html(
+        analytics=analytics,
+        rebalance=None,
+        local_date=date(2026, 8, 3),
+    )
+
+    assert "2026-08-04 00:00:00" in html
+    assert "16:00:00 UTC" not in html
 
 
 def test_anomaly_html_lists_items_without_analysis() -> None:

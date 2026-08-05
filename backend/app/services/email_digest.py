@@ -44,6 +44,13 @@ def _percent(value: object) -> str:
     return f"{Decimal(str(value)) * 100:.1f}%"
 
 
+def _data_time(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    local = value.astimezone(ZoneInfo(get_settings().timezone))
+    return local.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 def _table(headers: list[str], rows: list[list[str]]) -> str:
     head = "".join(
         f"<th style=\"padding:6px 10px;border-bottom:1px solid #ddd;text-align:left;font-size:12px;\">{_esc(header)}</th>"
@@ -82,7 +89,7 @@ def build_digest_html(
         ["决策", f"{_esc(decision.title)}（{_esc(decision.reason)}）"],
         [
             "数据时间",
-            _esc(analytics.as_of.strftime("%Y-%m-%d %H:%M:%S %Z") if analytics.as_of else "-"),
+            _esc(_data_time(analytics.as_of)),
         ],
     ]
 
