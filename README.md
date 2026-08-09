@@ -15,10 +15,10 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Open `http://localhost:8080`. Only the Nginx frontend is published, and it is bound to `127.0.0.1`. To use another local port, set `PORTFOLIO_PORT` in `.env` before startup.
+Open `http://localhost:3000`. Only the Nginx frontend is published, and it is bound to `127.0.0.1`. To use another local port, set `PORTFOLIO_PORT` in `.env` before startup.
 
 ```bash
-curl -fsS http://localhost:8080/api/health
+curl -fsS http://localhost:3000/api/health
 docker compose ps
 docker compose logs -f
 ```

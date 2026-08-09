@@ -4,7 +4,7 @@
 
 **Goal:** Build the confirmed V1.1 local portfolio calibration web app, including cost basis maintenance, automated end-of-day market data, P&L decomposition, snapshots, and explainable rebalancing suggestions.
 
-**Architecture:** A React 19 single-page application is served by Nginx and calls a FastAPI API through `/api`. FastAPI owns every financial formula and persists PostgreSQL data through SQLAlchemy; a separate worker process uses the same service layer for scheduled market refreshes and daily snapshots. Docker Compose exposes only `127.0.0.1:8080`, while API, worker, and database remain on the internal Docker network.
+**Architecture:** A React 19 single-page application is served by Nginx and calls a FastAPI API through `/api`. FastAPI owns every financial formula and persists PostgreSQL data through SQLAlchemy; a separate worker process uses the same service layer for scheduled market refreshes and daily snapshots. Docker Compose exposes only `127.0.0.1:3000`, while API, worker, and database remain on the internal Docker network.
 
 **Tech Stack:** Python 3.13, FastAPI, Pydantic 2, SQLAlchemy 2 async, Alembic, PostgreSQL 17, APScheduler, httpx, yfinance, AKShare, Tushare, cryptography, pytest, Hypothesis, React 19, TypeScript, Vite, React Router, TanStack Query, React Hook Form, Zod, Recharts, Lucide React, CSS Modules, Vitest, Testing Library, axe-core, Playwright, Nginx, Docker Compose.
 
@@ -239,7 +239,7 @@ app.include_router(api_router)
 
 - [ ] **Step 4: Add container and local commands**
 
-`compose.yaml` must define `frontend`, `api`, `worker`, and `db`; bind only `127.0.0.1:8080:80`; keep API and PostgreSQL unexposed; use named volumes `postgres_data` and `secret_data`. `Makefile` must provide `up`, `down`, `logs`, `test-backend`, and `test-frontend` targets.
+`compose.yaml` must define `frontend`, `api`, `worker`, and `db`; bind only `127.0.0.1:3000:80`; keep API and PostgreSQL unexposed; use named volumes `postgres_data` and `secret_data`. `Makefile` must provide `up`, `down`, `logs`, `test-backend`, and `test-frontend` targets.
 
 Run: `docker compose config`
 
@@ -251,7 +251,7 @@ Run: `cd backend && uv run pytest tests/unit/test_health.py -v`
 
 Expected: PASS.
 
-Run: `docker compose up -d db api frontend && curl -fsS http://localhost:8080/api/health`
+Run: `docker compose up -d db api frontend && curl -fsS http://localhost:3000/api/health`
 
 Expected: `{"status":"ok","service":"api"}`.
 
@@ -1968,7 +1968,7 @@ restore:
 
 - [ ] **Step 5: Verify local-only networking**
 
-Run: `docker compose config | rg '127.0.0.1:8080'`
+Run: `docker compose config | rg '127.0.0.1:3000'`
 
 Expected: one frontend binding.
 
@@ -2092,7 +2092,7 @@ git commit -m "test: add visual and accessibility coverage"
 
 - [ ] **Step 1: Document first-run workflow**
 
-`README.md` must contain exact Docker Desktop prerequisites, `.env` creation, `docker compose up -d`, `http://localhost:8080`, health checks, logs, shutdown, and upgrade commands.
+`README.md` must contain exact Docker Desktop prerequisites, `.env` creation, `docker compose up -d`, `http://localhost:3000`, health checks, logs, shutdown, and upgrade commands.
 
 - [ ] **Step 2: Document user workflows**
 
@@ -2123,10 +2123,10 @@ docker compose down -v
 docker compose build --no-cache
 docker compose up -d
 docker compose ps
-curl -fsS http://localhost:8080/api/health
+curl -fsS http://localhost:3000/api/health
 ```
 
-Expected: all four services are healthy, the API returns `{"status":"ok","service":"api"}`, default strategy rows are seeded once, and the application loads at `http://localhost:8080`.
+Expected: all four services are healthy, the API returns `{"status":"ok","service":"api"}`, default strategy rows are seeded once, and the application loads at `http://localhost:3000`.
 
 - [ ] **Step 7: Execute the acceptance checklist**
 

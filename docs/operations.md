@@ -2,7 +2,7 @@
 
 ## 服务与网络
 
-`frontend` 是唯一发布端口的服务，Nginx 绑定 `127.0.0.1:${PORTFOLIO_PORT:-8080}` 并代理 `/api`。`api` 执行业务计算和迁移，`worker` 执行定时刷新与日终快照，`db` 保存 PostgreSQL 数据。API、worker 和数据库只存在于 Compose 内部网络。
+`frontend` 是唯一发布端口的服务，Nginx 绑定 `127.0.0.1:${PORTFOLIO_PORT:-3000}` 并代理 `/api`。`api` 执行业务计算和迁移，`worker` 执行定时刷新与日终快照，`db` 保存 PostgreSQL 数据。API、worker 和数据库只存在于 Compose 内部网络。
 
 使用 `docker compose config` 检查只有一个 `host_ip: 127.0.0.1`，且不存在发布的 5432 或 8000 端口。
 
@@ -38,7 +38,7 @@ Tushare 与 Alpha Vantage 密钥使用 Fernet 加密后写入数据库，密钥�
 
 ```bash
 docker compose ps
-curl -fsS http://localhost:8080/api/health
+curl -fsS http://localhost:3000/api/health
 docker compose logs --tail=100 api worker
 ```
 

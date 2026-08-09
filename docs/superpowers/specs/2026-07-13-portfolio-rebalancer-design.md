@@ -87,7 +87,7 @@ V1 明确不包含：
 
 ```mermaid
 flowchart LR
-    B["本机浏览器"] -->|"http://localhost:8080"| F["React 前端 / Nginx"]
+    B["本机浏览器"] -->|"http://localhost:3000"| F["React 前端 / Nginx"]
     F -->|"/api"| A["FastAPI 后端"]
     A --> D[("PostgreSQL")]
     W["Python 定时任务"] --> D
@@ -106,7 +106,7 @@ Docker Compose 包含四个服务：
 
 部署约束：
 
-- `frontend` 只绑定宿主机 `127.0.0.1:8080`。
+- `frontend` 只绑定宿主机 `127.0.0.1:3000`。
 - `api`、`worker` 和 `db` 只加入 Docker 内部网络，不暴露数据库端口。
 - 数据库使用 Docker 命名卷持久化。
 - 应用不发送遥测数据。
@@ -771,7 +771,7 @@ API 以资源和业务动作划分，建议包含以下边界：
 
 ### 19.6 部署验证
 
-- `docker compose up` 后能够通过 `http://localhost:8080` 打开应用。
+- `docker compose up` 后能够通过 `http://localhost:3000` 打开应用。
 - 宿主机和局域网无法直接访问 PostgreSQL。
 - 重启容器后数据仍然存在。
 - 健康检查能够区分前端、API、worker 和数据库状态。
