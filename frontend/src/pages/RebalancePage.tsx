@@ -129,7 +129,7 @@ export function RebalancePage() {
     observedRefreshVersion.current = refreshVersion;
     planRestoreCompleted.current = true;
     preview.reset();
-    setPlan(null);
+    setPlan((current) => current?.status === "in_progress" ? current : null);
     setIsDirty(false);
     setOperationError(null);
     setDefaultsWarning(null);
