@@ -14,6 +14,7 @@ const icons = {
 
 export function DecisionBanner({ decision }: { decision: PortfolioDecision }) {
   const Icon = icons[decision.status];
+  const showFacts = decision.status === "contribute" || decision.status === "rebalance";
   const action = decision.primary_action === "add_holding"
     ? { to: "/holdings", label: "添加第一个持仓" }
     : decision.primary_action === "view_rebalance"
@@ -28,10 +29,12 @@ export function DecisionBanner({ decision }: { decision: PortfolioDecision }) {
         <h2 id="decision-title">{decision.title}</h2>
         <span>{decision.reason}</span>
       </div>
-      <dl className={styles.decisionFacts}>
-        <div><dt>最大偏离</dt><dd>{formatPercent(decision.max_drift)}</dd></div>
-        <div><dt>汇率贡献</dt><dd>{formatPercent(decision.fx_contribution)}</dd></div>
-      </dl>
+      {showFacts && (
+        <dl className={styles.decisionFacts}>
+          <div><dt>最大偏离</dt><dd>{formatPercent(decision.max_drift)}</dd></div>
+          <div><dt>汇率贡献</dt><dd>{formatPercent(decision.fx_contribution)}</dd></div>
+        </dl>
+      )}
       <Link className={styles.decisionAction} to={action.to}>{action.label}<ArrowRight size={15} aria-hidden="true" /></Link>
     </section>
   );
