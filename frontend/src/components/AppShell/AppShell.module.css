@@ -209,11 +209,11 @@
 }
 
 .dataTime[data-status="attention"] strong {
-  color: var(--color-negative);
+  color: var(--color-fx);
 }
 
 .dataTime[data-status="stale"] strong {
-  color: var(--color-warning);
+  color: var(--color-target);
 }
 
 .dataTime[data-status="manual"] strong {
@@ -227,9 +227,9 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: min(420px, calc(100vw - var(--sidebar-width) - var(--space-12)));
+  max-width: min(420px, calc(100vw - var(--sidebar-width) - var(--space-6) - var(--space-6)));
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-negative);
+  border: 1px solid var(--color-fx);
   border-radius: 2px;
   background: var(--color-surface);
   color: var(--color-ink);

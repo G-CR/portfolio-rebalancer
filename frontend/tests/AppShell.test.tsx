@@ -1,13 +1,14 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { MemoryRouter } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 
 import { AppShell } from "../src/components/AppShell/AppShell";
 import { FormField } from "../src/components/FormField/FormField";
 import type { MarketDataCollection } from "../src/api/types";
 import { formatDataTime } from "../src/features/analytics/format";
-import { marketDataCollectionFixture } from "./fixtures";
+import { RebalancePage } from "../src/pages/RebalancePage";
+import { assetClassFixtures, holdingFixture, marketDataCollectionFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
 const mobileQuery = "(max-width: 760px)";
@@ -198,6 +199,14 @@ describe("AppShell", () => {
     expect(await screen.findByText("\u6570\u636e\u9700\u5904\u7406")).toBeInTheDocument();
   });
 
+  it("does not describe an empty market-data collection as valid", async () => {
+    installMatchMedia(false);
+    renderShell("/", { ...marketDataCollectionFixture, items: [] });
+
+    expect(await screen.findByText("尚无市场数据")).toBeInTheDocument();
+    expect(screen.queryByText("数据有效")).not.toBeInTheDocument();
+  });
+
   it("shows pending refresh state and prevents duplicate refreshes", async () => {
     installMatchMedia(false);
     let resolveRefresh: ((response: HttpResponse) => void) | undefined;
@@ -215,6 +224,43 @@ describe("AppShell", () => {
     expect(await screen.findByRole("button", { name: "\u6b63\u5728\u5237\u65b0" })).toBeDisabled();
     resolveRefresh?.(HttpResponse.json(marketDataCollectionFixture));
     expect(await screen.findByRole("button", { name: "\u5237\u65b0" })).toBeEnabled();
+  });
+
+  it("clears the displayed rebalance preview and plan after a topbar market refresh", async () => {
+    installMatchMedia(false);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="rebalance" element={<RebalancePage />} />
+        </Route>
+      </Routes>,
+      {
+        route: "/rebalance",
+        handlers: [
+          http.get("/api/market-data", () => HttpResponse.json(marketDataCollectionFixture)),
+          http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
+          http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+          http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
+          http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
+          http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
+          http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
+          http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
+        ],
+      },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "开始测算" }));
+    await screen.findByText("建议执行 4 笔交易");
+    await user.click(screen.getByRole("button", { name: "保存方案" }));
+    await screen.findByText("方案已保存，尚未开始");
+
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+
+    expect(await screen.findByText("配置本次资金与约束后开始测算")).toBeInTheDocument();
+    expect(screen.queryByText("建议执行 4 笔交易")).not.toBeInTheDocument();
+    expect(screen.queryByText("方案已保存，尚未开始")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
   });
 
   it("links to data sources when refresh fails without discarding cached status", async () => {

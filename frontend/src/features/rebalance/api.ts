@@ -1,7 +1,16 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
 import type { RebalancePlan, RebalancePreview, RebalancePreviewPayload } from "../../api/types";
+
+export const rebalancePlansQueryKey = ["rebalance", "plans"] as const;
+
+export function useRebalancePlans() {
+  return useQuery({
+    queryKey: rebalancePlansQueryKey,
+    queryFn: () => apiRequest<{ items: RebalancePlan[] }>("/api/rebalance/plans"),
+  });
+}
 
 export function useRebalancePreview() {
   return useMutation({

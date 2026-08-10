@@ -23,6 +23,7 @@ export const server = setupServer(
     ...await request.json() as object,
     updated_at: "2026-07-15T00:00:00Z",
   })),
+  http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
   http.get("/api/analytics/portfolio", () => HttpResponse.json({
     as_of: null,
     data_status: "setup",

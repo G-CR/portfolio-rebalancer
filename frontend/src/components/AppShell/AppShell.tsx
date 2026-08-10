@@ -42,6 +42,7 @@ function useMediaQuery(query: string) {
 
 function marketStatusSummary(items: MarketDataStatus[] | undefined) {
   if (!items) return { label: "\u5c1a\u672a\u5237\u65b0", tone: "unknown" };
+  if (items.length === 0) return { label: "尚无市场数据", tone: "unknown" };
   if (items.some((item) => item.status === "missing" || item.status === "failed")) {
     return { label: "\u6570\u636e\u9700\u5904\u7406", tone: "attention" };
   }

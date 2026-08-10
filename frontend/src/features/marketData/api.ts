@@ -7,11 +7,21 @@ import { snapshotsQueryRoot } from "../snapshots/api";
 import type { MarketDataCollection, MarketDataStatus } from "../../api/types";
 
 export const marketDataQueryKey = ["market-data"] as const;
+export const marketDataRefreshVersionKey = ["market-data-refresh-version"] as const;
 
 export function useMarketData() {
   return useQuery({
     queryKey: marketDataQueryKey,
     queryFn: () => apiRequest<MarketDataCollection>("/api/market-data"),
+  });
+}
+
+export function useMarketDataRefreshVersion() {
+  return useQuery({
+    queryKey: marketDataRefreshVersionKey,
+    queryFn: async () => 0,
+    initialData: 0,
+    staleTime: Infinity,
   });
 }
 
@@ -21,6 +31,7 @@ export function useRefreshMarketData() {
     mutationFn: () => apiRequest<MarketDataCollection>("/api/market-data/refresh", { method: "POST" }),
     onSuccess: (data) => {
       queryClient.setQueryData(marketDataQueryKey, data);
+      queryClient.setQueryData<number>(marketDataRefreshVersionKey, (current = 0) => current + 1);
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: snapshotsQueryRoot });

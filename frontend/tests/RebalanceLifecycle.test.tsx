@@ -12,6 +12,7 @@ function handlers() {
     http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
     http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
     http.put("/api/settings/rebalance-defaults", async ({ request }) => HttpResponse.json({ ...await request.json() as object, updated_at: "2026-07-15T00:00:00Z" })),
+    http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
     http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
     http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
     http.post(`/api/rebalance/plans/${rebalancePlanFixture.id}/start`, () => HttpResponse.json({
@@ -62,7 +63,7 @@ it("shows four ordered execution steps and completion safeguards only while a pl
   expect(within(checklist).getAllByRole("listitem")).toHaveLength(4);
   expect(checklist).toHaveTextContent("按方案完成券商交易");
   expect(checklist).toHaveTextContent("更新实际持仓数量");
-  expect(checklist).toHaveTextContent("确认成交价格和当前汇率");
+  expect(checklist).toHaveTextContent("核对调整结果");
   expect(checklist).toHaveTextContent("完成再平衡并建立新基准");
   expect(screen.getByText("完成后会创建调仓后快照，并将当前汇率重置为新的汇率基准；不会修改成本价或成本汇率。")).toBeInTheDocument();
 });
@@ -76,4 +77,38 @@ it("can start directly by creating a plan first", async () => {
   await user.click(screen.getByRole("button", { name: "开始本次再平衡" }));
 
   expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
+});
+
+it("restores an in-progress plan so it can be completed after returning to rebalance", async () => {
+  let completed = false;
+  renderWithProviders(<RebalancePage />, {
+    handlers: [
+      http.get("/api/rebalance/plans", () => HttpResponse.json({
+        items: [{
+          ...rebalancePlanFixture,
+          status: "in_progress",
+          before_snapshot_id: "30000000-0000-4000-8000-000000000010",
+        }],
+      })),
+      http.post(`/api/rebalance/plans/${rebalancePlanFixture.id}/complete`, () => {
+        completed = true;
+        return HttpResponse.json({
+          ...rebalancePlanFixture,
+          status: "completed",
+          before_snapshot_id: "30000000-0000-4000-8000-000000000010",
+          after_snapshot_id: "30000000-0000-4000-8000-000000000011",
+          baseline_reset_at: "2026-07-14T00:20:00+00:00",
+        });
+      }),
+      ...handlers(),
+    ],
+  });
+  const user = userEvent.setup();
+
+  expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
+  expect(screen.getByText("建议执行 4 笔交易")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "完成再平衡并建立新基准" }));
+
+  expect(await screen.findByText("本次再平衡已完成，新汇率基准已建立")).toBeInTheDocument();
+  expect(completed).toBe(true);
 });
