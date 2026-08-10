@@ -23,7 +23,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   const [assetClassId, setAssetClassId] = useState(activeClasses[0]?.id ?? "");
   const [symbol, setSymbol] = useState("");
   const [name, setName] = useState("");
-  const [market, setMarket] = useState("US");
+  const [market, setMarket] = useState("");
   const [accountName, setAccountName] = useState("");
   const [quantity, setQuantity] = useState("0");
   const [averageCost, setAverageCost] = useState("0");
@@ -100,7 +100,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
           <div className={styles.fieldGrid}>
             <FormField label="标的代码" required><input type="text" value={symbol} onChange={(event) => setSymbol(event.target.value)} /></FormField>
             <FormField label="标的名称" required><input type="text" value={name} onChange={(event) => setName(event.target.value)} /></FormField>
-            <FormField label="上市市场" required><select value={market} onChange={(event) => { const next = event.target.value; setMarket(next); if (next !== "US") { setCostFx("1"); setBaselineFx("1"); } }}><option value="US">美股</option><option value="SH">上海 A 股</option><option value="SZ">深圳 A 股</option></select></FormField>
+            <FormField label="上市市场" required><select value={market} onChange={(event) => { const next = event.target.value; setMarket(next); if (next !== "US") { setCostFx("1"); setBaselineFx("1"); } }}><option value="" disabled>请选择市场</option><option value="US">美股</option><option value="SH">上海 A 股</option><option value="SZ">深圳 A 股</option></select></FormField>
             <FormField label="账户名称" required><input type="text" value={accountName} onChange={(event) => setAccountName(event.target.value)} /></FormField>
             <FormField label="交易币种" required><input type="text" value={currency} readOnly /></FormField>
           </div>

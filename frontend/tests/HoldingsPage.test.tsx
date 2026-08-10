@@ -167,6 +167,29 @@ describe("HoldingsPage", () => {
     }));
   });
 
+  it("requires market selection before creating a holding", async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+      http.post("/api/holdings", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(holdingFixture, { status: 201 });
+      }),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    expect(screen.getByRole("combobox", { name: "上市市场" })).toHaveValue("");
+    await user.type(screen.getByRole("textbox", { name: "标的代码" }), "SPY");
+    await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
+    await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("请完整填写标的代码、名称、市场和账户");
+    expect(body).toBeUndefined();
+  });
+
   it("shows editable USD FX fields only for US holdings", async () => {
     const user = userEvent.setup();
     renderWithProviders(<HoldingsPage />, { handlers: [
@@ -176,7 +199,7 @@ describe("HoldingsPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
     const market = screen.getByRole("combobox", { name: "上市市场" });
-    expect([...market.options].map((option) => [option.label, option.value])).toEqual([
+    expect([...market.options].filter((option) => option.value).map((option) => [option.label, option.value])).toEqual([
       ["美股", "US"],
       ["上海 A 股", "SH"],
       ["深圳 A 股", "SZ"],

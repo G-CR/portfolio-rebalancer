@@ -33,4 +33,13 @@
 
 ## Concerns
 
-None. The market selector defaults to US, making USD and its editable FX fields the initial state; selecting either Chinese A-share market switches to CNY and hides the FX inputs.
+None.
+
+## Reviewer follow-up: required market selection
+
+- Restored the prior empty market default and added a disabled `请选择市场` prompt option. The three valid market options remain `美股` (`US`), `上海 A 股` (`SH`), and `深圳 A 股` (`SZ`).
+- Added a regression test that fills every other required identity field, leaves market unselected, and verifies that creation is blocked without making a request.
+- TDD evidence: the new test failed with the previous `US` default, reporting received value `US` where an empty value was required.
+- Verification after the fix:
+  - Focused: `npm test -- HoldingsPage.test.tsx` — 1 file, 11 tests passed.
+  - Full frontend: `npm test` — 25 files, 146 tests passed.
