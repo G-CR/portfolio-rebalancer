@@ -73,6 +73,9 @@
 .lifecycle span { display: block; max-width: 620px; margin-top: var(--space-1); color: var(--color-muted); font-size: 11px; line-height: 1.5; }
 .lifecycle[data-status="in_progress"] { border-left: 3px solid var(--color-target); }
 .lifecycle[data-status="completed"] { border-left: 3px solid var(--color-planned); }
+.execution { display: grid; gap: var(--space-2); min-width: 240px; }
+.executionChecklist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-4); margin: 0; padding-left: var(--space-4); color: var(--color-ink); font-size: 11px; line-height: 1.5; }
+.completionNote { margin: 0; color: var(--color-muted); font-size: 10px; line-height: 1.5; }
 .commands { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 .primary { border: 1px solid var(--color-actual); background: var(--color-actual); color: white; }
 .secondary { border: 1px solid var(--color-ink); background: var(--color-surface); }
@@ -91,5 +94,5 @@
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1100px) { .workspace { grid-template-columns: 1fr; } .inputs { border-right: 0; border-bottom: 1px solid var(--color-rule); } .fieldGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .pageHeader { min-height: auto; align-items: flex-start; flex-direction: column; padding: var(--space-4); } .basisStatus { text-align: left; } .inputs, .allocation, .trades, .comparison, .lifecycle { padding: var(--space-4); } .fieldGrid, .railGrid { grid-template-columns: 1fr; } .summary { grid-template-columns: 1fr; } .summary dl { grid-template-columns: 1fr; border-top: 1px solid var(--color-rule); border-left: 0; } .summary dl div { grid-template-columns: 1fr auto; border-right: 0; border-bottom: 1px solid var(--color-rule); } .lifecycle { align-items: stretch; flex-direction: column; } .commands { display: grid; grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .pageHeader { min-height: auto; align-items: flex-start; flex-direction: column; padding: var(--space-4); } .basisStatus { text-align: left; } .inputs, .allocation, .trades, .comparison, .lifecycle { padding: var(--space-4); } .fieldGrid, .railGrid, .executionChecklist { grid-template-columns: 1fr; } .summary { grid-template-columns: 1fr; } .summary dl { grid-template-columns: 1fr; border-top: 1px solid var(--color-rule); border-left: 0; } .summary dl div { grid-template-columns: 1fr auto; border-right: 0; border-bottom: 1px solid var(--color-rule); } .lifecycle { align-items: stretch; flex-direction: column; } .commands { display: grid; grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .loading svg { animation: none; } }
