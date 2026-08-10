@@ -1,13 +1,20 @@
-import { screen, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import axe from "axe-core";
+import type { ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 
+import { portfolioAnalyticsKey } from "../src/api/queryKeys";
+import { createQueryClient } from "../src/app/providers";
+import { holdingsQueryRoot } from "../src/features/holdings/api";
 import { OverrideDrawer } from "../src/features/marketData/OverrideDrawer";
+import { marketDataQueryKey, useRefreshMarketData } from "../src/features/marketData/api";
+import { snapshotsQueryRoot } from "../src/features/snapshots/api";
 import { MarketDataPage } from "../src/pages/MarketDataPage";
 import { emailSettingsFixture, generalSettingsFixture, marketDataCollectionFixture, providerSettingsFixture } from "./fixtures";
-import { renderWithProviders } from "./testProviders";
+import { renderWithProviders, server } from "./testProviders";
 
 function pageHandlers() {
   return [
@@ -23,6 +30,25 @@ function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location-search">{location.search}</output>;
 }
+
+it("updates market data and invalidates dependent portfolio queries after refresh", async () => {
+  server.use(http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)));
+  const queryClient = createQueryClient();
+  queryClient.setQueryData(portfolioAnalyticsKey, { portfolio: "cached" });
+  queryClient.setQueryData([...holdingsQueryRoot, { includeArchived: false }], ["cached"]);
+  queryClient.setQueryData([...snapshotsQueryRoot, { page: 1 }], { items: [] });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  const { result } = renderHook(() => useRefreshMarketData(), { wrapper });
+
+  await act(() => result.current.mutateAsync());
+
+  expect(queryClient.getQueryData(marketDataQueryKey)).toEqual(marketDataCollectionFixture);
+  expect(queryClient.getQueryState(portfolioAnalyticsKey)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState([...holdingsQueryRoot, { includeArchived: false }])?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState([...snapshotsQueryRoot, { page: 1 }])?.isInvalidated).toBe(true);
+});
 
 it("keeps the last value visible when a source failed", async () => {
   renderWithProviders(<MarketDataPage />, { handlers: pageHandlers() });

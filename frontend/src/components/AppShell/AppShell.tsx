@@ -3,6 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { APP_ROUTES } from "../../app/navigation";
+import type { MarketDataStatus } from "../../api/types";
+import { formatDataTime } from "../../features/analytics/format";
+import { useMarketData, useRefreshMarketData } from "../../features/marketData/api";
 import styles from "./AppShell.module.css";
 
 const MOBILE_NAVIGATION_QUERY = "(max-width: 760px)";
@@ -37,6 +40,27 @@ function useMediaQuery(query: string) {
   return matches;
 }
 
+function marketStatusSummary(items: MarketDataStatus[] | undefined) {
+  if (!items) return { label: "\u5c1a\u672a\u5237\u65b0", tone: "unknown" };
+  if (items.some((item) => item.status === "missing" || item.status === "failed")) {
+    return { label: "\u6570\u636e\u9700\u5904\u7406", tone: "attention" };
+  }
+  if (items.some((item) => item.status === "stale")) {
+    return { label: "\u6570\u636e\u5df2\u8fc7\u671f", tone: "stale" };
+  }
+  if (items.some((item) => item.status === "manual")) {
+    return { label: "\u5305\u542b\u624b\u52a8\u503c", tone: "manual" };
+  }
+  return { label: "\u6570\u636e\u6709\u6548", tone: "valid" };
+}
+
+function latestMarketTime(items: MarketDataStatus[] | undefined) {
+  return items
+    ?.flatMap((item) => item.market_time ? [item.market_time] : [])
+    .sort()
+    .at(-1) ?? null;
+}
+
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -45,8 +69,22 @@ export function AppShell() {
   const navigationRef = useRef<HTMLElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreMenuFocus = useRef(true);
+  const marketData = useMarketData();
+  const refreshMarketData = useRefreshMarketData();
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const route = currentRoute(location.pathname);
   const modalNavigationOpen = isMobileNavigation && navigationOpen;
+  const status = marketStatusSummary(marketData.data?.items);
+  const mostRecentMarketTime = latestMarketTime(marketData.data?.items);
+
+  const refresh = useCallback(async () => {
+    setRefreshFailed(false);
+    try {
+      await refreshMarketData.mutateAsync();
+    } catch {
+      setRefreshFailed(true);
+    }
+  }, [refreshMarketData]);
 
   const closeNavigation = useCallback((restoreFocus = true) => {
     restoreMenuFocus.current = restoreFocus;
@@ -189,19 +227,32 @@ export function AppShell() {
           </div>
         </div>
         <div className={styles.topbarCommands}>
-          <div className={styles.dataTime}>
+          <div className={styles.dataTime} data-status={status.tone}>
             <span>最近市场数据</span>
-            <strong>尚未刷新</strong>
+            <strong>{mostRecentMarketTime ? formatDataTime(mostRecentMarketTime) : status.label}</strong>
+            <small>{mostRecentMarketTime ? status.label : null}</small>
           </div>
-          <button className={styles.commandButton} type="button" title="刷新市场数据">
+          <button
+            className={styles.commandButton}
+            type="button"
+            title="刷新市场数据"
+            disabled={refreshMarketData.isPending}
+            onClick={() => void refresh()}
+          >
             <RefreshCw size={16} aria-hidden="true" />
-            <span>刷新</span>
+            <span>{refreshMarketData.isPending ? "正在刷新" : "刷新"}</span>
           </button>
           <button className={styles.primaryCommand} type="button" title="保存当前快照" onClick={() => navigate("/history?capture=manual")}>
             <Save size={16} aria-hidden="true" />
             <span>保存快照</span>
           </button>
         </div>
+        {refreshFailed ? (
+          <div className={styles.refreshAlert} role="alert">
+            <span>刷新失败，已保留当前市场数据。</span>
+            <NavLink to="/data-sources">查看数据源</NavLink>
+          </div>
+        ) : null}
       </header>
 
       <main
