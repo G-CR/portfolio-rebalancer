@@ -125,11 +125,11 @@ test("replacement fixture enforces production replacement invariants", async ({ 
   const result = await page.evaluate(async ({ sourceId, sourceVersion }) => {
     const payload = {
       source_version: sourceVersion,
-      symbol: "VOO",
-      name: "Vanguard S&P 500 ETF",
-      market: "US",
+      symbol: "510300",
+      name: "沪深300ETF",
+      market: "SH",
       account_name: "长期账户",
-      trade_currency: "USD",
+      trade_currency: "CNY",
       quantity: "8",
       average_cost_price: "625.40",
       cost_fx_to_cny: "7.18",
@@ -166,11 +166,17 @@ test("replacement fixture enforces production replacement invariants", async ({ 
   expect(result.replacement.source).toMatchObject({
     id: source.id,
     quantity: "0.0000",
-    average_cost_price: source.average_cost_price,
-    cost_fx_to_cny: source.cost_fx_to_cny,
+    average_cost_price: "0",
+    cost_fx_to_cny: "0",
     is_active: false,
     is_rebalance_preferred: false,
     version: source.version + 1,
+  });
+  expect(result.replacement.target).toMatchObject({
+    symbol: "510300",
+    trade_currency: "CNY",
+    cost_fx_to_cny: "1",
+    baseline_fx_to_cny: "1",
   });
   expect(result.archivedRetryStatus).toBe(404);
   expect(result.holdings.find((item: typeof priorPreferred) => item.id === priorPreferred.id)).toMatchObject({

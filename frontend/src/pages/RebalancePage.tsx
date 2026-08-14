@@ -233,8 +233,14 @@ export function RebalancePage() {
   const planLookupPending = !planRestoreCompleted && !plans.isError;
   const displayedForm = activePlan ? {
     ...form,
+    availableCny: activePlan.available_cny,
+    availableUsd: activePlan.available_usd,
     valuationBasis: activePlan.valuation_basis,
     tolerance: percentFromRatio(activePlan.tolerance),
+    minimumTradeCny: activePlan.minimum_trade_cny,
+    allowSell: activePlan.allow_sell,
+    allowFx: activePlan.allow_fx,
+    acknowledgeStaleData: activePlan.acknowledge_stale_data,
   } : form;
   const displayedTolerance = activePlan?.tolerance ?? ratioFromPercent(form.tolerance);
   const holdingNames = Object.fromEntries(

@@ -326,6 +326,12 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     created = create_response.json()
     assert created["status"] == "draft"
     assert created["valuation_basis"] == "actual"
+    assert created["available_cny"] == "0"
+    assert created["available_usd"] == "0"
+    assert created["minimum_trade_cny"] == "0"
+    assert created["allow_sell"] is True
+    assert created["allow_fx"] is True
+    assert created["acknowledge_stale_data"] is False
     assert created["tolerance"] == "0.05"
     assert created["market_data_record_ids"]["price:CNY-FUND"]
     assert created["market_data_record_ids"]["price:USD-FUND"]
@@ -340,7 +346,7 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     assert listed.status_code == 200, listed.text
     assert detail.status_code == 200, detail.text
     assert listed.json()["items"] == [detail.json()]
-    assert detail.json()["tolerance"] == "0.05"
+    assert detail.json() == created
 
     plan = await db_session.scalar(select(RebalancePlan).where(RebalancePlan.id == created["id"]))
     assert plan is not None

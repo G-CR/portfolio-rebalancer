@@ -373,6 +373,12 @@ export interface RebalancePreview {
 export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | "request_token" | "status" | "refresh_attempted" | "acknowledge_stale_data"> {
   id: string;
   status: "draft" | "in_progress" | "completed" | "cancelled";
+  available_cny: DecimalString;
+  available_usd: DecimalString;
+  minimum_trade_cny: DecimalString;
+  allow_sell: boolean;
+  allow_fx: boolean;
+  acknowledge_stale_data: boolean;
   tolerance: DecimalString;
   data_version: string;
   market_data_record_ids: Record<string, string>;

@@ -92,6 +92,12 @@ it("restores an in-progress plan so it can be completed after returning to rebal
           status: "in_progress",
           valuation_basis: "fx_neutral",
           tolerance: "0.0075",
+          available_cny: "12345.67",
+          available_usd: "890.12",
+          minimum_trade_cny: "321",
+          allow_sell: false,
+          allow_fx: false,
+          acknowledge_stale_data: true,
           before_snapshot_id: "30000000-0000-4000-8000-000000000010",
         }],
       })),
@@ -117,6 +123,14 @@ it("restores an in-progress plan so it can be completed after returning to rebal
   expect(screen.getByRole("radio", { name: "剔汇率口径" })).toBeDisabled();
   expect(screen.getByRole("textbox", { name: "允许偏离" })).toHaveValue("0.75");
   expect(screen.getByRole("textbox", { name: "允许偏离" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "人民币" })).toHaveValue("12345.67");
+  expect(screen.getByRole("textbox", { name: "美元" })).toHaveValue("890.12");
+  expect(screen.getByRole("textbox", { name: "最小交易金额" })).toHaveValue("321");
+  expect(screen.getByRole("checkbox", { name: /允许卖出/ })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: /允许卖出/ })).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: /允许换汇/ })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: /允许换汇/ })).toBeDisabled();
+  expect(screen.getByText("已确认使用过期行情进行本次测算。")).toBeInTheDocument();
   expect(screen.getAllByTestId("tolerance-band")[0]).toHaveAccessibleName("允许偏离目标正负 0.8 个百分点");
   await user.click(screen.getByRole("button", { name: "完成再平衡并建立新基准" }));
 

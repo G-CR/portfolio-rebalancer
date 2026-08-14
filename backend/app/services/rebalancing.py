@@ -903,16 +903,24 @@ async def _get_locked_plan(session: AsyncSession, plan_id: UUID) -> RebalancePla
 
 def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
     projected = plan.projected_result
+    input_summary = plan.input_summary
+    resolved_constraints = input_summary["resolved_constraints"]
     return RebalancePlanResponse(
         id=str(plan.id),
         status=plan.status,
         valuation_basis=plan.strategy_mode,
-        tolerance=plan.input_summary["resolved_constraints"]["tolerance"],
+        available_cny=input_summary["available_cny"],
+        available_usd=input_summary["available_usd"],
+        minimum_trade_cny=resolved_constraints["minimum_trade_cny"],
+        allow_sell=resolved_constraints["allow_sell"],
+        allow_fx=resolved_constraints["allow_fx"],
+        acknowledge_stale_data=input_summary["acknowledge_stale_data"],
+        tolerance=resolved_constraints["tolerance"],
         data_version=plan.data_version,
         data_status=projected["data_status"],
-        market_data_record_ids=plan.input_summary["market_data_record_ids"],
-        holding_versions=plan.input_summary["holding_versions"],
-        asset_class_targets=plan.input_summary.get("asset_class_targets", {}),
+        market_data_record_ids=input_summary["market_data_record_ids"],
+        holding_versions=input_summary["holding_versions"],
+        asset_class_targets=input_summary.get("asset_class_targets", {}),
         result=RebalanceResultResponse.model_validate(projected["result"]),
         fx_comparison=RebalanceComparisonResponse.model_validate(projected["fx_comparison"]),
         before_snapshot_id=str(plan.before_snapshot_id) if plan.before_snapshot_id is not None else None,

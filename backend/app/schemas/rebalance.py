@@ -136,6 +136,12 @@ class RebalancePlanResponse(BaseModel):
     id: str
     status: Literal["draft", "in_progress", "completed", "cancelled"]
     valuation_basis: Literal["actual", "fx_neutral"]
+    available_cny: DecimalString
+    available_usd: DecimalString
+    minimum_trade_cny: DecimalString
+    allow_sell: bool
+    allow_fx: bool
+    acknowledge_stale_data: bool
     tolerance: DecimalString
     data_version: str
     data_status: Literal["valid", "stale", "manual"]
