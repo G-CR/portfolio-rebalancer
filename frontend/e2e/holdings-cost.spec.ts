@@ -108,4 +108,8 @@ test("fully replaces SPY with VOO and retains archived SPY", async ({ page }) =>
   await expect(table.getByText("SPY", { exact: true })).not.toBeVisible();
   await page.getByRole("checkbox", { name: "仅显示已归档持仓" }).check();
   await expect(table.getByText("SPY", { exact: true })).toBeVisible();
+  const archivedSpyRow = table.locator('tbody tr[data-mobile-summary="true"][data-archived="true"]', { hasText: "SPY" });
+  await expect(archivedSpyRow).toHaveCount(1);
+  await expect(archivedSpyRow).toContainText("已归档");
+  await expect(archivedSpyRow.locator("td").nth(3)).toHaveText("0");
 });
