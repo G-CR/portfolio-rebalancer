@@ -81,6 +81,9 @@ export function HoldingsPage() {
   const activeCount = holdings.data.filter((item) => item.is_active).length;
   const archivedCount = holdings.data.filter((item) => !item.is_active).length;
   const filterLoading = holdings.isFetching && !holdings.isPending;
+  const selectedAssetClassName = selected
+    ? assetClasses.data.find((assetClass) => assetClass.id === selected.asset_class_id)?.name ?? "未知资产类别"
+    : null;
 
   return (
     <section className={styles.page} aria-labelledby="holdings-title">
@@ -116,7 +119,7 @@ export function HoldingsPage() {
       {selected ? <SaleDrawer holding={selected} open={drawer === "sell"} onClose={closeDrawer} onUpdated={closeDrawer} /> : null}
       {selected ? <CorrectionDrawer holding={selected} open={drawer === "correction"} onClose={closeDrawer} onUpdated={closeDrawer} /> : null}
       {selected ? <AdjustmentHistoryDrawer holding={selected} open={drawer === "history"} onClose={closeDrawer} /> : null}
-      {selected ? <ReplacementDrawer holding={selected} open={drawer === "replace"} onClose={closeDrawer} onReplaced={(target) => {
+      {selected ? <ReplacementDrawer holding={selected} assetClassName={selectedAssetClassName ?? "未知资产类别"} open={drawer === "replace"} onClose={closeDrawer} onReplaced={(target) => {
         closeDrawer();
         setShowArchived(false);
         setNotice(`${target.symbol} 已成为新的默认调整标的。`);

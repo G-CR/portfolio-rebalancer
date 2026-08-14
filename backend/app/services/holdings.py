@@ -87,6 +87,7 @@ async def replace_holding(
 ) -> HoldingReplacementResponse:
     await _lock_active_asset_classes(session)
     source = await _get_active_holding(session, holding_id, lock=True)
+    await _get_active_asset_class(session, source.asset_class_id)
     if source.version != payload.source_version:
         raise ServiceError(
             409,

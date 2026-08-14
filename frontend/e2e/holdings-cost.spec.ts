@@ -93,6 +93,23 @@ test("mobile details retain the action menu entry", async ({ page }) => {
   await expect(page.getByRole("button", { name: "更多 SPY 操作" })).toBeVisible();
 });
 
+test("replacement fixture rejects an unknown exact source id", async ({ page }) => {
+  await seedPortfolio(page);
+  await page.goto("/holdings");
+
+  const status = await page.evaluate(async () => {
+    const response = await fetch("/api/holdings/not-the-source/replace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: "WRONG" }),
+    });
+    return response.status;
+  });
+
+  expect(status).toBe(404);
+  await expect(page.getByText("SPY", { exact: true })).toBeVisible();
+});
+
 test("fully replaces SPY with VOO and retains archived SPY", async ({ page }) => {
   await seedPortfolio(page, "balanced");
   await page.goto("/holdings");
@@ -112,4 +129,11 @@ test("fully replaces SPY with VOO and retains archived SPY", async ({ page }) =>
   await expect(archivedSpyRow).toHaveCount(1);
   await expect(archivedSpyRow).toContainText("已归档");
   await expect(archivedSpyRow.locator("td").nth(3)).toHaveText("0");
+  await expect(table.getByText("VOO", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "再平衡" }).click();
+  await page.getByRole("button", { name: "开始测算" }).click();
+  const suggestion = page.getByRole("row", { name: "VOO 卖出" });
+  await expect(suggestion).toBeVisible();
+  await expect(suggestion).toContainText("Vanguard S&P 500 ETF");
 });

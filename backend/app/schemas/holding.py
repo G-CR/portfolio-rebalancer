@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 from pydantic_core import PydanticCustomError
 
 from app.core.market import normalize_currency_code, normalize_market_code
@@ -84,17 +84,17 @@ class HoldingReplacementRequest(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     source_version: int
-    symbol: str
-    name: str
+    symbol: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=200)
     market: str
-    account_name: str
+    account_name: str = Field(min_length=1, max_length=100)
     trade_currency: str
     quantity: DecimalString
     average_cost_price: DecimalString
     cost_fx_to_cny: DecimalString
     baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
-    quantity_precision: int
+    quantity_precision: int = Field(le=12)
     preferred_data_source: Literal[
         "yahoo", "sina", "akshare", "tushare", "alpha_vantage"
     ] | None = None

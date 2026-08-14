@@ -158,6 +158,54 @@ async def test_replace_rejects_zero_target_quantity_without_changing_source(
     await _assert_source_active_without_adjustments(api_client, source["id"])
 
 
+async def test_replace_rejects_quantity_precision_above_response_limit_without_changing_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], quantity_precision=13),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "quantity_precision"]
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("symbol", "   "),
+        ("name", "   "),
+        ("account_name", "   "),
+        ("symbol", "S" * 33),
+        ("name", "N" * 201),
+        ("account_name", "A" * 101),
+    ],
+)
+async def test_replace_rejects_invalid_target_identity_without_changing_source(
+    api_client,
+    asset_class_id,
+    field: str,
+    value: str,
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], **{field: value}),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", field]
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
 async def test_replace_rejects_empty_source_without_recording_sale(
     api_client, asset_class_id
 ) -> None:
@@ -203,6 +251,45 @@ async def test_replace_rejects_stale_source_version_without_changing_source(
         "current_version": source["version"],
     }
     await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+async def test_replace_rejects_source_in_inactive_asset_class_without_changing_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+    asset_classes = (await api_client.get("/api/asset-classes")).json()
+    deactivated_payload = [
+        {
+            **item,
+            "is_active": item["id"] != asset_class_id,
+            "target_weight": (
+                item["target_weight"] if item["id"] == asset_class_id else "0.25000000"
+            ),
+        }
+        for item in asset_classes
+    ]
+    assert (
+        await api_client.put("/api/asset-classes", json=deactivated_payload)
+    ).status_code == 200
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"]),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "ASSET_CLASS_NOT_FOUND"
+    all_holdings = (
+        await api_client.get("/api/holdings", params={"include_archived": "true"})
+    ).json()
+    assert [(item["id"], item["quantity"], item["is_active"]) for item in all_holdings] == [
+        (source["id"], "10", True)
+    ]
+    history = await api_client.get(f"/api/cost-adjustments/{source['id']}")
+    assert history.status_code == 200
+    assert history.json()["items"] == []
 
 
 @pytest.mark.parametrize(
