@@ -18,13 +18,14 @@ export type RebalanceFormState = {
 type Props = {
   value: RebalanceFormState;
   pending: boolean;
+  disabled: boolean;
   hasPreview: boolean;
   onChange: (value: RebalanceFormState) => void;
   onBasisChange: (basis: RebalanceValuationBasis) => void;
   onSubmit: () => void;
 };
 
-export function RebalanceInputs({ value, pending, hasPreview, onChange, onBasisChange, onSubmit }: Props) {
+export function RebalanceInputs({ value, pending, disabled, hasPreview, onChange, onBasisChange, onSubmit }: Props) {
   const set = <K extends keyof RebalanceFormState>(key: K, next: RebalanceFormState[K]) => onChange({ ...value, [key]: next });
   return (
     <aside className={styles.inputs} aria-labelledby="rebalance-inputs-title">
@@ -35,24 +36,24 @@ export function RebalanceInputs({ value, pending, hasPreview, onChange, onBasisC
 
       <fieldset className={styles.segmented}>
         <legend>计算口径</legend>
-        <label><input type="radio" name="valuation-basis" checked={value.valuationBasis === "actual"} onChange={() => onBasisChange("actual")} />实际占比</label>
-        <label><input type="radio" name="valuation-basis" checked={value.valuationBasis === "fx_neutral"} onChange={() => onBasisChange("fx_neutral")} />剔汇率口径</label>
+        <label><input type="radio" name="valuation-basis" checked={value.valuationBasis === "actual"} disabled={disabled} onChange={() => onBasisChange("actual")} />实际占比</label>
+        <label><input type="radio" name="valuation-basis" checked={value.valuationBasis === "fx_neutral"} disabled={disabled} onChange={() => onBasisChange("fx_neutral")} />剔汇率口径</label>
       </fieldset>
 
       <div className={styles.fieldGrid}>
-        <FormField label="人民币" suffix="CNY"><input inputMode="decimal" value={value.availableCny} onChange={(event) => set("availableCny", event.target.value)} /></FormField>
-        <FormField label="美元" suffix="USD"><input inputMode="decimal" value={value.availableUsd} onChange={(event) => set("availableUsd", event.target.value)} /></FormField>
-        <FormField label="允许偏离" suffix="%"><input inputMode="decimal" value={value.tolerance} onChange={(event) => set("tolerance", event.target.value)} /></FormField>
-        <FormField label="最小交易金额" suffix="CNY"><input inputMode="decimal" value={value.minimumTradeCny} onChange={(event) => set("minimumTradeCny", event.target.value)} /></FormField>
+        <FormField label="人民币" suffix="CNY"><input inputMode="decimal" value={value.availableCny} disabled={disabled} onChange={(event) => set("availableCny", event.target.value)} /></FormField>
+        <FormField label="美元" suffix="USD"><input inputMode="decimal" value={value.availableUsd} disabled={disabled} onChange={(event) => set("availableUsd", event.target.value)} /></FormField>
+        <FormField label="允许偏离" suffix="%"><input inputMode="decimal" value={value.tolerance} disabled={disabled} onChange={(event) => set("tolerance", event.target.value)} /></FormField>
+        <FormField label="最小交易金额" suffix="CNY"><input inputMode="decimal" value={value.minimumTradeCny} disabled={disabled} onChange={(event) => set("minimumTradeCny", event.target.value)} /></FormField>
       </div>
 
       <div className={styles.switches}>
-        <label><input type="checkbox" checked={value.allowSell} onChange={(event) => set("allowSell", event.target.checked)} /><span><b>允许卖出</b><small>新增资金不足时可减少高配资产</small></span></label>
-        <label><input type="checkbox" checked={value.allowFx} onChange={(event) => set("allowFx", event.target.checked)} /><span><b>允许换汇</b><small>人民币不足时可估算换入美元</small></span></label>
+        <label><input type="checkbox" checked={value.allowSell} disabled={disabled} onChange={(event) => set("allowSell", event.target.checked)} /><span><b>允许卖出</b><small>新增资金不足时可减少高配资产</small></span></label>
+        <label><input type="checkbox" checked={value.allowFx} disabled={disabled} onChange={(event) => set("allowFx", event.target.checked)} /><span><b>允许换汇</b><small>人民币不足时可估算换入美元</small></span></label>
       </div>
 
       {value.acknowledgeStaleData ? <p className={styles.acknowledged}>已确认使用过期行情进行本次测算。</p> : null}
-      <button className={styles.recalculate} type="button" onClick={onSubmit} disabled={pending}>
+      <button className={styles.recalculate} type="button" onClick={onSubmit} disabled={pending || disabled}>
         <Calculator size={16} aria-hidden="true" />{pending ? "测算中" : hasPreview ? "重新测算" : "开始测算"}
       </button>
     </aside>

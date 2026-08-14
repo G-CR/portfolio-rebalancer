@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { portfolioAnalyticsKey } from "../src/api/queryKeys";
-import type { Holding } from "../src/api/types";
+import type { Holding, HoldingReplacementRequest } from "../src/api/types";
 import { marketDataQueryKey } from "../src/features/marketData/api";
 import { snapshotsQueryRoot } from "../src/features/snapshots/api";
 import { HoldingsPage } from "../src/pages/HoldingsPage";
@@ -12,7 +12,7 @@ import {
   holdingsQueryKey,
   useReplaceHolding,
 } from "../src/features/holdings/api";
-import { assetClassFixtures, holdingFixture } from "./fixtures";
+import { assetClassFixtures, holdingFixture, holdingReplacementRequestFixture, holdingReplacementResponseFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
 function deferred<T>() {
@@ -60,7 +60,13 @@ describe("HoldingsPage", () => {
     expect(screen.getByText("SPY → 新标的")).toBeInTheDocument();
     expect(screen.getByText("SPDR S&P 500 ETF Trust · 标普 500 · 长期账户 · 12.0000 份")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "账户名称" })).toHaveValue(holdingFixture.account_name);
-    expect(screen.getByRole("textbox", { name: "上市市场" })).toHaveValue("US");
+    const market = screen.getByRole("combobox", { name: "上市市场" });
+    expect(market).toHaveValue("US");
+    expect([...market.options].map((option) => [option.label, option.value])).toEqual([
+      ["美股", "US"],
+      ["上海 A 股", "SH"],
+      ["深圳 A 股", "SZ"],
+    ]);
     expect(screen.getByRole("combobox", { name: "交易币种" })).toHaveValue("USD");
     expect(screen.getByText("原标的将按当前份额全部卖出并归档")).toBeInTheDocument();
     expect(screen.getByText("新标的将创建到“标普 500”并成为该资产类别的默认调整标的")).toBeInTheDocument();
@@ -83,14 +89,12 @@ describe("HoldingsPage", () => {
     await user.click(await screen.findByRole("button", { name: "更多 SPY 操作" }));
     await user.click(screen.getByRole("menuitem", { name: "替换标的" }));
     await user.clear(screen.getByRole("textbox", { name: "账户名称" }));
-    await user.clear(screen.getByRole("textbox", { name: "上市市场" }));
     await user.click(screen.getByRole("button", { name: "确认替换为 新标的" }));
 
     for (const [label, message] of [
       ["目标代码", "请输入目标代码。"],
       ["目标名称", "请输入目标名称。"],
       ["账户名称", "请输入账户名称。"],
-      ["上市市场", "请输入上市市场。"],
     ] as const) {
       const field = screen.getByRole("textbox", { name: label });
       expect(field).toHaveAttribute("aria-invalid", "true");
@@ -198,14 +202,13 @@ describe("HoldingsPage", () => {
       )),
       http.post(`/api/holdings/${holdingFixture.id}/replace`, async ({ request }) => {
         body = await request.json();
-        const source = {
-          ...holdingFixture,
-          is_active: false,
-          is_rebalance_preferred: false,
-          version: holdingFixture.version + 1,
-        };
-        currentHoldings = [source, target];
-        return HttpResponse.json({ source, target });
+        const replacement = holdingReplacementResponseFixture(
+          holdingFixture,
+          body as HoldingReplacementRequest,
+          target.id,
+        );
+        currentHoldings = [replacement.source, replacement.target];
+        return HttpResponse.json(replacement);
       }),
     ] });
 
@@ -215,8 +218,7 @@ describe("HoldingsPage", () => {
     await user.type(screen.getByRole("textbox", { name: "目标名称" }), "Vanguard S&P 500 ETF");
     await user.clear(screen.getByRole("textbox", { name: "账户名称" }));
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "  长期账户  ");
-    await user.clear(screen.getByRole("textbox", { name: "上市市场" }));
-    await user.type(screen.getByRole("textbox", { name: "上市市场" }), " US ");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "SH");
     await user.type(screen.getByRole("textbox", { name: "替换备注" }), "降低管理费");
     await user.click(screen.getByRole("button", { name: "确认替换为 VOO" }));
 
@@ -224,7 +226,7 @@ describe("HoldingsPage", () => {
       source_version: holdingFixture.version,
       symbol: "VOO",
       name: "Vanguard S&P 500 ETF",
-      market: " US ",
+      market: "SH",
       account_name: "  长期账户  ",
       trade_currency: holdingFixture.trade_currency,
       quantity: holdingFixture.quantity,
@@ -256,8 +258,13 @@ describe("HoldingsPage", () => {
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
       http.get("/api/holdings", () => HttpResponse.json(currentHoldings.filter((holding) => holding.is_active))),
       http.post(`/api/holdings/${holdingFixture.id}/replace`, () => {
-        currentHoldings = [{ ...holdingFixture, is_active: false }, target];
-        return HttpResponse.json({ source: currentHoldings[0], target });
+        const replacement = holdingReplacementResponseFixture(
+          holdingFixture,
+          holdingReplacementRequestFixture(holdingFixture),
+          target.id,
+        );
+        currentHoldings = [replacement.source, replacement.target];
+        return HttpResponse.json(replacement);
       }),
     ] });
 
@@ -280,10 +287,10 @@ describe("HoldingsPage", () => {
       handlers: [
         http.post(`/api/holdings/${holdingFixture.id}/replace`, async ({ request }) => {
           payload = await request.json();
-          return HttpResponse.json({
-            source: { ...holdingFixture, is_active: false },
-            target: { ...holdingFixture, symbol: "VOO", name: "Vanguard S&P 500 ETF" },
-          });
+          return HttpResponse.json(holdingReplacementResponseFixture(
+            holdingFixture,
+            payload as HoldingReplacementRequest,
+          ));
         }),
       ],
     });
@@ -324,7 +331,7 @@ describe("HoldingsPage", () => {
 
   it("refetches archived rows and shows only archived results with disabled actions", async () => {
     const user = userEvent.setup();
-    const archived = { ...holdingFixture, id: "20000000-0000-4000-8000-000000000002", symbol: "VOO", is_active: false };
+    const archived = { ...holdingFixture, id: "20000000-0000-4000-8000-000000000002", symbol: "VOO", quantity: "0.0000", is_rebalance_preferred: false, is_active: false };
     const requests: string[] = [];
     renderWithProviders(<HoldingsPage />, { handlers: [
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
@@ -365,7 +372,7 @@ describe("HoldingsPage", () => {
   it("routes delayed filter responses to separate caches without replacing the active view", async () => {
     const user = userEvent.setup();
     const archivedResponse = deferred<Response>();
-    const archived = { ...holdingFixture, id: "20000000-0000-4000-8000-000000000002", symbol: "VOO", is_active: false };
+    const archived = { ...holdingFixture, id: "20000000-0000-4000-8000-000000000002", symbol: "VOO", quantity: "0.0000", is_rebalance_preferred: false, is_active: false };
     const requests: string[] = [];
     const { queryClient } = renderWithProviders(<HoldingsPage />, { handlers: [
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),

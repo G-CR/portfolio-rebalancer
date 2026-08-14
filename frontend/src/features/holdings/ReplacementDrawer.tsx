@@ -38,6 +38,12 @@ const providers: Array<{ value: ProviderName; label: string }> = [
   { value: "alpha_vantage", label: "Alpha Vantage" },
 ];
 
+const markets = [
+  { value: "US", label: "美股" },
+  { value: "SH", label: "上海 A 股" },
+  { value: "SZ", label: "深圳 A 股" },
+] as const;
+
 const decimalPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
 
 function decimalSign(value: string): -1 | 0 | 1 | null {
@@ -54,7 +60,9 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
   const [quantity, setQuantity] = useState(holding.quantity);
   const [averageCost, setAverageCost] = useState(holding.average_cost_price);
   const [accountName, setAccountName] = useState(holding.account_name);
-  const [market, setMarket] = useState(holding.market);
+  const [market, setMarket] = useState(
+    markets.some((option) => option.value === holding.market) ? holding.market : "US",
+  );
   const [currency, setCurrency] = useState(holding.trade_currency);
   const [costFx, setCostFx] = useState(holding.cost_fx_to_cny);
   const [baselineFx, setBaselineFx] = useState(holding.baseline_fx_to_cny);
@@ -75,7 +83,7 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
     if (!symbol.trim()) errors.symbol = "请输入目标代码。";
     if (!name.trim()) errors.name = "请输入目标名称。";
     if (!accountName.trim()) errors.accountName = "请输入账户名称。";
-    if (!market.trim()) errors.market = "请输入上市市场。";
+    if (!markets.some((option) => option.value === market)) errors.market = "请选择有效上市市场。";
     if (decimalSign(quantity) !== 1) errors.quantity = "请输入大于 0 的有效目标份额。";
     const averageCostSign = decimalSign(averageCost);
     if (averageCostSign === null || averageCostSign < 0) errors.averageCost = "请输入大于或等于 0 的有效平均成本价。";
@@ -177,7 +185,11 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
           {advanced ? (
             <div id="replacement-inherited-settings" className={styles.fieldGrid}>
               <FormField label="账户名称" required error={fieldErrors.accountName}><input value={accountName} onChange={(event) => setAccountName(event.target.value)} /></FormField>
-              <FormField label="上市市场" required error={fieldErrors.market}><input value={market} onChange={(event) => setMarket(event.target.value)} /></FormField>
+              <FormField label="上市市场" required error={fieldErrors.market}>
+                <select value={market} onChange={(event) => setMarket(event.target.value)}>
+                  {markets.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </FormField>
               <FormField label="交易币种" required>
                 <select value={currency} onChange={(event) => setCurrency(event.target.value)}>
                   {!(["CNY", "USD"] as string[]).includes(currency) ? <option value={currency}>{currency}</option> : null}

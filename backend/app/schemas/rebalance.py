@@ -136,6 +136,7 @@ class RebalancePlanResponse(BaseModel):
     id: str
     status: Literal["draft", "in_progress", "completed", "cancelled"]
     valuation_basis: Literal["actual", "fx_neutral"]
+    tolerance: DecimalString
     data_version: str
     data_status: Literal["valid", "stale", "manual"]
     market_data_record_ids: dict[str, str]

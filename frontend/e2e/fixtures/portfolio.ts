@@ -1,9 +1,10 @@
 import type { Page } from "@playwright/test";
 
-import { assetClassFixtures, generalSettingsFixture, holdingFixture, marketDataCollectionFixture, portfolioFixture, providerSettingsFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "../../tests/fixtures";
+import type { Holding, HoldingReplacementRequest } from "../../src/api/types";
+import { assetClassFixtures, generalSettingsFixture, holdingFixture, holdingReplacementResponseFixture, marketDataCollectionFixture, portfolioFixture, providerSettingsFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "../../tests/fixtures";
 
 type SeedPortfolioOptions = {
-  holdings?: object[];
+  holdings?: Holding[];
   analytics?: object;
   analyticsStatus?: number;
   refreshResult?: object;
@@ -16,6 +17,7 @@ export async function seedPortfolio(
   options: SeedPortfolioOptions = {},
 ) {
   let planStatus = "draft";
+  let rebalancePlan: Record<string, unknown> | null = null;
   let rebalanceDefaults = { ...rebalanceDefaultsFixture };
   const holdings = [...(options.holdings ?? (state === "empty" ? [] : [holdingFixture]))];
   const initialPreferredSymbolByAssetClass = new Map(
@@ -63,19 +65,31 @@ export async function seedPortfolio(
     }
     const replacementMatch = path.match(/^\/api\/holdings\/([^/]+)\/replace$/);
     if (replacementMatch && route.request().method() === "POST") {
-      const payload = route.request().postDataJSON();
+      const payload = route.request().postDataJSON() as HoldingReplacementRequest;
       const sourceId = decodeURIComponent(replacementMatch[1]);
       const sourceIndex = holdings.findIndex((item: any) => item.id === sourceId);
-      if (sourceIndex < 0) {
+      const source = holdings[sourceIndex];
+      if (!source?.is_active) {
         return route.fulfill({
           status: 404,
           json: { detail: { code: "HOLDING_NOT_FOUND", message: "Active holding was not found." } },
         });
       }
-      const source = { ...holdings[sourceIndex] as any, quantity: "0", average_cost_price: "0", cost_fx_to_cny: "0", is_active: false, is_rebalance_preferred: false };
-      const target = { ...payload, id: "holding-voo", asset_class_id: source.asset_class_id, is_active: true, is_rebalance_preferred: true, version: 1 };
-      holdings.splice(sourceIndex, 1, source, target);
-      return route.fulfill({ json: { source, target } });
+      if (payload.source_version !== source.version) {
+        return route.fulfill({
+          status: 409,
+          json: { detail: { code: "HOLDING_VERSION_CONFLICT", message: "Holding was modified after replacement was opened." } },
+        });
+      }
+      const replacement = holdingReplacementResponseFixture(source, payload);
+      for (let index = 0; index < holdings.length; index += 1) {
+        const item = holdings[index];
+        if (item.id !== source.id && item.asset_class_id === source.asset_class_id && item.is_rebalance_preferred) {
+          holdings[index] = { ...item, is_rebalance_preferred: false, version: item.version + 1 };
+        }
+      }
+      holdings.splice(sourceIndex, 1, replacement.source, replacement.target);
+      return route.fulfill({ json: replacement });
     }
     if (path === "/api/analytics/portfolio") return route.fulfill({ status: options.analyticsStatus ?? 200, json: analytics });
     if (path === "/api/market-data/refresh" && route.request().method() === "POST") {
@@ -91,15 +105,36 @@ export async function seedPortfolio(
     }
     if (path === "/api/settings/rebalance-defaults") return route.fulfill({ json: rebalanceDefaults });
     if (path === "/api/rebalance/preview") return route.fulfill({ json: rebalancePreviewFromHoldings() });
+    if (path === "/api/rebalance/plans" && route.request().method() === "GET") {
+      return route.fulfill({ json: { items: rebalancePlan ? [rebalancePlan] : [] } });
+    }
     if (path === "/api/rebalance/plans" && route.request().method() === "POST") {
+      const payload = route.request().postDataJSON();
       const preview = rebalancePreviewFromHoldings();
       const holdingVersions = Object.fromEntries(
         holdings.filter((item: any) => item.is_active).map((item: any) => [item.id, item.version]),
       );
-      return route.fulfill({ status: 201, json: { ...rebalancePlanFixture, status: planStatus, holding_versions: holdingVersions, result: preview.result, fx_comparison: preview.fx_comparison } });
+      rebalancePlan = {
+        ...rebalancePlanFixture,
+        status: planStatus,
+        valuation_basis: payload.valuation_basis,
+        tolerance: payload.tolerance ?? rebalanceDefaults.tolerance,
+        holding_versions: holdingVersions,
+        result: preview.result,
+        fx_comparison: preview.fx_comparison,
+      };
+      return route.fulfill({ status: 201, json: rebalancePlan });
     }
-    if (path.endsWith("/start")) { planStatus = "in_progress"; return route.fulfill({ json: { ...rebalancePlanFixture, status: planStatus, before_snapshot_id: "snapshot-before" } }); }
-    if (path.endsWith("/complete")) { planStatus = "completed"; return route.fulfill({ json: { ...rebalancePlanFixture, status: planStatus, before_snapshot_id: "snapshot-before", after_snapshot_id: "snapshot-after", baseline_reset_at: new Date().toISOString() } }); }
+    if (path.endsWith("/start")) {
+      planStatus = "in_progress";
+      rebalancePlan = { ...(rebalancePlan ?? rebalancePlanFixture), status: planStatus, before_snapshot_id: "snapshot-before" };
+      return route.fulfill({ json: rebalancePlan });
+    }
+    if (path.endsWith("/complete")) {
+      planStatus = "completed";
+      rebalancePlan = { ...(rebalancePlan ?? rebalancePlanFixture), status: planStatus, before_snapshot_id: "snapshot-before", after_snapshot_id: "snapshot-after", baseline_reset_at: new Date().toISOString() };
+      return route.fulfill({ json: rebalancePlan });
+    }
     if (path.includes("/cost-adjustments/") && route.request().method() === "GET") return route.fulfill({ json: { holding_id: holdingFixture.id, holding_version: 1, defaults: null, items: [] } });
     return route.fulfill({ status: 204 });
   });

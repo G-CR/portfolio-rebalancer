@@ -1,3 +1,5 @@
+import type { Holding, HoldingReplacementRequest, HoldingReplacementResponse } from "../src/api/types";
+
 export const assetClassFixtures = [
   {
     id: "10000000-0000-4000-8000-000000000001",
@@ -264,6 +266,7 @@ export const rebalancePlanFixture = {
   id: "40000000-0000-4000-8000-000000000099",
   status: "draft",
   valuation_basis: "actual",
+  tolerance: "0.02",
   data_version: "fixture-data-version",
   data_status: "valid",
   market_data_record_ids: {},
@@ -338,6 +341,67 @@ export const rebalanceDefaultsFixture = {
   allow_fx: true,
   updated_at: "2026-07-14T00:00:00Z",
 } as const;
+
+export function holdingReplacementRequestFixture(
+  source: Holding,
+  overrides: Partial<HoldingReplacementRequest> = {},
+): HoldingReplacementRequest {
+  return {
+    source_version: source.version,
+    symbol: "VOO",
+    name: "Vanguard S&P 500 ETF",
+    market: source.market,
+    account_name: source.account_name,
+    trade_currency: source.trade_currency,
+    quantity: "8",
+    average_cost_price: "625.40",
+    cost_fx_to_cny: source.cost_fx_to_cny,
+    baseline_fx_to_cny: source.baseline_fx_to_cny,
+    lot_size: source.lot_size,
+    quantity_precision: source.quantity_precision,
+    preferred_data_source: source.preferred_data_source,
+    note: null,
+    ...overrides,
+  };
+}
+
+export function holdingReplacementResponseFixture(
+  source: Holding,
+  payload: HoldingReplacementRequest,
+  targetId = "20000000-0000-4000-8000-000000000099",
+): HoldingReplacementResponse {
+  const zeroQuantity = source.quantity_precision > 0
+    ? `0.${"0".repeat(source.quantity_precision)}`
+    : "0";
+  return {
+    source: {
+      ...source,
+      quantity: zeroQuantity,
+      is_active: false,
+      is_rebalance_preferred: false,
+      version: source.version + 1,
+    },
+    target: {
+      id: targetId,
+      asset_class_id: source.asset_class_id,
+      symbol: payload.symbol,
+      name: payload.name,
+      market: payload.market,
+      account_name: payload.account_name,
+      trade_currency: payload.trade_currency,
+      quantity: payload.quantity,
+      average_cost_price: payload.average_cost_price,
+      cost_fx_to_cny: payload.cost_fx_to_cny,
+      baseline_fx_to_cny: payload.baseline_fx_to_cny,
+      lot_size: payload.lot_size,
+      quantity_precision: payload.quantity_precision,
+      preferred_data_source: payload.preferred_data_source,
+      is_rebalance_preferred: true,
+      is_active: true,
+      version: 1,
+    },
+  };
+}
 
 export const emailSettingsFixture = {
   enabled: false,

@@ -907,6 +907,7 @@ def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
         id=str(plan.id),
         status=plan.status,
         valuation_basis=plan.strategy_mode,
+        tolerance=plan.input_summary["resolved_constraints"]["tolerance"],
         data_version=plan.data_version,
         data_status=projected["data_status"],
         market_data_record_ids=plan.input_summary["market_data_record_ids"],

@@ -104,7 +104,7 @@ export function RebalancePage() {
   const plans = useRebalancePlans();
   const refreshVersion = useMarketDataRefreshVersion().data;
   const observedRefreshVersion = useRef(refreshVersion);
-  const planRestoreCompleted = useRef(false);
+  const [planRestoreCompleted, setPlanRestoreCompleted] = useState(false);
   const defaults = useRebalanceDefaults();
   const saveDefaults = useSaveRebalanceDefaults();
   const defaultsHydrated = useRef(false);
@@ -117,17 +117,17 @@ export function RebalancePage() {
   const transitionPending = createPlan.isPending || startPlan.isPending || cancelPlan.isPending || completePlan.isPending;
 
   useEffect(() => {
-    if (planRestoreCompleted.current || plans.isFetching || !plans.data) return;
-    planRestoreCompleted.current = true;
-    if (preview.data) return;
-    const recoverablePlan = plans.data.items.find((item) => item.status === "in_progress") ?? null;
-    setPlan((current) => current ?? recoverablePlan);
-  }, [plans.data, plans.isFetching, preview.data]);
+    if (planRestoreCompleted || plans.isFetching || !plans.data) return;
+    if (!preview.data) {
+      const recoverablePlan = plans.data.items.find((item) => item.status === "in_progress") ?? null;
+      setPlan((current) => current ?? recoverablePlan);
+    }
+    setPlanRestoreCompleted(true);
+  }, [planRestoreCompleted, plans.data, plans.isFetching, preview.data]);
 
   useEffect(() => {
     if (refreshVersion === observedRefreshVersion.current) return;
     observedRefreshVersion.current = refreshVersion;
-    planRestoreCompleted.current = true;
     preview.reset();
     setPlan((current) => current?.status === "in_progress" ? current : null);
     setIsDirty(false);
@@ -154,6 +154,7 @@ export function RebalancePage() {
   }, [defaults.data, defaults.isError]);
 
   const runPreview = async (nextForm = form) => {
+    if ((!planRestoreCompleted && !plans.isError) || plan?.status === "in_progress") return;
     setOperationError(null);
     setDefaultsWarning(null);
     let defaultsSaveFailed = false;
@@ -173,6 +174,7 @@ export function RebalancePage() {
   };
 
   const changeBasis = (valuationBasis: RebalanceValuationBasis) => {
+    if ((!planRestoreCompleted && !plans.isError) || plan?.status === "in_progress") return;
     setForm((current) => ({ ...current, valuationBasis }));
     setIsDirty(Boolean(preview.data));
     setPlan(null);
@@ -227,20 +229,28 @@ export function RebalancePage() {
   const staleError = preview.error instanceof ApiError && preview.error.code === "REBALANCE_STALE_DATA_ACK_REQUIRED";
   const generalError = preview.error instanceof ApiError && !staleError ? preview.error.message : null;
   const currentPreview = preview.data ?? (plan ? previewFromPlan(plan) : undefined);
+  const activePlan = plan?.status === "in_progress" ? plan : null;
+  const planLookupPending = !planRestoreCompleted && !plans.isError;
+  const displayedForm = activePlan ? {
+    ...form,
+    valuationBasis: activePlan.valuation_basis,
+    tolerance: percentFromRatio(activePlan.tolerance),
+  } : form;
+  const displayedTolerance = activePlan?.tolerance ?? ratioFromPercent(form.tolerance);
   const holdingNames = Object.fromEntries(
     (holdings.data ?? []).map((holding) => [holding.symbol, holding.name]),
   );
-  const lifecycleDisabled = isDirty || !currentPreview || staleError || (currentPreview.data_status === "stale" && !plan && !form.acknowledgeStaleData);
+  const lifecycleDisabled = planLookupPending || isDirty || !currentPreview || staleError || (currentPreview.data_status === "stale" && !plan && !form.acknowledgeStaleData);
 
   return (
     <section className={styles.page} aria-label="再平衡工作台">
       <header className={styles.pageHeader}>
         <div><p>REBALANCE WORKBENCH</p><h1>再平衡校准</h1><span>建议只用于规划，不会连接券商或自动提交订单。</span></div>
-        <div className={styles.basisStatus}><span>当前口径</span><strong>{form.valuationBasis === "actual" ? "实际人民币占比" : "剔汇率模拟"}</strong></div>
+        <div className={styles.basisStatus}><span>当前口径</span><strong>{displayedForm.valuationBasis === "actual" ? "实际人民币占比" : "剔汇率模拟"}</strong></div>
       </header>
       <div className={styles.workspace}>
         {!defaultsReady ? <div className={styles.defaultsLoading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入上次使用的资金与约束</div> : <>
-          <RebalanceInputs value={form} pending={preview.isPending || saveDefaults.isPending} hasPreview={Boolean(currentPreview)} onChange={(next) => { setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
+          <RebalanceInputs value={displayedForm} pending={preview.isPending || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
           <main className={styles.results}>
           {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
           {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
@@ -257,7 +267,7 @@ export function RebalancePage() {
           {currentPreview ? <>
             {currentPreview.data_status === "stale" ? <div className={styles.dataWarning}><AlertTriangle size={16} aria-hidden="true" />本方案使用了已确认的过期行情数据。</div> : null}
             <RebalanceSummary preview={currentPreview} />
-            <ProjectedAllocation preview={currentPreview} assetClasses={assetClasses.data ?? []} tolerance={ratioFromPercent(form.tolerance)} />
+            <ProjectedAllocation preview={currentPreview} assetClasses={assetClasses.data ?? []} tolerance={displayedTolerance} />
             <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} />
             <section className={styles.comparison} aria-labelledby="fx-comparison-title">
               <header className={styles.sectionHeading}><div><p>FX COMPARISON</p><h2 id="fx-comparison-title">汇率口径对照</h2></div></header>

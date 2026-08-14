@@ -110,6 +110,76 @@ test("replacement fixture rejects an unknown exact source id", async ({ page }) 
   await expect(page.getByText("SPY", { exact: true })).toBeVisible();
 });
 
+test("replacement fixture enforces production replacement invariants", async ({ page }) => {
+  const source = { ...holdingFixture, is_rebalance_preferred: false };
+  const priorPreferred = {
+    ...holdingFixture,
+    id: "20000000-0000-4000-8000-000000000002",
+    symbol: "IVV",
+    name: "iShares Core S&P 500 ETF",
+    is_rebalance_preferred: true,
+  };
+  await seedPortfolio(page, "balanced", { holdings: [source, priorPreferred] });
+  await page.goto("/holdings");
+
+  const result = await page.evaluate(async ({ sourceId, sourceVersion }) => {
+    const payload = {
+      source_version: sourceVersion,
+      symbol: "VOO",
+      name: "Vanguard S&P 500 ETF",
+      market: "US",
+      account_name: "长期账户",
+      trade_currency: "USD",
+      quantity: "8",
+      average_cost_price: "625.40",
+      cost_fx_to_cny: "7.18",
+      baseline_fx_to_cny: "7.15",
+      lot_size: "1",
+      quantity_precision: 4,
+      preferred_data_source: null,
+      note: null,
+    };
+    const post = (body: object) => fetch(`/api/holdings/${sourceId}/replace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const stale = await post({ ...payload, source_version: sourceVersion - 1 });
+    const replaced = await post(payload);
+    const replacement = await replaced.json();
+    const archivedRetry = await post(payload);
+    const holdingsResponse = await fetch("/api/holdings?include_archived=true");
+    const plansResponse = await fetch("/api/rebalance/plans");
+    return {
+      staleStatus: stale.status,
+      replacedStatus: replaced.status,
+      replacement,
+      archivedRetryStatus: archivedRetry.status,
+      holdings: await holdingsResponse.json(),
+      plansStatus: plansResponse.status,
+      plans: await plansResponse.json(),
+    };
+  }, { sourceId: source.id, sourceVersion: source.version });
+
+  expect(result.staleStatus).toBe(409);
+  expect(result.replacedStatus).toBe(200);
+  expect(result.replacement.source).toMatchObject({
+    id: source.id,
+    quantity: "0.0000",
+    average_cost_price: source.average_cost_price,
+    cost_fx_to_cny: source.cost_fx_to_cny,
+    is_active: false,
+    is_rebalance_preferred: false,
+    version: source.version + 1,
+  });
+  expect(result.archivedRetryStatus).toBe(404);
+  expect(result.holdings.find((item: typeof priorPreferred) => item.id === priorPreferred.id)).toMatchObject({
+    is_rebalance_preferred: false,
+  });
+  expect(result.plansStatus).toBe(200);
+  expect(result.plans).toEqual({ items: [] });
+});
+
 test("fully replaces SPY with VOO and retains archived SPY", async ({ page }) => {
   await seedPortfolio(page, "balanced");
   await page.goto("/holdings");
@@ -128,7 +198,7 @@ test("fully replaces SPY with VOO and retains archived SPY", async ({ page }) =>
   const archivedSpyRow = table.locator('tbody tr[data-mobile-summary="true"][data-archived="true"]', { hasText: "SPY" });
   await expect(archivedSpyRow).toHaveCount(1);
   await expect(archivedSpyRow).toContainText("已归档");
-  await expect(archivedSpyRow.locator("td").nth(3)).toHaveText("0");
+  await expect(archivedSpyRow.locator("td").nth(3)).toHaveText("0.0000");
   await expect(table.getByText("VOO", { exact: true })).toHaveCount(0);
 
   await page.getByRole("link", { name: "再平衡" }).click();
