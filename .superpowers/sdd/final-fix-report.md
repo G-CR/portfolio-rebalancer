@@ -176,3 +176,43 @@ The regression tests were added before production changes. The initial focused r
 ### Remaining concerns
 
 - No new concern was introduced. The previously documented Saturday-dependent email-test failures and unrelated dashboard screenshot drift remain outside this compatibility follow-up.
+
+## Exact replacement quantity follow-up (2026-08-15)
+
+### Implementation commit
+
+- `77dc478b0e0822bac019834907c62eede073d405` — `test: preserve exact replacement quantities`
+
+### Finding implementation
+
+10. **Scale fixture quantities without binary floating point.** The shared replacement fixture no longer converts quantity through JavaScript `Number`/`toFixed`. Its local decimal-string scaler parses sign, integral, and fractional digits into `BigInt` units, scales with exact powers of ten, and applies ties-to-even rounding to mirror the backend `Decimal.quantize` serializer. It accepts the same ordinary decimal forms as the replacement UI, including leading-dot fractions. Focused fixture tests cover a valid integer above JavaScript's safe range and the `1.015` midpoint at precision 2.
+
+### RED evidence
+
+- `npm test -- --run tests/ReplacementFixture.test.ts` — **2 failed** before the formatter change: `"9007199254740993"` was returned as `"9007199254740992"`, and `"1.015"` at precision 2 was returned as `"1.01"` instead of the backend-compatible `"1.02"`.
+
+### GREEN and covering verification
+
+- Focused unit: `npm test -- --run tests/ReplacementFixture.test.ts` — **2 passed**.
+- Frontend full: `npm test -- --run` — **26 files, 174 tests passed**.
+- Frontend production build: `npm run build` — **succeeded**; only the existing large-chunk advisory was emitted.
+- Playwright focused fixture contract: `npm run test:e2e -- e2e/holdings-cost.spec.ts --grep "replacement fixture enforces production replacement invariants"` — **1 passed**.
+- Playwright broad functional run: `npm run test:e2e -- --grep-invert "dashboard matches calibration desk"` — **13 passed**.
+- `git diff --check` — **clean** (only Windows LF-to-CRLF notices).
+
+### Changed files
+
+- Exact formatter: `frontend/tests/fixtures.ts`.
+- Precision regressions: `frontend/tests/ReplacementFixture.test.ts`.
+
+### Self-review
+
+- Compared the scaler with backend `_scale_decimal`: precision padding is exact, discarded digits are compared exactly with half a unit, and midpoint increments only an odd retained unit (ties to even).
+- Confirmed no `Number` conversion remains in the replacement quantity response path, so integers beyond `Number.MAX_SAFE_INTEGER` retain identity.
+- Confirmed the parser accepts the replacement UI's signed ordinary-decimal grammar, including `1.`, `.5`, and leading zeros; invalid synthetic payloads fail explicitly.
+- Confirmed archived-source zeroing, target CNY FX normalization, preferred/version behavior, backend replacement transactions, and rebalance compatibility are untouched.
+- Reviewed `acd6504..77dc478` and found no additional in-scope defect. `git diff --check` was clean.
+
+### Remaining concerns
+
+- No new concern was introduced. The previously documented Saturday-dependent email-test failures and unrelated dashboard screenshot drift remain outside this minor fixture fix.
