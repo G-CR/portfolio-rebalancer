@@ -11,6 +11,7 @@ import { CorrectionDrawer } from "../features/holdings/CorrectionDrawer";
 import { HoldingsTable, type HoldingCommand } from "../features/holdings/HoldingsTable";
 import { HoldingsMarketDataNotice } from "../features/holdings/HoldingsMarketDataNotice";
 import { PurchaseDrawer } from "../features/holdings/PurchaseDrawer";
+import { ReplacementDrawer } from "../features/holdings/ReplacementDrawer";
 import { SaleDrawer } from "../features/holdings/SaleDrawer";
 import { useArchiveHolding, useHoldings } from "../features/holdings/api";
 import styles from "./HoldingsPage.module.css";
@@ -27,9 +28,11 @@ export function HoldingsPage() {
   const [selected, setSelected] = useState<Holding | null>(null);
   const [drawer, setDrawer] = useState<OpenDrawer>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
   async function command(holding: Holding, next: HoldingCommand) {
+    setNotice(null);
     if (next === "archive") {
       if (!window.confirm(`归档 ${holding.symbol} 后，默认列表将不再显示该持仓。继续吗？`)) return;
       setError(null);
@@ -79,20 +82,21 @@ export function HoldingsPage() {
       <header className={styles.header}>
         <div><p>HOLDINGS LEDGER</p><h2 id="holdings-title">持仓与成本维护</h2><span>当前价、汇率、市值与浮动盈亏按最近有效数据展示。</span></div>
         <div className={styles.headerActions}>
-          <button className={styles.addButton} type="button" onClick={() => setAddOpen(true)}>
+          <button className={styles.addButton} type="button" onClick={() => { setNotice(null); setAddOpen(true); }}>
             <Plus size={16} aria-hidden="true" />添加持仓
           </button>
           <label className={styles.filter}><Filter size={15} aria-hidden="true" /><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />仅显示已归档持仓</label>
         </div>
       </header>
       {error ? <div className={styles.alert} role="alert">{error}</div> : null}
+      {notice ? <div className={styles.notice} role="status">{notice}</div> : null}
       {analyticsIncomplete ? <HoldingsMarketDataNotice items={incompleteItems} /> : null}
       {filterLoading ? <div className={styles.filterStatus} role="status">正在载入已归档持仓...</div> : null}
       {!showArchived && activeCount === 0 ? (
         <div className={styles.emptyState}>
           <strong>尚未添加持仓</strong>
           <p>先记录一个标的及其初始成本状态，再维护买入、卖出和修正。</p>
-          <button type="button" onClick={() => setAddOpen(true)}><Plus size={16} aria-hidden="true" />添加第一个持仓</button>
+          <button type="button" onClick={() => { setNotice(null); setAddOpen(true); }}><Plus size={16} aria-hidden="true" />添加第一个持仓</button>
         </div>
       ) : null}
       {showArchived && !filterLoading && archivedCount === 0 ? (
@@ -107,6 +111,11 @@ export function HoldingsPage() {
       {selected ? <SaleDrawer holding={selected} open={drawer === "sell"} onClose={closeDrawer} onUpdated={closeDrawer} /> : null}
       {selected ? <CorrectionDrawer holding={selected} open={drawer === "correction"} onClose={closeDrawer} onUpdated={closeDrawer} /> : null}
       {selected ? <AdjustmentHistoryDrawer holding={selected} open={drawer === "history"} onClose={closeDrawer} /> : null}
+      {selected ? <ReplacementDrawer holding={selected} open={drawer === "replace"} onClose={closeDrawer} onReplaced={(target) => {
+        closeDrawer();
+        setShowArchived(false);
+        setNotice(`${target.symbol} 已成为新的默认调整标的。`);
+      }} /> : null}
       {addOpen ? <AddHoldingDrawer assetClasses={assetClasses.data} open onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); setShowArchived(false); }} /> : null}
     </section>
   );
