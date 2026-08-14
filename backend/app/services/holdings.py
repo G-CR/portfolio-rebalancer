@@ -7,7 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AssetClass, Holding
-from app.schemas.holding import HoldingCreate, HoldingUpdate
+from app.schemas.holding import (
+    HoldingCreate,
+    HoldingReplacementRequest,
+    HoldingReplacementResponse,
+    HoldingResponse,
+    HoldingUpdate,
+)
+from app.services.cost_adjustments import record_full_sale
 from app.services.errors import ServiceError
 
 _ONE = Decimal("1")
@@ -71,6 +78,66 @@ async def create_holding(session: AsyncSession, payload: HoldingCreate) -> Holdi
     session.add(holding)
     await session.flush()
     return holding
+
+
+async def replace_holding(
+    session: AsyncSession,
+    holding_id: UUID,
+    payload: HoldingReplacementRequest,
+) -> HoldingReplacementResponse:
+    await _lock_active_asset_classes(session)
+    source = await _get_active_holding(session, holding_id, lock=True)
+    if source.version != payload.source_version:
+        raise ServiceError(
+            409,
+            "HOLDING_VERSION_CONFLICT",
+            "Holding was modified after replacement was opened.",
+            {"current_version": source.version},
+        )
+    if source.quantity <= 0:
+        raise ServiceError(
+            409,
+            "HOLDING_REPLACEMENT_SOURCE_EMPTY",
+            "Replacement requires a positive source quantity.",
+        )
+    active_holdings = await _get_active_holdings_for_asset_class(
+        session,
+        source.asset_class_id,
+        lock=True,
+    )
+    cost_fx_to_cny, baseline_fx_to_cny = _normalized_fx_values(
+        payload.trade_currency,
+        payload.cost_fx_to_cny,
+        payload.baseline_fx_to_cny,
+    )
+    for holding in active_holdings:
+        holding.is_rebalance_preferred = False
+    await record_full_sale(session, source, payload.note)
+    source.is_active = False
+    target = Holding(
+        asset_class_id=source.asset_class_id,
+        symbol=payload.symbol,
+        name=payload.name,
+        market=payload.market,
+        account_name=payload.account_name,
+        trade_currency=payload.trade_currency,
+        quantity=payload.quantity,
+        average_cost_price=payload.average_cost_price,
+        cost_fx_to_cny=cost_fx_to_cny,
+        baseline_fx_to_cny=baseline_fx_to_cny,
+        lot_size=payload.lot_size,
+        quantity_precision=payload.quantity_precision,
+        preferred_data_source=payload.preferred_data_source,
+        is_rebalance_preferred=True,
+    )
+    session.add(target)
+    await session.flush()
+    await _enforce_preferred_holding(session, source.asset_class_id, target)
+    await session.flush()
+    return HoldingReplacementResponse(
+        source=HoldingResponse.model_validate(source),
+        target=HoldingResponse.model_validate(target),
+    )
 
 
 async def update_holding(
