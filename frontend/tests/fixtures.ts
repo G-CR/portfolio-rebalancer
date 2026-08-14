@@ -371,6 +371,31 @@ export function holdingReplacementRequestFixture(
   };
 }
 
+function scaleDecimalString(value: string, precision: number): string {
+  const match = value.trim().match(/^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/);
+  if (!match) throw new Error(`Invalid decimal fixture value: ${value}`);
+
+  const scale = Math.max(precision, 0);
+  const fraction = match[3] ?? match[4] ?? "";
+  const units = BigInt(`${match[2] ?? "0"}${fraction}`);
+  let scaledUnits: bigint;
+  if (fraction.length <= scale) {
+    scaledUnits = units * 10n ** BigInt(scale - fraction.length);
+  } else {
+    const divisor = 10n ** BigInt(fraction.length - scale);
+    const quotient = units / divisor;
+    const remainder = units % divisor;
+    const comparison = remainder * 2n - divisor;
+    const roundUp = comparison > 0n || (comparison === 0n && quotient % 2n !== 0n);
+    scaledUnits = quotient + (roundUp ? 1n : 0n);
+  }
+
+  const sign = match[1] === "-" ? "-" : "";
+  const digits = scaledUnits.toString().padStart(scale + 1, "0");
+  if (scale === 0) return `${sign}${digits}`;
+  return `${sign}${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+}
+
 export function holdingReplacementResponseFixture(
   source: Holding,
   payload: HoldingReplacementRequest,
@@ -379,7 +404,7 @@ export function holdingReplacementResponseFixture(
   const zeroQuantity = source.quantity_precision > 0
     ? `0.${"0".repeat(source.quantity_precision)}`
     : "0";
-  const targetQuantity = Number(payload.quantity).toFixed(payload.quantity_precision);
+  const targetQuantity = scaleDecimalString(payload.quantity, payload.quantity_precision);
   return {
     source: {
       ...source,
