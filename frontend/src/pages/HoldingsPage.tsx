@@ -1,5 +1,5 @@
 import { Filter, Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api/client";
 import type { Holding, PortfolioIncompleteItem } from "../api/types";
@@ -29,7 +29,12 @@ export function HoldingsPage() {
   const [drawer, setDrawer] = useState<OpenDrawer>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const noticeRef = useRef<HTMLDivElement>(null);
   const [addOpen, setAddOpen] = useState(false);
+
+  useEffect(() => {
+    if (notice) noticeRef.current?.focus();
+  }, [notice]);
 
   async function command(holding: Holding, next: HoldingCommand) {
     setNotice(null);
@@ -89,7 +94,7 @@ export function HoldingsPage() {
         </div>
       </header>
       {error ? <div className={styles.alert} role="alert">{error}</div> : null}
-      {notice ? <div className={styles.notice} role="status">{notice}</div> : null}
+      {notice ? <div ref={noticeRef} className={styles.notice} role="status" tabIndex={-1}>{notice}</div> : null}
       {analyticsIncomplete ? <HoldingsMarketDataNotice items={incompleteItems} /> : null}
       {filterLoading ? <div className={styles.filterStatus} role="status">正在载入已归档持仓...</div> : null}
       {!showArchived && activeCount === 0 ? (

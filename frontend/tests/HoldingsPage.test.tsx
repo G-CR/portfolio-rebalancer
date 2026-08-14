@@ -174,6 +174,38 @@ describe("HoldingsPage", () => {
     expect(screen.queryByText("SPY")).not.toBeInTheDocument();
   });
 
+  it("moves focus to the stable success status after the source row unmounts", async () => {
+    const user = userEvent.setup();
+    let currentHoldings: Holding[] = [holdingFixture];
+    const target: Holding = {
+      ...holdingFixture,
+      id: "20000000-0000-4000-8000-000000000099",
+      symbol: "VOO",
+      name: "Vanguard S&P 500 ETF",
+      is_rebalance_preferred: true,
+      version: 1,
+    };
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json(currentHoldings.filter((holding) => holding.is_active))),
+      http.post(`/api/holdings/${holdingFixture.id}/replace`, () => {
+        currentHoldings = [{ ...holdingFixture, is_active: false }, target];
+        return HttpResponse.json({ source: currentHoldings[0], target });
+      }),
+    ] });
+
+    const opener = await screen.findByRole("button", { name: "更多 SPY 操作" });
+    await user.click(opener);
+    await user.click(screen.getByRole("menuitem", { name: "替换标的" }));
+    await user.type(screen.getByRole("textbox", { name: "目标代码" }), "VOO");
+    await user.type(screen.getByRole("textbox", { name: "目标名称" }), "Vanguard S&P 500 ETF");
+    await user.click(screen.getByRole("button", { name: "确认替换为 VOO" }));
+
+    const status = await screen.findByText("VOO 已成为新的默认调整标的。");
+    await waitFor(() => expect(opener).not.toBeInTheDocument());
+    expect(status).toHaveFocus();
+  });
+
   it("replaces a holding with decimal string payload and invalidates dependent caches", async () => {
     const user = userEvent.setup();
     let payload: unknown;
