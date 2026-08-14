@@ -379,6 +379,7 @@ export function holdingReplacementResponseFixture(
   const zeroQuantity = source.quantity_precision > 0
     ? `0.${"0".repeat(source.quantity_precision)}`
     : "0";
+  const targetQuantity = Number(payload.quantity).toFixed(payload.quantity_precision);
   return {
     source: {
       ...source,
@@ -397,7 +398,7 @@ export function holdingReplacementResponseFixture(
       market: payload.market,
       account_name: payload.account_name,
       trade_currency: payload.trade_currency,
-      quantity: payload.quantity,
+      quantity: targetQuantity,
       average_cost_price: payload.average_cost_price,
       cost_fx_to_cny: payload.trade_currency === "CNY" ? "1" : payload.cost_fx_to_cny,
       baseline_fx_to_cny: payload.trade_currency === "CNY" ? "1" : payload.baseline_fx_to_cny,

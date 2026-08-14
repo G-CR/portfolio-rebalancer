@@ -384,6 +384,22 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
         "data_status": "valid",
     }
 
+    legacy_input_summary = dict(plan.input_summary)
+    legacy_input_summary.pop("resolved_constraints")
+    plan.input_summary = legacy_input_summary
+    await db_session.commit()
+
+    legacy_listed = await api_client.get("/api/rebalance/plans")
+    legacy_detail = await api_client.get(f"/api/rebalance/plans/{created['id']}")
+
+    assert legacy_listed.status_code == 200, legacy_listed.text
+    assert legacy_detail.status_code == 200, legacy_detail.text
+    assert legacy_listed.json()["items"] == [legacy_detail.json()]
+    assert legacy_detail.json()["allow_sell"] is True
+    assert legacy_detail.json()["allow_fx"] is True
+    assert legacy_detail.json()["tolerance"] == "0.05"
+    assert legacy_detail.json()["minimum_trade_cny"] == "0"
+
 
 async def test_create_plan_uses_one_capture_when_newer_price_is_appended_before_insert(
     api_client,

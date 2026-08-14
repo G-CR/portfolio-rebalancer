@@ -904,7 +904,7 @@ async def _get_locked_plan(session: AsyncSession, plan_id: UUID) -> RebalancePla
 def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
     projected = plan.projected_result
     input_summary = plan.input_summary
-    resolved_constraints = input_summary["resolved_constraints"]
+    resolved_constraints = input_summary.get("resolved_constraints", input_summary)
     return RebalancePlanResponse(
         id=str(plan.id),
         status=plan.status,

@@ -175,6 +175,7 @@ test("replacement fixture enforces production replacement invariants", async ({ 
   expect(result.replacement.target).toMatchObject({
     symbol: "510300",
     trade_currency: "CNY",
+    quantity: "8.0000",
     cost_fx_to_cny: "1",
     baseline_fx_to_cny: "1",
   });
