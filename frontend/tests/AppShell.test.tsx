@@ -1,9 +1,15 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { http, HttpResponse } from "msw";
+import { Route, Routes } from "react-router-dom";
 
 import { AppShell } from "../src/components/AppShell/AppShell";
 import { FormField } from "../src/components/FormField/FormField";
+import type { MarketDataCollection } from "../src/api/types";
+import { formatDataTime } from "../src/features/analytics/format";
+import { RebalancePage } from "../src/pages/RebalancePage";
+import { assetClassFixtures, holdingFixture, marketDataCollectionFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "./fixtures";
+import { renderWithProviders } from "./testProviders";
 
 const mobileQuery = "(max-width: 760px)";
 
@@ -48,6 +54,21 @@ const routeNames = [
   "数据源",
 ];
 
+function renderShell(
+  route = "/",
+  marketData: MarketDataCollection = marketDataCollectionFixture,
+  handlers: Parameters<typeof renderWithProviders>[1]["handlers"] = [],
+) {
+  return renderWithProviders(<AppShell />, {
+    route,
+    handlers: [
+      ...handlers,
+      http.get("/api/market-data", () => HttpResponse.json(marketData)),
+      http.post("/api/market-data/refresh", () => HttpResponse.json(marketData)),
+    ],
+  });
+}
+
 describe("AppShell", () => {
   afterEach(() => {
     cleanup();
@@ -56,11 +77,7 @@ describe("AppShell", () => {
 
   it("renders the seven confirmed routes as labelled links", () => {
     installMatchMedia(false);
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <AppShell />
-      </MemoryRouter>,
-    );
+    renderShell();
 
     for (const name of routeNames) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
@@ -71,11 +88,7 @@ describe("AppShell", () => {
   it("focuses the first route and isolates the background when mobile navigation opens", async () => {
     installMatchMedia(true);
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={["/holdings"]}>
-        <AppShell />
-      </MemoryRouter>,
-    );
+    renderShell("/holdings");
 
     const toggle = screen.getByRole("button", { name: "打开导航" });
     await user.click(toggle);
@@ -90,11 +103,7 @@ describe("AppShell", () => {
   it("traps Tab and Shift+Tab within mobile navigation and close controls", async () => {
     installMatchMedia(true);
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <AppShell />
-      </MemoryRouter>,
-    );
+    renderShell();
 
     const toggle = screen.getByRole("button", { name: "打开导航" });
     await user.click(toggle);
@@ -116,11 +125,7 @@ describe("AppShell", () => {
   it("closes mobile navigation with Escape and restores trigger focus", async () => {
     installMatchMedia(true);
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <AppShell />
-      </MemoryRouter>,
-    );
+    renderShell();
 
     const toggle = screen.getByRole("button", { name: "打开导航" });
     await user.click(toggle);
@@ -134,11 +139,7 @@ describe("AppShell", () => {
   it("closes mobile navigation after a route click and restores trigger focus", async () => {
     installMatchMedia(true);
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <AppShell />
-      </MemoryRouter>,
-    );
+    renderShell();
 
     const toggle = screen.getByRole("button", { name: "打开导航" });
     await user.click(toggle);
@@ -151,11 +152,7 @@ describe("AppShell", () => {
   it("clears modal state without focusing the hidden trigger at the desktop breakpoint", async () => {
     const media = installMatchMedia(true);
     const user = userEvent.setup();
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <AppShell />
-      </MemoryRouter>,
-    );
+    renderShell();
 
     const toggle = screen.getByRole("button", { name: "打开导航" });
     await user.click(toggle);
@@ -169,6 +166,159 @@ describe("AppShell", () => {
     expect(screen.queryByRole("dialog", { name: "主导航" })).not.toBeInTheDocument();
     expect(screen.getByRole("main")).not.toHaveAttribute("inert");
     expect(firstRoute).toHaveFocus();
+  });
+
+  it("displays the latest available market time", async () => {
+    installMatchMedia(false);
+    const latestMarketTime = "2026-07-15T01:30:00Z";
+    renderShell("/", {
+      ...marketDataCollectionFixture,
+      items: marketDataCollectionFixture.items.map((item, index) => ({
+        ...item,
+        market_time: index === 0 ? "2026-07-10T20:00:00Z" : latestMarketTime,
+      })).concat({
+        ...marketDataCollectionFixture.items[0],
+        key: "price:EMPTY",
+        market_time: null,
+      }),
+    });
+
+    expect(await screen.findByText(formatDataTime(latestMarketTime))).toBeInTheDocument();
+  });
+
+  it("prioritizes incomplete data over stale and manual values", async () => {
+    installMatchMedia(false);
+    renderShell("/", {
+      ...marketDataCollectionFixture,
+      items: marketDataCollectionFixture.items.map((item, index) => ({
+        ...item,
+        status: index === 0 ? "missing" : "manual",
+      })),
+    });
+
+    expect(await screen.findByText("\u6570\u636e\u9700\u5904\u7406")).toBeInTheDocument();
+  });
+
+  it("does not describe an empty market-data collection as valid", async () => {
+    installMatchMedia(false);
+    renderShell("/", { ...marketDataCollectionFixture, items: [] });
+
+    expect(await screen.findByText("尚无市场数据")).toBeInTheDocument();
+    expect(screen.queryByText("数据有效")).not.toBeInTheDocument();
+  });
+
+  it("shows pending refresh state and prevents duplicate refreshes", async () => {
+    installMatchMedia(false);
+    let resolveRefresh: ((response: HttpResponse) => void) | undefined;
+    const refreshResponse = new Promise<HttpResponse>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    renderShell("/", marketDataCollectionFixture, [
+      http.post("/api/market-data/refresh", () => refreshResponse),
+    ]);
+    const user = userEvent.setup();
+
+    const refreshButton = await screen.findByRole("button", { name: "\u5237\u65b0" });
+    await user.click(refreshButton);
+
+    expect(await screen.findByRole("button", { name: "\u6b63\u5728\u5237\u65b0" })).toBeDisabled();
+    resolveRefresh?.(HttpResponse.json(marketDataCollectionFixture));
+    expect(await screen.findByRole("button", { name: "\u5237\u65b0" })).toBeEnabled();
+  });
+
+  it("clears the displayed rebalance preview and plan after a topbar market refresh", async () => {
+    installMatchMedia(false);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="rebalance" element={<RebalancePage />} />
+        </Route>
+      </Routes>,
+      {
+        route: "/rebalance",
+        handlers: [
+          http.get("/api/market-data", () => HttpResponse.json(marketDataCollectionFixture)),
+          http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
+          http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+          http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
+          http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
+          http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
+          http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
+          http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
+        ],
+      },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "开始测算" }));
+    await screen.findByText("建议执行 4 笔交易");
+    await user.click(screen.getByRole("button", { name: "保存方案" }));
+    await screen.findByText("方案已保存，尚未开始");
+
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+
+    expect(await screen.findByText("配置本次资金与约束后开始测算")).toBeInTheDocument();
+    expect(screen.queryByText("建议执行 4 笔交易")).not.toBeInTheDocument();
+    expect(screen.queryByText("方案已保存，尚未开始")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
+  });
+
+  it("keeps an in-progress rebalance available after a topbar market refresh", async () => {
+    installMatchMedia(false);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="rebalance" element={<RebalancePage />} />
+        </Route>
+      </Routes>,
+      {
+        route: "/rebalance",
+        handlers: [
+          http.get("/api/market-data", () => HttpResponse.json(marketDataCollectionFixture)),
+          http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
+          http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+          http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
+          http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
+          http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
+          http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
+          http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
+          http.post(`/api/rebalance/plans/${rebalancePlanFixture.id}/start`, () => HttpResponse.json({
+            ...rebalancePlanFixture,
+            status: "in_progress",
+            before_snapshot_id: "30000000-0000-4000-8000-000000000010",
+          })),
+        ],
+      },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "开始测算" }));
+    await screen.findByText("建议执行 4 笔交易");
+    await user.click(screen.getByRole("button", { name: "开始本次再平衡" }));
+    await screen.findByText("再平衡进行中");
+
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+
+    expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "再平衡执行清单" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "完成再平衡并建立新基准" })).toBeEnabled();
+  });
+
+  it("links to data sources when refresh fails without discarding cached status", async () => {
+    installMatchMedia(false);
+    renderShell("/", {
+      ...marketDataCollectionFixture,
+      items: marketDataCollectionFixture.items.map((item) => ({ ...item, status: "valid" })),
+    }, [
+      http.post("/api/market-data/refresh", () => HttpResponse.json({ detail: "unavailable" }, { status: 503 })),
+    ]);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "\u5237\u65b0" }));
+
+    await screen.findByRole("alert");
+    expect(screen.getByText("\u6570\u636e\u6709\u6548")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "\u67e5\u770b\u6570\u636e\u6e90" })).toHaveAttribute("href", "/data-sources");
   });
 });
 

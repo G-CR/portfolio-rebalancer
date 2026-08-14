@@ -116,8 +116,9 @@ describe("HoldingsPage", () => {
     expect(body).toBeUndefined();
     await user.type(screen.getByRole("textbox", { name: "标的代码" }), "SPY");
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
-    await user.type(screen.getByRole("textbox", { name: "上市市场" }), "US");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "US");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
+    await user.click(screen.getByText("高级设置"));
     expect(screen.getByRole("combobox", { name: "首选行情来源" })).toHaveValue("");
     await user.selectOptions(screen.getByRole("combobox", { name: "首选行情来源" }), "yahoo");
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
@@ -135,6 +136,120 @@ describe("HoldingsPage", () => {
     });
     expect(await screen.findByText("SPY")).toBeInTheDocument();
     expect(queryClient.getQueryState(holdingsQueryKey(true))?.isInvalidated).toBe(true);
+  });
+
+  it("submits a Shanghai A-share holding in CNY with fixed FX values", async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+      http.post("/api/holdings", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(holdingFixture, { status: 201 });
+      }),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    await user.type(screen.getByRole("textbox", { name: "标的代码" }), "600519");
+    await user.type(screen.getByRole("textbox", { name: "标的名称" }), "贵州茅台");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "SH");
+    await user.type(screen.getByRole("textbox", { name: "账户名称" }), "人民币账户");
+    expect(screen.queryByRole("textbox", { name: "成本汇率" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "基准汇率" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+
+    await waitFor(() => expect(body).toMatchObject({
+      market: "SH",
+      trade_currency: "CNY",
+      cost_fx_to_cny: "1",
+      baseline_fx_to_cny: "1",
+    }));
+  });
+
+  it("requires market selection before creating a holding", async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+      http.post("/api/holdings", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(holdingFixture, { status: 201 });
+      }),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    expect(screen.getByRole("combobox", { name: "上市市场" })).toHaveValue("");
+    await user.type(screen.getByRole("textbox", { name: "标的代码" }), "SPY");
+    await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
+    await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("请完整填写标的代码、名称、市场和账户");
+    expect(body).toBeUndefined();
+  });
+
+  it("shows editable USD FX fields only for US holdings", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    const market = screen.getByRole("combobox", { name: "上市市场" });
+    expect([...market.options].filter((option) => option.value).map((option) => [option.label, option.value])).toEqual([
+      ["美股", "US"],
+      ["上海 A 股", "SH"],
+      ["深圳 A 股", "SZ"],
+    ]);
+    await user.selectOptions(market, "US");
+
+    const costFx = screen.getByRole("textbox", { name: "成本汇率" });
+    const baselineFx = screen.getByRole("textbox", { name: "基准汇率" });
+    await user.clear(costFx);
+    await user.type(costFx, "7.18");
+    await user.clear(baselineFx);
+    await user.type(baselineFx, "7.20");
+    expect(costFx).toHaveValue("7.18");
+    expect(baselineFx).toHaveValue("7.20");
+  });
+
+  it("submits advanced holding settings from the labelled details section", async () => {
+    const user = userEvent.setup();
+    let body: unknown;
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+      http.post("/api/holdings", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(holdingFixture, { status: 201 });
+      }),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    await user.type(screen.getByRole("textbox", { name: "标的代码" }), "000001");
+    await user.type(screen.getByRole("textbox", { name: "标的名称" }), "平安银行");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "SZ");
+    await user.type(screen.getByRole("textbox", { name: "账户名称" }), "证券账户");
+    const advanced = screen.getByText("高级设置");
+    expect(advanced.closest("details")).not.toBeNull();
+    await user.click(advanced);
+    await user.selectOptions(screen.getByRole("combobox", { name: "首选行情来源" }), "akshare");
+    await user.clear(screen.getByRole("textbox", { name: "最小交易单位" }));
+    await user.type(screen.getByRole("textbox", { name: "最小交易单位" }), "100");
+    await user.clear(screen.getByRole("textbox", { name: "份额小数位" }));
+    await user.type(screen.getByRole("textbox", { name: "份额小数位" }), "2");
+    await user.click(screen.getByRole("checkbox", { name: "设为该资产类别的默认调整标的" }));
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+
+    await waitFor(() => expect(body).toMatchObject({
+      preferred_data_source: "akshare",
+      lot_size: "100",
+      quantity_precision: 2,
+      is_rebalance_preferred: true,
+    }));
   });
 
   it("resets the add drawer on close and successful creation while preserving failed input", async () => {
@@ -157,7 +272,7 @@ describe("HoldingsPage", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "所属资产类别" }), assetClassFixtures[1].id);
     await user.type(screen.getByRole("textbox", { name: "标的代码" }), "QQQ");
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "Nasdaq ETF");
-    await user.type(screen.getByRole("textbox", { name: "上市市场" }), "US");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "US");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "交易账户");
     await user.clear(screen.getByRole("textbox", { name: "初始份额" }));
     await user.type(screen.getByRole("textbox", { name: "初始份额" }), "1.2500");
@@ -176,7 +291,7 @@ describe("HoldingsPage", () => {
 
     await user.type(screen.getByRole("textbox", { name: "标的代码" }), "SPY");
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
-    await user.type(screen.getByRole("textbox", { name: "上市市场" }), "US");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "US");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
     shouldFail = false;
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
@@ -200,7 +315,7 @@ describe("HoldingsPage", () => {
     await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
     await user.type(screen.getByRole("textbox", { name: "标的代码" }), "SPY");
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
-    await user.type(screen.getByRole("textbox", { name: "上市市场" }), "US");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "US");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
     expect(screen.getByRole("button", { name: "正在创建" })).toBeDisabled();

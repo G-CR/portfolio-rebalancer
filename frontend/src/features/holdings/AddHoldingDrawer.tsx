@@ -25,7 +25,6 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   const [name, setName] = useState("");
   const [market, setMarket] = useState("");
   const [accountName, setAccountName] = useState("");
-  const [currency, setCurrency] = useState("CNY");
   const [quantity, setQuantity] = useState("0");
   const [averageCost, setAverageCost] = useState("0");
   const [costFx, setCostFx] = useState("1");
@@ -37,6 +36,8 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   const [submitted, setSubmitted] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const mounted = useRef(true);
+  const isUsMarket = market === "US";
+  const currency = isUsMarket ? "USD" : "CNY";
 
   useEffect(() => () => { mounted.current = false; }, []);
 
@@ -99,10 +100,9 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
           <div className={styles.fieldGrid}>
             <FormField label="标的代码" required><input type="text" value={symbol} onChange={(event) => setSymbol(event.target.value)} /></FormField>
             <FormField label="标的名称" required><input type="text" value={name} onChange={(event) => setName(event.target.value)} /></FormField>
-            <FormField label="上市市场" required><input type="text" value={market} onChange={(event) => setMarket(event.target.value)} /></FormField>
+            <FormField label="上市市场" required><select value={market} onChange={(event) => { const next = event.target.value; setMarket(next); if (next !== "US") { setCostFx("1"); setBaselineFx("1"); } }}><option value="" disabled>请选择市场</option><option value="US">美股</option><option value="SH">上海 A 股</option><option value="SZ">深圳 A 股</option></select></FormField>
             <FormField label="账户名称" required><input type="text" value={accountName} onChange={(event) => setAccountName(event.target.value)} /></FormField>
-            <FormField label="交易币种" required><select value={currency} onChange={(event) => { const next = event.target.value; setCurrency(next); if (next === "CNY") { setCostFx("1"); setBaselineFx("1"); } }}><option value="CNY">CNY</option><option value="USD">USD</option></select></FormField>
-            <FormField label="首选行情来源"><select value={preferredDataSource} onChange={(event) => setPreferredDataSource(event.target.value)}><option value="">跟随全局优先级</option><option value="yahoo">Yahoo Finance</option><option value="sina">新浪财经</option><option value="akshare">AKShare</option><option value="tushare">Tushare</option><option value="alpha_vantage">Alpha Vantage</option></select></FormField>
+            <FormField label="交易币种" required><input type="text" value={currency} readOnly /></FormField>
           </div>
         </section>
         <section className={styles.drawerSection}>
@@ -110,13 +110,20 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
           <div className={styles.fieldGrid}>
             <FormField label="初始份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
             <FormField label="平均成本价" required><input type="text" inputMode="decimal" value={averageCost} onChange={(event) => setAverageCost(event.target.value)} /></FormField>
-            <FormField label="成本汇率" required><input type="text" inputMode="decimal" value={costFx} onChange={(event) => setCostFx(event.target.value)} /></FormField>
-            <FormField label="基准汇率" required><input type="text" inputMode="decimal" value={baselineFx} onChange={(event) => setBaselineFx(event.target.value)} /></FormField>
-            <FormField label="最小交易单位" required><input type="text" inputMode="decimal" value={lotSize} onChange={(event) => setLotSize(event.target.value)} /></FormField>
-            <FormField label="份额小数位" required><input type="text" inputMode="numeric" value={precision} onChange={(event) => setPrecision(event.target.value)} /></FormField>
+            {isUsMarket ? <><FormField label="成本汇率" required><input type="text" inputMode="decimal" value={costFx} onChange={(event) => setCostFx(event.target.value)} /></FormField><FormField label="基准汇率" required><input type="text" inputMode="decimal" value={baselineFx} onChange={(event) => setBaselineFx(event.target.value)} /></FormField></> : null}
           </div>
-          <label className={styles.checkboxRow}><input type="checkbox" checked={preferred} onChange={(event) => setPreferred(event.target.checked)} />设为该资产类别的默认调整标的</label>
         </section>
+        <details className={styles.advancedSettings} aria-label="高级设置">
+          <summary>高级设置</summary>
+          <div className={styles.advancedSettingsContent}>
+            <div className={styles.fieldGrid}>
+              <FormField label="首选行情来源"><select value={preferredDataSource} onChange={(event) => setPreferredDataSource(event.target.value)}><option value="">跟随全局优先级</option><option value="yahoo">Yahoo Finance</option><option value="sina">新浪财经</option><option value="akshare">AKShare</option><option value="tushare">Tushare</option><option value="alpha_vantage">Alpha Vantage</option></select></FormField>
+              <FormField label="最小交易单位" required><input type="text" inputMode="decimal" value={lotSize} onChange={(event) => setLotSize(event.target.value)} /></FormField>
+              <FormField label="份额小数位" required><input type="text" inputMode="numeric" value={precision} onChange={(event) => setPrecision(event.target.value)} /></FormField>
+            </div>
+            <label className={styles.checkboxRow}><input type="checkbox" checked={preferred} onChange={(event) => setPreferred(event.target.checked)} />设为该资产类别的默认调整标的</label>
+          </div>
+        </details>
       </div>
     </WorkDrawer>
   );

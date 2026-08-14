@@ -2,15 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
-import type { RebalancePlan, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
+import type { RebalancePlan, RebalancePreview, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
 import { useAssetClasses } from "../features/assetClasses/api";
 import { formatPercent } from "../features/analytics/format";
 import { useHoldings } from "../features/holdings/api";
+import { useMarketDataRefreshVersion } from "../features/marketData/api";
 import { useRebalanceDefaults, useSaveRebalanceDefaults } from "../features/settings/api";
 import {
   useCancelRebalancePlan,
   useCompleteRebalancePlan,
   useCreateRebalancePlan,
+  useRebalancePlans,
   useRebalancePreview,
   useStartRebalancePlan,
 } from "../features/rebalance/api";
@@ -76,6 +78,20 @@ function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePr
   };
 }
 
+function previewFromPlan(plan: RebalancePlan): RebalancePreview {
+  return {
+    session_token: "",
+    request_token: "",
+    status: "ok",
+    data_status: plan.data_status,
+    acknowledge_stale_data: plan.data_status === "stale",
+    refresh_attempted: false,
+    valuation_basis: plan.valuation_basis,
+    result: plan.result,
+    fx_comparison: plan.fx_comparison,
+  };
+}
+
 export function RebalancePage() {
   const sessionToken = useRef(token("rebalance-session"));
   const [form, setForm] = useState(initialForm);
@@ -85,6 +101,10 @@ export function RebalancePage() {
   const [defaultsWarning, setDefaultsWarning] = useState<string | null>(null);
   const [defaultsReady, setDefaultsReady] = useState(false);
   const preview = useRebalancePreview();
+  const plans = useRebalancePlans();
+  const refreshVersion = useMarketDataRefreshVersion().data;
+  const observedRefreshVersion = useRef(refreshVersion);
+  const planRestoreCompleted = useRef(false);
   const defaults = useRebalanceDefaults();
   const saveDefaults = useSaveRebalanceDefaults();
   const defaultsHydrated = useRef(false);
@@ -95,6 +115,25 @@ export function RebalancePage() {
   const cancelPlan = useCancelRebalancePlan();
   const completePlan = useCompleteRebalancePlan();
   const transitionPending = createPlan.isPending || startPlan.isPending || cancelPlan.isPending || completePlan.isPending;
+
+  useEffect(() => {
+    if (planRestoreCompleted.current || plans.isFetching || !plans.data) return;
+    planRestoreCompleted.current = true;
+    if (preview.data) return;
+    const recoverablePlan = plans.data.items.find((item) => item.status === "in_progress") ?? null;
+    setPlan((current) => current ?? recoverablePlan);
+  }, [plans.data, plans.isFetching, preview.data]);
+
+  useEffect(() => {
+    if (refreshVersion === observedRefreshVersion.current) return;
+    observedRefreshVersion.current = refreshVersion;
+    planRestoreCompleted.current = true;
+    preview.reset();
+    setPlan((current) => current?.status === "in_progress" ? current : null);
+    setIsDirty(false);
+    setOperationError(null);
+    setDefaultsWarning(null);
+  }, [refreshVersion]);
 
   useEffect(() => {
     if (defaultsHydrated.current || (!defaults.data && !defaults.isError)) return;
@@ -187,11 +226,11 @@ export function RebalancePage() {
 
   const staleError = preview.error instanceof ApiError && preview.error.code === "REBALANCE_STALE_DATA_ACK_REQUIRED";
   const generalError = preview.error instanceof ApiError && !staleError ? preview.error.message : null;
-  const currentPreview = preview.data;
+  const currentPreview = preview.data ?? (plan ? previewFromPlan(plan) : undefined);
   const holdingNames = Object.fromEntries(
     (holdings.data ?? []).map((holding) => [holding.symbol, holding.name]),
   );
-  const lifecycleDisabled = isDirty || !currentPreview || staleError || (currentPreview.data_status === "stale" && !form.acknowledgeStaleData);
+  const lifecycleDisabled = isDirty || !currentPreview || staleError || (currentPreview.data_status === "stale" && !plan && !form.acknowledgeStaleData);
 
   return (
     <section className={styles.page} aria-label="再平衡工作台">
