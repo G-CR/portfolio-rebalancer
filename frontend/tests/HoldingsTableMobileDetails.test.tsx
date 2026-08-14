@@ -156,6 +156,19 @@ describe("HoldingsTable mobile row details", () => {
     expect(onCommand).toHaveBeenCalledWith(holdingFixture, "purchase");
   });
 
+  it("routes replacement from the expanded mobile action menu", async () => {
+    const user = userEvent.setup();
+    const { onCommand } = renderTable();
+    const disclosure = screen.getByRole("button", { name: "查看 SPY 持仓详情" });
+
+    await user.click(disclosure);
+    const detailRow = document.getElementById(disclosure.getAttribute("aria-controls")!)!;
+    await user.click(within(detailRow).getByRole("button", { name: "更多 SPY 操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "替换标的" }));
+
+    expect(onCommand).toHaveBeenCalledWith(holdingFixture, "replace");
+  });
+
   it("formats cost FX to two decimals in summary and details", async () => {
     const user = userEvent.setup();
     const precise = { ...holdingFixture, cost_fx_to_cny: "6.769073520399" };

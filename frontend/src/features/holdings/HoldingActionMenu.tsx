@@ -1,11 +1,11 @@
-import { Archive, History, MoreHorizontal, Pencil, TrendingDown } from "lucide-react";
+import { Archive, History, MoreHorizontal, Pencil, RefreshCw, TrendingDown } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { Holding } from "../../api/types";
 import styles from "./HoldingsTable.module.css";
 
-export type HoldingCommand = "purchase" | "sell" | "correction" | "history" | "archive";
+export type HoldingCommand = "purchase" | "sell" | "correction" | "history" | "replace" | "archive";
 
 type MenuPosition = {
   top: number;
@@ -108,6 +108,7 @@ export function HoldingActionMenu({
       <button type="button" role="menuitem" onClick={() => run("sell")}><TrendingDown size={15} aria-hidden="true" />卖出调整</button>
       <button type="button" role="menuitem" onClick={() => run("correction")}><Pencil size={15} aria-hidden="true" />人工修正</button>
       <button type="button" role="menuitem" onClick={() => run("history")}><History size={15} aria-hidden="true" />调整历史</button>
+      {holding.is_active && Number(holding.quantity) > 0 ? <button type="button" role="menuitem" onClick={() => run("replace")}><RefreshCw size={15} aria-hidden="true" />替换标的</button> : null}
       {holding.is_active ? <button className={styles.dangerItem} type="button" role="menuitem" onClick={() => run("archive")}><Archive size={15} aria-hidden="true" />归档持仓</button> : null}
     </div>
   ) : null;

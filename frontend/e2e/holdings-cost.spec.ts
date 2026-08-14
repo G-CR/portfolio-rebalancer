@@ -92,3 +92,48 @@ test("mobile details retain the action menu entry", async ({ page }) => {
   await page.getByRole("button", { name: "查看 SPY 持仓详情" }).click();
   await expect(page.getByRole("button", { name: "更多 SPY 操作" })).toBeVisible();
 });
+
+test("replacement fixture rejects an unknown exact source id", async ({ page }) => {
+  await seedPortfolio(page);
+  await page.goto("/holdings");
+
+  const status = await page.evaluate(async () => {
+    const response = await fetch("/api/holdings/not-the-source/replace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: "WRONG" }),
+    });
+    return response.status;
+  });
+
+  expect(status).toBe(404);
+  await expect(page.getByText("SPY", { exact: true })).toBeVisible();
+});
+
+test("fully replaces SPY with VOO and retains archived SPY", async ({ page }) => {
+  await seedPortfolio(page, "balanced");
+  await page.goto("/holdings");
+  await page.getByRole("button", { name: "更多 SPY 操作" }).click();
+  await page.getByRole("menuitem", { name: "替换标的" }).click();
+  await page.getByRole("textbox", { name: "目标代码" }).fill("VOO");
+  await page.getByRole("textbox", { name: "目标名称" }).fill("Vanguard S&P 500 ETF");
+  await page.getByRole("textbox", { name: "目标份额" }).fill("8");
+  await page.getByRole("textbox", { name: "平均成本价" }).fill("625.40");
+  await page.getByRole("button", { name: "确认替换为 VOO" }).click();
+  const table = page.getByRole("region", { name: "持仓与成本表格" });
+  await expect(table.getByText("VOO", { exact: true })).toBeVisible();
+  await expect(table.getByText("SPY", { exact: true })).not.toBeVisible();
+  await page.getByRole("checkbox", { name: "仅显示已归档持仓" }).check();
+  await expect(table.getByText("SPY", { exact: true })).toBeVisible();
+  const archivedSpyRow = table.locator('tbody tr[data-mobile-summary="true"][data-archived="true"]', { hasText: "SPY" });
+  await expect(archivedSpyRow).toHaveCount(1);
+  await expect(archivedSpyRow).toContainText("已归档");
+  await expect(archivedSpyRow.locator("td").nth(3)).toHaveText("0");
+  await expect(table.getByText("VOO", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "再平衡" }).click();
+  await page.getByRole("button", { name: "开始测算" }).click();
+  const suggestion = page.getByRole("row", { name: "VOO 卖出" });
+  await expect(suggestion).toBeVisible();
+  await expect(suggestion).toContainText("Vanguard S&P 500 ETF");
+});

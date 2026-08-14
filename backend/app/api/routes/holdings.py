@@ -8,9 +8,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.db.session import get_session
-from app.schemas.holding import HoldingCreate, HoldingResponse, HoldingUpdate
+from app.schemas.holding import (
+    HoldingCreate,
+    HoldingReplacementRequest,
+    HoldingReplacementResponse,
+    HoldingResponse,
+    HoldingUpdate,
+)
 from app.services.errors import ServiceError
-from app.services.holdings import archive_holding, create_holding, list_holdings, update_holding
+from app.services.holdings import (
+    archive_holding,
+    create_holding,
+    list_holdings,
+    replace_holding,
+    update_holding,
+)
 
 router = APIRouter(tags=["holdings"])
 
@@ -29,6 +41,18 @@ async def post_holding(
     session: AsyncSession = Depends(get_session),
 ) -> HoldingResponse:
     return await _run_write(session, lambda: create_holding(session, payload))
+
+
+@router.post("/holdings/{holding_id}/replace", response_model=HoldingReplacementResponse)
+async def post_replace_holding(
+    holding_id: UUID,
+    payload: HoldingReplacementRequest,
+    session: AsyncSession = Depends(get_session),
+) -> HoldingReplacementResponse:
+    return await _run_write(
+        session,
+        lambda: replace_holding(session, holding_id, payload),
+    )
 
 
 @router.patch("/holdings/{holding_id}", response_model=HoldingResponse)
@@ -51,7 +75,7 @@ async def post_archive_holding(
 async def _run_write(
     session: AsyncSession,
     operation,
-) -> HoldingResponse:
+) -> HoldingResponse | HoldingReplacementResponse:
     try:
         async with session.begin():
             return await operation()

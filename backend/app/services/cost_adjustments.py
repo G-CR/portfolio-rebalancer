@@ -220,6 +220,46 @@ async def confirm_adjustment(
     )
 
 
+async def record_full_sale(
+    session: AsyncSession,
+    holding: Holding,
+    note: str | None,
+) -> CostAdjustment:
+    before = _holding_cost_basis(holding)
+    if before.quantity <= 0:
+        raise ServiceError(
+            409,
+            "HOLDING_REPLACEMENT_SOURCE_EMPTY",
+            "Replacement requires a positive source quantity.",
+        )
+    after = _storage_basis(sell_quantity(before, before.quantity))
+    normalized_note = _normalized_optional_note(note)
+    holding.quantity = after.quantity
+    holding.average_cost_price = after.average_price
+    holding.cost_fx_to_cny = after.cost_fx
+    holding.updated_at = utcnow()
+    adjustment = CostAdjustment(
+        holding_id=holding.id,
+        operation_type="SELL",
+        before_quantity=before.quantity,
+        before_average_cost_price=before.average_price,
+        before_cost_fx_to_cny=before.cost_fx,
+        after_quantity=after.quantity,
+        after_average_cost_price=after.average_price,
+        after_cost_fx_to_cny=after.cost_fx,
+        input_summary={
+            "quantity": _decimal_string(before.quantity),
+            "note": normalized_note,
+            "reason": "holding_replacement",
+        },
+        note=normalized_note,
+        created_at=utcnow(),
+    )
+    session.add(adjustment)
+    await session.flush()
+    return adjustment
+
+
 async def _preview_for_confirmation(
     session: AsyncSession,
     holding: Holding,

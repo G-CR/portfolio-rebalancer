@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, apiRequest, jsonBody } from "../../api/client";
 import { portfolioAnalyticsKey } from "../../api/queryKeys";
+import { marketDataQueryKey } from "../marketData/api";
+import { snapshotsQueryRoot } from "../snapshots/api";
 import type {
   ConfirmAdjustmentRequest,
   CorrectionPayload,
@@ -9,6 +11,8 @@ import type {
   CostAdjustmentPreview,
   Holding,
   HoldingCreate,
+  HoldingReplacementRequest,
+  HoldingReplacementResponse,
   HoldingUpdate,
   PurchasePayload,
   RestorePayload,
@@ -77,6 +81,24 @@ export function useUpdateHolding() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+    },
+  });
+}
+
+export function useReplaceHolding() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ holdingId, payload }: { holdingId: string; payload: HoldingReplacementRequest }) =>
+      apiRequest<HoldingReplacementResponse>(`/api/holdings/${holdingId}/replace`, {
+        method: "POST",
+        body: jsonBody(payload),
+      }),
+    onSuccess: (_result, variables) => {
+      void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
+      void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(variables.holdingId) });
+      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: marketDataQueryKey });
+      void queryClient.invalidateQueries({ queryKey: snapshotsQueryRoot });
     },
   });
 }

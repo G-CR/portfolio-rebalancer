@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 from pydantic_core import PydanticCustomError
 
 from app.core.market import normalize_currency_code, normalize_market_code
@@ -78,6 +78,90 @@ class HoldingResponse(BaseModel):
     @field_serializer("cost_fx_to_cny", "baseline_fx_to_cny", "lot_size")
     def serialize_trimmed_decimal(self, value: Decimal) -> str:
         return _trim_decimal(value)
+
+
+class HoldingReplacementRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
+
+    source_version: int
+    symbol: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=200)
+    market: str
+    account_name: str = Field(min_length=1, max_length=100)
+    trade_currency: str
+    quantity: DecimalString
+    average_cost_price: DecimalString
+    cost_fx_to_cny: DecimalString
+    baseline_fx_to_cny: DecimalString
+    lot_size: DecimalString
+    quantity_precision: int = Field(le=12)
+    preferred_data_source: Literal[
+        "yahoo", "sina", "akshare", "tushare", "alpha_vantage"
+    ] | None = None
+    note: str | None = None
+
+    @field_validator("market")
+    @classmethod
+    def normalize_market(cls, value: str) -> str:
+        try:
+            return normalize_market_code(value)
+        except ValueError as exc:
+            raise PydanticCustomError(
+                "holding_market_invalid",
+                "Market must be one of US, SH, or SZ.",
+                {"field": "market"},
+            ) from exc
+
+    @field_validator("trade_currency")
+    @classmethod
+    def normalize_trade_currency(cls, value: str) -> str:
+        try:
+            return normalize_currency_code(value)
+        except ValueError as exc:
+            raise PydanticCustomError(
+                "holding_trade_currency_invalid",
+                "Trade currency must be exactly three ASCII letters.",
+                {"field": "trade_currency"},
+            ) from exc
+
+    @field_validator("quantity")
+    @classmethod
+    def positive_quantity(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise PydanticCustomError(
+                "holding_replacement_quantity_invalid",
+                "Replacement quantity must be positive.",
+                {"field": "quantity"},
+            )
+        return value
+
+    @field_validator(
+        "average_cost_price",
+        "cost_fx_to_cny",
+        "baseline_fx_to_cny",
+        "lot_size",
+    )
+    @classmethod
+    def non_negative_decimal(cls, value: Decimal, info) -> Decimal:
+        return _ensure_non_negative(value, info.field_name)
+
+    @field_validator("source_version", "quantity_precision")
+    @classmethod
+    def non_negative_integer(cls, value: int, info) -> int:
+        if value < 0:
+            raise PydanticCustomError(
+                "negative_numeric_field",
+                "{field} must be non-negative.",
+                {"field": info.field_name},
+            )
+        return value
+
+
+class HoldingReplacementResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source: HoldingResponse
+    target: HoldingResponse
 
 
 class HoldingCreate(BaseModel):

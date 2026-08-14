@@ -9,6 +9,7 @@ type WorkDrawerProps = PropsWithChildren<{
   title: string;
   onClose: () => void;
   footer?: React.ReactNode;
+  closeDisabled?: boolean;
 }>;
 
 let nextDrawerDomId = 0;
@@ -18,7 +19,7 @@ function allocateDrawerDomId() {
   return `work-drawer-${nextDrawerDomId}`;
 }
 
-export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawerProps) {
+export function WorkDrawer({ open, title, onClose, footer, closeDisabled = false, children }: WorkDrawerProps) {
   const identityRef = useRef<object | null>(null);
   const domIdRef = useRef<string | null>(null);
   if (identityRef.current === null) identityRef.current = {};
@@ -30,10 +31,21 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
   const drawerRef = useRef<HTMLElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
+  const closeDisabledRef = useRef(closeDisabled);
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  useEffect(() => {
+    closeDisabledRef.current = closeDisabled;
+  }, [closeDisabled]);
+
+  function requestClose() {
+    if (!closeDisabledRef.current && isTopDrawer(drawerIdentity)) {
+      onCloseRef.current();
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -46,7 +58,7 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
       identity: drawerIdentity,
       layer,
       panel: drawer,
-      close: () => onCloseRef.current(),
+      close: requestClose,
     });
 
     return () => {
@@ -62,9 +74,7 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
       <div
         className="work-drawer-backdrop"
         aria-hidden="true"
-        onClick={() => {
-          if (isTopDrawer(drawerIdentity)) onCloseRef.current();
-        }}
+        onClick={requestClose}
       />
       <section
         ref={drawerRef}
@@ -79,9 +89,8 @@ export function WorkDrawer({ open, title, onClose, footer, children }: WorkDrawe
             className="work-drawer__close"
             type="button"
             aria-label="关闭工作抽屉"
-            onClick={() => {
-              if (isTopDrawer(drawerIdentity)) onCloseRef.current();
-            }}
+            disabled={closeDisabled}
+            onClick={requestClose}
           >
             <X size={18} aria-hidden="true" />
           </button>

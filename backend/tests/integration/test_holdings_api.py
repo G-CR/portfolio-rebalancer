@@ -1,10 +1,11 @@
 import asyncio
+from decimal import Decimal
 
 from httpx import Response
 import pytest
 from sqlalchemy import select
 
-from app.db.models import Holding
+from app.db.models import CostAdjustment, Holding
 from app.services import holdings as holdings_service
 
 
@@ -31,6 +32,410 @@ def _holding_payload(asset_class_id: str, **overrides: object) -> dict[str, obje
     }
     payload.update(overrides)
     return payload
+
+
+def _replacement_payload(
+    source_version: int = 1, **overrides: object
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "source_version": source_version,
+        "symbol": "VOO",
+        "name": "Vanguard S&P 500 ETF",
+        "market": "US",
+        "account_name": "港资券商",
+        "trade_currency": "USD",
+        "quantity": "8",
+        "average_cost_price": "625.40",
+        "cost_fx_to_cny": "7.18",
+        "baseline_fx_to_cny": "7.15",
+        "lot_size": "1",
+        "quantity_precision": 0,
+        "preferred_data_source": "yahoo",
+        "note": "全部卖出 SPY 后换入 VOO",
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def test_replace_holding_records_sale_archives_source_and_prefers_target(
+    api_client, asset_class_id, db_session
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"]),
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert (
+        result["source"]["symbol"],
+        result["source"]["quantity"],
+        result["source"]["is_active"],
+    ) == ("SPY", "0", False)
+    assert (
+        result["target"]["symbol"],
+        result["target"]["quantity"],
+        result["target"]["is_rebalance_preferred"],
+    ) == ("VOO", "8", True)
+    assert [
+        item["symbol"] for item in (await api_client.get("/api/holdings")).json()
+    ] == ["VOO"]
+    history = list(
+        await db_session.scalars(
+            select(CostAdjustment).where(CostAdjustment.holding_id == source["id"])
+        )
+    )
+    assert [
+        (
+            history[0].operation_type,
+            history[0].before_quantity,
+            history[0].after_quantity,
+            history[0].note,
+        )
+    ] == [("SELL", Decimal("10"), Decimal("0"), "全部卖出 SPY 后换入 VOO")]
+
+
+async def _assert_source_active_without_adjustments(
+    api_client,
+    source_id: str,
+    *,
+    quantity: str = "10",
+) -> None:
+    active = (await api_client.get("/api/holdings")).json()
+    source = next(item for item in active if item["id"] == source_id)
+    assert (source["quantity"], source["is_active"]) == (quantity, True)
+    history = await api_client.get(f"/api/cost-adjustments/{source_id}")
+    assert history.status_code == 200
+    assert history.json()["items"] == []
+
+
+async def test_replace_duplicate_target_rolls_back_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+    await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(
+            asset_class_id,
+            symbol="VOO",
+            name="Vanguard S&P 500 ETF",
+            is_rebalance_preferred=False,
+        ),
+    )
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"]),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "HOLDING_ALREADY_EXISTS"
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+async def test_replace_rejects_zero_target_quantity_without_changing_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], quantity="0"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == (
+        "holding_replacement_quantity_invalid"
+    )
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+async def test_replace_rejects_quantity_precision_above_response_limit_without_changing_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], quantity_precision=13),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "quantity_precision"]
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("symbol", "   "),
+        ("name", "   "),
+        ("account_name", "   "),
+        ("symbol", "S" * 33),
+        ("name", "N" * 201),
+        ("account_name", "A" * 101),
+    ],
+)
+async def test_replace_rejects_invalid_target_identity_without_changing_source(
+    api_client,
+    asset_class_id,
+    field: str,
+    value: str,
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], **{field: value}),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", field]
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+async def test_replace_rejects_empty_source_without_recording_sale(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(asset_class_id, quantity="0"),
+        )
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"]),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == (
+        "HOLDING_REPLACEMENT_SOURCE_EMPTY"
+    )
+    await _assert_source_active_without_adjustments(
+        api_client,
+        source["id"],
+        quantity="0",
+    )
+
+
+async def test_replace_rejects_stale_source_version_without_changing_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"] - 1),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "HOLDING_VERSION_CONFLICT",
+        "message": "Holding was modified after replacement was opened.",
+        "current_version": source["version"],
+    }
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+async def test_replace_rejects_source_in_inactive_asset_class_without_changing_source(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+    asset_classes = (await api_client.get("/api/asset-classes")).json()
+    deactivated_payload = [
+        {
+            **item,
+            "is_active": item["id"] != asset_class_id,
+            "target_weight": (
+                item["target_weight"] if item["id"] == asset_class_id else "0.25000000"
+            ),
+        }
+        for item in asset_classes
+    ]
+    assert (
+        await api_client.put("/api/asset-classes", json=deactivated_payload)
+    ).status_code == 200
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"]),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "ASSET_CLASS_NOT_FOUND"
+    all_holdings = (
+        await api_client.get("/api/holdings", params={"include_archived": "true"})
+    ).json()
+    assert [(item["id"], item["quantity"], item["is_active"]) for item in all_holdings] == [
+        (source["id"], "10", True)
+    ]
+    history = await api_client.get(f"/api/cost-adjustments/{source['id']}")
+    assert history.status_code == 200
+    assert history.json()["items"] == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code"),
+    [
+        ({"market": "MOON"}, "HOLDING_MARKET_INVALID"),
+        ({"trade_currency": "USDT"}, "HOLDING_TRADE_CURRENCY_INVALID"),
+        ({"cost_fx_to_cny": "0"}, "FX_MUST_BE_POSITIVE"),
+    ],
+)
+async def test_replace_rejects_invalid_target_fields_without_changing_source(
+    api_client,
+    asset_class_id,
+    overrides: dict[str, object],
+    expected_code: str,
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], **overrides),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == expected_code
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+
+
+async def test_replace_cny_target_normalizes_fx_values(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(
+            source["version"],
+            symbol="510300",
+            name="沪深 300 ETF",
+            market="SH",
+            trade_currency="CNY",
+            cost_fx_to_cny="7.18",
+            baseline_fx_to_cny="7.15",
+        ),
+    )
+
+    assert response.status_code == 200
+    target = response.json()["target"]
+    assert (target["cost_fx_to_cny"], target["baseline_fx_to_cny"]) == ("1", "1")
+
+
+async def test_replace_non_preferred_source_promotes_target(
+    api_client, asset_class_id
+) -> None:
+    existing_preferred = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+    source = (
+        await api_client.post(
+            "/api/holdings",
+            json=_holding_payload(
+                asset_class_id,
+                symbol="QQQ",
+                name="Invesco QQQ Trust",
+                account_name="美股账户 2",
+                is_rebalance_preferred=False,
+            ),
+        )
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(
+            source["version"],
+            account_name="美股账户 2",
+        ),
+    )
+
+    assert response.status_code == 200
+    active = (await api_client.get("/api/holdings")).json()
+    preferred_ids = [item["id"] for item in active if item["is_rebalance_preferred"]]
+    assert preferred_ids == [response.json()["target"]["id"]]
+    previous = next(item for item in active if item["id"] == existing_preferred["id"])
+    assert previous["is_rebalance_preferred"] is False
+
+
+async def test_replace_rejects_concurrent_source_modification(
+    api_client,
+    asset_class_id,
+    monkeypatch,
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+    original_lock_active_asset_classes = holdings_service._lock_active_asset_classes
+    first_writer_locked = asyncio.Event()
+    release_first_writer = asyncio.Event()
+    is_first_writer = True
+
+    async def pause_first_writer_after_asset_class_lock(session) -> None:
+        nonlocal is_first_writer
+        await original_lock_active_asset_classes(session)
+        if is_first_writer:
+            is_first_writer = False
+            first_writer_locked.set()
+            await release_first_writer.wait()
+
+    monkeypatch.setattr(
+        holdings_service,
+        "_lock_active_asset_classes",
+        pause_first_writer_after_asset_class_lock,
+    )
+
+    update_task = asyncio.create_task(
+        api_client.patch(
+            f"/api/holdings/{source['id']}",
+            json={"quantity": "12"},
+        )
+    )
+    await asyncio.wait_for(first_writer_locked.wait(), timeout=1)
+    replacement_task = asyncio.create_task(
+        api_client.post(
+            f"/api/holdings/{source['id']}/replace",
+            json=_replacement_payload(source["version"]),
+        )
+    )
+    release_first_writer.set()
+    update_response, replacement_response = await asyncio.gather(
+        update_task,
+        replacement_task,
+    )
+
+    assert update_response.status_code == 200
+    assert replacement_response.status_code == 409
+    assert replacement_response.json()["detail"]["code"] == (
+        "HOLDING_VERSION_CONFLICT"
+    )
+    await _assert_source_active_without_adjustments(
+        api_client,
+        source["id"],
+        quantity="12",
+    )
 
 
 async def test_list_holdings_returns_empty_when_none_created(api_client) -> None:
