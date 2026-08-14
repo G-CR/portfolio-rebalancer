@@ -154,6 +154,22 @@ describe("WorkDrawer", () => {
     expect(opener).toHaveFocus();
   });
 
+  it("blocks every close path while closeDisabled is true", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <WorkDrawer open title="替换标的 · SPY" onClose={onClose} closeDisabled>
+        内容
+      </WorkDrawer>,
+    );
+
+    expect(screen.getByRole("button", { name: "关闭工作抽屉" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    await user.click(document.querySelector(".work-drawer-backdrop")!);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("uses unique stable labelling ids for stacked dialogs", async () => {
     const user = userEvent.setup();
     render(<NestedDrawerHarness />);
