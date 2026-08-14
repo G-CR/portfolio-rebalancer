@@ -32,7 +32,12 @@ export function useRefreshMarketData() {
     onSuccess: (data) => {
       queryClient.setQueryData(marketDataQueryKey, data);
       queryClient.setQueryData<number>(marketDataRefreshVersionKey, (current = 0) => current + 1);
-      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      const hasIncompleteRequiredData = data.items.some(
+        (item) => item.effective_value === null,
+      );
+      if (!hasIncompleteRequiredData) {
+        void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      }
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: snapshotsQueryRoot });
     },

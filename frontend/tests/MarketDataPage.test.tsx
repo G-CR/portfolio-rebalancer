@@ -50,6 +50,31 @@ it("updates market data and invalidates dependent portfolio queries after refres
   expect(queryClient.getQueryState([...snapshotsQueryRoot, { page: 1 }])?.isInvalidated).toBe(true);
 });
 
+it("does not invalidate analytics when refreshed market data is still incomplete", async () => {
+  const incompleteRefresh = {
+    ...marketDataCollectionFixture,
+    items: marketDataCollectionFixture.items.map((item, index) => index === 0
+      ? { ...item, effective_value: null, status: "failed" as const }
+      : item),
+  };
+  server.use(http.post("/api/market-data/refresh", () => HttpResponse.json(incompleteRefresh)));
+  const queryClient = createQueryClient();
+  queryClient.setQueryData(portfolioAnalyticsKey, { portfolio: "cached" });
+  queryClient.setQueryData([...holdingsQueryRoot, { includeArchived: false }], ["cached"]);
+  queryClient.setQueryData([...snapshotsQueryRoot, { page: 1 }], { items: [] });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  const { result } = renderHook(() => useRefreshMarketData(), { wrapper });
+
+  await act(() => result.current.mutateAsync());
+
+  expect(queryClient.getQueryData(marketDataQueryKey)).toEqual(incompleteRefresh);
+  expect(queryClient.getQueryState(portfolioAnalyticsKey)?.isInvalidated).toBe(false);
+  expect(queryClient.getQueryState([...holdingsQueryRoot, { includeArchived: false }])?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState([...snapshotsQueryRoot, { page: 1 }])?.isInvalidated).toBe(true);
+});
+
 it("keeps the last value visible when a source failed", async () => {
   renderWithProviders(<MarketDataPage />, { handlers: pageHandlers() });
 
