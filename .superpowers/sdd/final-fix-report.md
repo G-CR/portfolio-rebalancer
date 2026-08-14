@@ -132,3 +132,47 @@ The regression tests were added before production changes. The initial focused r
 ### Remaining concerns
 
 - No new concern was introduced by this follow-up. The previously documented Saturday-dependent email-test failures and unrelated dashboard screenshot drift remain outside this fix wave.
+
+## Final compatibility follow-up (2026-08-15)
+
+### Implementation commit
+
+- `cb1533707f61352b0fd02b223c9c9a23ccb348f4` — `fix: preserve legacy rebalance plan compatibility`
+
+### Per-finding implementation
+
+8. **Read legacy rebalance plan summaries.** `_plan_response` now uses the nested `resolved_constraints` object when present and falls back to the plan's top-level `input_summary` for rows written before commit `4d9fde9`. The regression creates a current plan, rewrites its persisted summary to the historical top-level-only shape, and verifies both list and detail responses expose sell/FX permissions, tolerance, and minimum trade without breaking restoration.
+
+9. **Scale replacement target quantity.** The shared replacement response helper formats the target quantity with `quantity_precision`, matching `HoldingResponse`'s scaled serialization for the fixture contract. The browser regression sends quantity `"8"` at precision `4` and requires target quantity `"8.0000"`.
+
+### RED evidence captured before production/fixture changes
+
+- Legacy plan contract: `docker compose build api; docker compose run --rm api uv run pytest -q tests/integration/test_rebalance_api.py::test_create_plan_persists_exact_preview_contract_and_supports_list_detail` — **1 failed** while listing the historical row with `KeyError: 'resolved_constraints'` in `_plan_response`.
+- Replacement quantity contract: `npm run test:e2e -- e2e/holdings-cost.spec.ts --grep "replacement fixture enforces production replacement invariants"` — **1 failed** because the target response returned `quantity: "8"` instead of `"8.0000"`.
+
+### GREEN and covering verification
+
+- Backend focused: `docker compose build api; docker compose run --rm api uv run pytest -q tests/integration/test_rebalance_api.py::test_create_plan_persists_exact_preview_contract_and_supports_list_detail` — **1 passed**.
+- Backend covering integration: `docker compose run --rm api uv run pytest -q tests/integration/test_rebalance_api.py tests/integration/test_rebalance_lifecycle.py tests/integration/test_holdings_api.py` — **52 passed**.
+- Frontend full: `npm test -- --run` — **25 files, 172 tests passed**.
+- Frontend production build: `npm run build` — **succeeded**; only the existing large-chunk advisory was emitted.
+- Playwright focused: `npm run test:e2e -- e2e/holdings-cost.spec.ts --grep "replacement fixture enforces production replacement invariants"` — **1 passed**.
+- Playwright broad functional run: `npm run test:e2e -- --grep-invert "dashboard matches calibration desk"` — **13 passed**.
+- `git diff --check` — **clean** (only Windows LF-to-CRLF notices).
+
+### Changed files
+
+- Legacy backend compatibility and regression: `backend/app/services/rebalancing.py`, `backend/tests/integration/test_rebalance_api.py`.
+- Quantity serialization fixture and browser assertion: `frontend/tests/fixtures.ts`, `frontend/e2e/holdings-cost.spec.ts`.
+
+### Self-review
+
+- Compared the fallback against both historical shapes: nested resolved constraints remain authoritative for current rows, while only absent nested data falls back to the four legacy top-level values.
+- Confirmed available cash and stale acknowledgement continue to come from their unchanged top-level saved fields in both shapes.
+- Confirmed the regression exercises both collection and detail endpoints after persisting the legacy shape, covering active-plan restoration's collection dependency.
+- Confirmed quantity scaling affects only the synthetic target response; archived-source zero quantity/basis, CNY FX normalization, preferred-holding demotion, versioning, and backend atomic replacement code are unchanged.
+- Reviewed `acd6504..cb15337` and found no new in-scope defect. `git diff --check` was clean.
+
+### Remaining concerns
+
+- No new concern was introduced. The previously documented Saturday-dependent email-test failures and unrelated dashboard screenshot drift remain outside this compatibility follow-up.
