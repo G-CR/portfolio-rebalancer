@@ -40,6 +40,28 @@ export interface Holding {
   version: number;
 }
 
+export interface HoldingReplacementRequest {
+  source_version: number;
+  symbol: string;
+  name: string;
+  market: string;
+  account_name: string;
+  trade_currency: string;
+  quantity: DecimalString;
+  average_cost_price: DecimalString;
+  cost_fx_to_cny: DecimalString;
+  baseline_fx_to_cny: DecimalString;
+  lot_size: DecimalString;
+  quantity_precision: number;
+  preferred_data_source: ProviderName | null;
+  note: string | null;
+}
+
+export interface HoldingReplacementResponse {
+  source: Holding;
+  target: Holding;
+}
+
 export type AnalyticsDataStatus = "valid" | "stale" | "manual" | "missing" | "failed" | string;
 
 export interface PortfolioDataInput {

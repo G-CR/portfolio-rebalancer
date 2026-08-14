@@ -2,8 +2,16 @@ import { http, HttpResponse } from "msw";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { portfolioAnalyticsKey } from "../src/api/queryKeys";
+import type { Holding } from "../src/api/types";
+import { marketDataQueryKey } from "../src/features/marketData/api";
+import { snapshotsQueryRoot } from "../src/features/snapshots/api";
 import { HoldingsPage } from "../src/pages/HoldingsPage";
-import { holdingsQueryKey } from "../src/features/holdings/api";
+import {
+  costAdjustmentsQueryKey,
+  holdingsQueryKey,
+  useReplaceHolding,
+} from "../src/features/holdings/api";
 import { assetClassFixtures, holdingFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
@@ -13,7 +21,80 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function ReplaceHarness({ holding }: { holding: Holding }) {
+  const replace = useReplaceHolding();
+
+  return <button onClick={() => void replace.mutateAsync({
+    holdingId: holding.id,
+    payload: {
+      source_version: holding.version,
+      symbol: "VOO",
+      name: "Vanguard S&P 500 ETF",
+      market: "US",
+      account_name: holding.account_name,
+      trade_currency: "USD",
+      quantity: "8",
+      average_cost_price: "625.40",
+      cost_fx_to_cny: "7.18",
+      baseline_fx_to_cny: "7.15",
+      lot_size: "1",
+      quantity_precision: 0,
+      preferred_data_source: "yahoo",
+      note: null,
+    },
+  })}>Replace</button>;
+}
+
 describe("HoldingsPage", () => {
+  it("replaces a holding with decimal string payload and invalidates dependent caches", async () => {
+    const user = userEvent.setup();
+    let payload: unknown;
+    const { queryClient } = renderWithProviders(<ReplaceHarness holding={holdingFixture} />, {
+      handlers: [
+        http.post(`/api/holdings/${holdingFixture.id}/replace`, async ({ request }) => {
+          payload = await request.json();
+          return HttpResponse.json({
+            source: { ...holdingFixture, is_active: false },
+            target: { ...holdingFixture, symbol: "VOO", name: "Vanguard S&P 500 ETF" },
+          });
+        }),
+      ],
+    });
+    queryClient.setQueryData(holdingsQueryKey(false), [holdingFixture]);
+    queryClient.setQueryData(holdingsQueryKey(true), [holdingFixture]);
+    queryClient.setQueryData(costAdjustmentsQueryKey(holdingFixture.id), {});
+    queryClient.setQueryData(portfolioAnalyticsKey, {});
+    queryClient.setQueryData(marketDataQueryKey, {});
+    queryClient.setQueryData([...snapshotsQueryRoot, {}], {});
+
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+
+    await waitFor(() => expect(payload).toEqual({
+      source_version: holdingFixture.version,
+      symbol: "VOO",
+      name: "Vanguard S&P 500 ETF",
+      market: "US",
+      account_name: holdingFixture.account_name,
+      trade_currency: "USD",
+      quantity: "8",
+      average_cost_price: "625.40",
+      cost_fx_to_cny: "7.18",
+      baseline_fx_to_cny: "7.15",
+      lot_size: "1",
+      quantity_precision: 0,
+      preferred_data_source: "yahoo",
+      note: null,
+    }));
+    await waitFor(() => {
+      expect(queryClient.getQueryState(holdingsQueryKey(false))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(holdingsQueryKey(true))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(costAdjustmentsQueryKey(holdingFixture.id))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(portfolioAnalyticsKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(marketDataQueryKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState([...snapshotsQueryRoot, {}])?.isInvalidated).toBe(true);
+    });
+  });
+
   it("refetches archived rows and shows only archived results with disabled actions", async () => {
     const user = userEvent.setup();
     const archived = { ...holdingFixture, id: "20000000-0000-4000-8000-000000000002", symbol: "VOO", is_active: false };
