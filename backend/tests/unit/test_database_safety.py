@@ -50,6 +50,25 @@ def test_accepts_only_explicit_test_database_and_token(database_url: str) -> Non
     assert require_safe_test_database(database_url, "portfolio_test") == database_url
 
 
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        f"{SAFE_URL}?database=portfolio",
+        f"{SAFE_URL}?%64atabase=portfolio",
+        f"{SAFE_URL}?database=portfolio&database=portfolio_test",
+        f"{SAFE_URL}?dbname=portfolio",
+    ],
+)
+def test_rejects_query_database_identity_overrides(database_url: str) -> None:
+    with pytest.raises(RuntimeError) as exc_info:
+        require_safe_test_database(database_url, "portfolio_test")
+
+    message = str(exc_info.value)
+    assert "Business databases must never be reset by pytest" in message
+    assert "make test-backend" in message
+    assert "portfolio:portfolio" not in message
+
+
 def test_conftest_rejects_business_database_before_test_collection() -> None:
     environment = os.environ.copy()
     environment["DATABASE_URL"] = (
@@ -69,3 +88,23 @@ def test_conftest_rejects_business_database_before_test_collection() -> None:
     assert result.returncode != 0
     assert "database='portfolio'" in result.stderr
     assert "make test-backend" in result.stderr
+
+
+def test_conftest_rejects_query_database_override_before_test_collection() -> None:
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = f"{SAFE_URL}?database=portfolio"
+    environment["PYTEST_DATABASE_RESET_TOKEN"] = "portfolio_test"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import tests.conftest"],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Business databases must never be reset by pytest" in result.stderr
+    assert "make test-backend" in result.stderr
+    assert "portfolio:portfolio" not in result.stderr
