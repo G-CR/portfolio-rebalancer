@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -25,7 +26,7 @@ from app.db.models import (
 
 
 MIGRATION_TEST_ENGINE = create_async_engine(
-    "postgresql+asyncpg://portfolio:portfolio@db:5432/portfolio",
+    os.environ["DATABASE_URL"],
     pool_pre_ping=True,
     poolclass=NullPool,
 )

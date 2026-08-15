@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 from alembic import command
@@ -12,7 +13,7 @@ from app.db.models import Setting
 
 
 MIGRATION_TEST_ENGINE = create_async_engine(
-    "postgresql+asyncpg://portfolio:portfolio@db:5432/portfolio",
+    os.environ["DATABASE_URL"],
     pool_pre_ping=True,
     poolclass=NullPool,
 )
