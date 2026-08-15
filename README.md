@@ -41,6 +41,16 @@ make restore FILE=backups/portfolio-20260714T080000Z.dump
 
 Restore requires confirmation, stops API and worker writes, and creates a `pre-restore` safety backup before replacing database objects. Use `./scripts/restore.sh --yes FILE` only for unattended recovery.
 
+## Backend Tests
+
+Run backend tests only through the isolated target:
+
+```bash
+make test-backend
+```
+
+The target uses a separate Compose project, a disposable PostgreSQL volume, and the dedicated `portfolio_test` database. Do not run `docker compose run api pytest`, `docker compose run --rm api uv run pytest`, or database integration tests directly in the normal Compose project: pytest intentionally refuses those commands before any business table can be cleared.
+
 ## Fonts
 
 The frontend bundles Noto Sans SC and IBM Plex Mono through Fontsource packages during the Vite build. No font request depends on an external CDN.

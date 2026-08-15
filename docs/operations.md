@@ -28,7 +28,15 @@ Tushare 与 Alpha Vantage 密钥使用 Fernet 加密后写入数据库，密钥�
 
 ## 后端测试
 
-运行 `make test-backend`。该目标使用独立的 Compose 项目和一次性 PostgreSQL 卷，测试结束后自动清理。不要直接对日常 Compose 数据库执行 `docker compose run --rm api uv run pytest`；迁移测试会修改结构并清空业务表。
+唯一支持的后端测试入口是：
+
+```bash
+make test-backend
+```
+
+该目标固定使用独立 Compose 项目 `portfolio-rebalancer-test`、一次性 PostgreSQL 卷和专用数据库 `portfolio_test`，并在结束后只清理测试项目。pytest 还会在创建测试引擎前校验数据库名和重置标记。
+
+不要在日常 Compose 项目中运行 `docker compose run api pytest`、`docker compose run --rm api uv run pytest`，也不要直接执行数据库集成测试。此类命令会在任何清表操作前被拒绝，并提示改用 `make test-backend`。日常项目仍然只能用不带 `-v` 的 `docker compose down` 停机。
 
 ## 恢复
 
