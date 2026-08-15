@@ -122,7 +122,10 @@ async def test_digest_sends_anomaly_email_when_data_incomplete(
     send = AsyncMock()
     monkeypatch.setattr("app.services.email_digest.send_email", send)
 
-    await send_daily_digest_if_configured(db_session)
+    await send_daily_digest_if_configured(
+        db_session,
+        now=datetime(2026, 8, 3, 8, 0, tzinfo=UTC),  # Monday
+    )
 
     send.assert_awaited_once()
     subject = send.await_args.kwargs["subject"]
@@ -138,7 +141,10 @@ async def test_digest_sends_full_analysis_email(api_client, db_session, monkeypa
     send = AsyncMock()
     monkeypatch.setattr("app.services.email_digest.send_email", send)
 
-    await send_daily_digest_if_configured(db_session)
+    await send_daily_digest_if_configured(
+        db_session,
+        now=datetime(2026, 8, 3, 8, 0, tzinfo=UTC),  # Monday
+    )
 
     send.assert_awaited_once()
     subject = send.await_args.kwargs["subject"]
