@@ -9,6 +9,7 @@ from sqlalchemy.pool import NullPool
 
 from app.main import app
 from app.db.session import engine as app_engine
+from tests.database_safety import require_safe_test_database
 
 BUSINESS_TABLES = (
     "snapshot_items",
@@ -24,9 +25,9 @@ BUSINESS_TABLES = (
     "asset_classes",
 )
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://portfolio:portfolio@db:5432/portfolio",
+DATABASE_URL = require_safe_test_database(
+    os.getenv("DATABASE_URL"),
+    os.getenv("PYTEST_DATABASE_RESET_TOKEN"),
 )
 engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, poolclass=NullPool)
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
