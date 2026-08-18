@@ -4,9 +4,10 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_serializer, field_validator
 from pydantic_core import PydanticCustomError
 
+from app.core.decimal import DB_QUANTUM
 from app.core.market import normalize_currency_code, normalize_market_code
 from app.schemas.common import DecimalString
 
@@ -25,7 +26,7 @@ MAX_QUANTITY_PRECISION = 12
 
 
 def _ensure_positive_lot_size(value: Decimal) -> Decimal:
-    if value <= 0:
+    if value < DB_QUANTUM:
         raise PydanticCustomError(
             "holding_lot_size_invalid",
             "Lot size must be positive.",
@@ -123,7 +124,7 @@ class HoldingReplacementRequest(BaseModel):
     cost_fx_to_cny: DecimalString
     baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
-    quantity_precision: int
+    quantity_precision: StrictInt
     preferred_data_source: Literal[
         "yahoo", "sina", "akshare", "tushare", "alpha_vantage"
     ] | None = None
@@ -216,7 +217,7 @@ class HoldingCreate(BaseModel):
     cost_fx_to_cny: DecimalString
     baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
-    quantity_precision: int
+    quantity_precision: StrictInt
     preferred_data_source: Literal["yahoo", "sina", "akshare", "tushare", "alpha_vantage"] | None = None
     is_rebalance_preferred: bool = False
 
@@ -279,7 +280,7 @@ class HoldingUpdate(BaseModel):
     cost_fx_to_cny: DecimalString | None = None
     baseline_fx_to_cny: DecimalString | None = None
     lot_size: DecimalString | None = None
-    quantity_precision: int | None = None
+    quantity_precision: StrictInt | None = None
     preferred_data_source: Literal["yahoo", "sina", "akshare", "tushare", "alpha_vantage"] | None = None
     is_rebalance_preferred: bool | None = None
 

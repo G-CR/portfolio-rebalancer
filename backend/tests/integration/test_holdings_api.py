@@ -164,6 +164,11 @@ async def test_replace_rejects_zero_target_quantity_without_changing_source(
         ({"lot_size": "0"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         ({"lot_size": "-1"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         (
+            {"lot_size": "0.0000000000001"},
+            "HOLDING_LOT_SIZE_INVALID",
+            "lot_size",
+        ),
+        (
             {"quantity_precision": 13},
             "HOLDING_QUANTITY_PRECISION_INVALID",
             "quantity_precision",
@@ -788,6 +793,11 @@ async def test_patch_holding_rejects_negative_numeric_fields_with_structured_err
         ({"lot_size": "0"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         ({"lot_size": "-1"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         (
+            {"lot_size": "0.0000000000001"},
+            "HOLDING_LOT_SIZE_INVALID",
+            "lot_size",
+        ),
+        (
             {"quantity_precision": 13},
             "HOLDING_QUANTITY_PRECISION_INVALID",
             "quantity_precision",
@@ -824,6 +834,11 @@ async def test_create_holding_rejects_unsafe_trade_unit_fields(
         ({"lot_size": "0"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         ({"lot_size": "-1"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         (
+            {"lot_size": "0.0000000000001"},
+            "HOLDING_LOT_SIZE_INVALID",
+            "lot_size",
+        ),
+        (
             {"quantity_precision": 13},
             "HOLDING_QUANTITY_PRECISION_INVALID",
             "quantity_precision",
@@ -850,6 +865,54 @@ async def test_patch_holding_rejects_unsafe_trade_unit_fields_without_mutation(
     assert response.json()["detail"]["code"] == code
     assert response.json()["detail"]["field"] == field
     assert (await api_client.get("/api/holdings")).json() == [created]
+
+
+async def test_create_holding_requires_integer_quantity_precision(
+    api_client, asset_class_id
+) -> None:
+    response = await api_client.post(
+        "/api/holdings",
+        json=_holding_payload(asset_class_id, quantity_precision=True),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "quantity_precision"
+    assert (await api_client.get("/api/holdings")).json() == []
+
+
+async def test_patch_holding_requires_integer_quantity_precision_without_mutation(
+    api_client, asset_class_id
+) -> None:
+    created = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.patch(
+        f"/api/holdings/{created['id']}",
+        json={"quantity_precision": True},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "quantity_precision"
+    assert (await api_client.get("/api/holdings")).json() == [created]
+
+
+async def test_replace_holding_requires_integer_quantity_precision_without_mutation(
+    api_client, asset_class_id
+) -> None:
+    source = (
+        await api_client.post("/api/holdings", json=_holding_payload(asset_class_id))
+    ).json()
+
+    response = await api_client.post(
+        f"/api/holdings/{source['id']}/replace",
+        json=_replacement_payload(source["version"], quantity_precision=True),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "quantity_precision"
+    await _assert_source_active_without_adjustments(api_client, source["id"])
+    assert (await api_client.get("/api/holdings")).json()[0]["version"] == 1
 
 
 @pytest.mark.parametrize(
