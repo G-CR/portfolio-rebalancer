@@ -515,6 +515,10 @@ describe("HoldingsPage", () => {
     expect(lotSize).toHaveValue("100");
     expect(precision).toHaveValue("0");
 
+    await user.selectOptions(market, "SZ");
+    expect(lotSize).toHaveValue("100");
+    expect(precision).toHaveValue("0");
+
     await user.clear(lotSize);
     await user.type(lotSize, "50");
     await user.clear(precision);
@@ -522,7 +526,7 @@ describe("HoldingsPage", () => {
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
 
     await waitFor(() => expect(body).toMatchObject({
-      market: "SH",
+      market: "SZ",
       lot_size: "50",
       quantity_precision: 1,
     }));
@@ -563,6 +567,16 @@ describe("HoldingsPage", () => {
     await user.type(lotSize, "0.01");
     await user.clear(precision);
     await user.type(precision, "13");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("份额小数位必须是 0 到 12 的整数");
+
+    await user.clear(precision);
+    await user.type(precision, "-1");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("份额小数位必须是 0 到 12 的整数");
+
+    await user.clear(precision);
+    await user.type(precision, "1.5");
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
     expect(screen.getByRole("alert")).toHaveTextContent("份额小数位必须是 0 到 12 的整数");
     expect(requestCount).toBe(0);
