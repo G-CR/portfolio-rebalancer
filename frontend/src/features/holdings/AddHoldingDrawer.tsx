@@ -16,6 +16,19 @@ type Props = {
 };
 
 const decimalPattern = /^\d+(?:\.\d+)?$/;
+const marketTradeUnitDefaults = {
+  US: { lotSize: "0.01", precision: "2" },
+  SH: { lotSize: "100", precision: "0" },
+  SZ: { lotSize: "100", precision: "0" },
+} as const;
+
+function isPositiveDecimal(value: string) {
+  return decimalPattern.test(value) && /[1-9]/.test(value.replace(".", ""));
+}
+
+function isValidQuantityPrecision(value: string) {
+  return /^\d+$/.test(value) && Number.parseInt(value, 10) <= 12;
+}
 
 export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Props) {
   const activeClasses = assetClasses.filter((item) => item.is_active);
@@ -45,14 +58,29 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
     if (!assetClassId && activeClasses[0]) setAssetClassId(activeClasses[0].id);
   }, [activeClasses, assetClassId]);
 
+  function changeMarket(next: string) {
+    setMarket(next);
+    if (next !== "US") {
+      setCostFx("1");
+      setBaselineFx("1");
+    }
+    const defaults = marketTradeUnitDefaults[next as keyof typeof marketTradeUnitDefaults];
+    if (defaults) {
+      setLotSize(defaults.lotSize);
+      setPrecision(defaults.precision);
+    }
+  }
+
   const missingIdentity = submitted && (!symbol.trim() || !name.trim() || !market.trim() || !accountName.trim());
-  const invalidDecimals = submitted && [quantity, averageCost, costFx, baselineFx, lotSize]
+  const invalidDecimals = submitted && [quantity, averageCost, costFx, baselineFx]
     .some((value) => !decimalPattern.test(value));
-  const invalidPrecision = submitted && !/^\d+$/.test(precision);
+  const invalidLotSize = submitted && !isPositiveDecimal(lotSize);
+  const invalidPrecision = submitted && !isValidQuantityPrecision(precision);
   const canSubmit = Boolean(
     assetClassId && symbol.trim() && name.trim() && market.trim() && accountName.trim()
-    && [quantity, averageCost, costFx, baselineFx, lotSize].every((value) => decimalPattern.test(value))
-    && /^\d+$/.test(precision),
+    && [quantity, averageCost, costFx, baselineFx].every((value) => decimalPattern.test(value))
+    && isPositiveDecimal(lotSize)
+    && isValidQuantityPrecision(precision),
   );
 
   async function submit() {
@@ -93,14 +121,16 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
       <div className={styles.drawerContent}>
         {serverError ? <div className={styles.alert} role="alert">{serverError}</div> : null}
         {missingIdentity ? <div className={styles.alert} role="alert">请完整填写标的代码、名称、市场和账户。</div> : null}
-        {invalidDecimals || invalidPrecision ? <div className={styles.alert} role="alert">成本与份额字段必须是非负十进制，份额小数位必须是整数。</div> : null}
+        {invalidDecimals ? <div className={styles.alert} role="alert">成本与份额字段必须是非负十进制。</div> : null}
+        {invalidLotSize ? <div className={styles.alert} role="alert">最小交易单位必须是大于 0 的十进制数。</div> : null}
+        {invalidPrecision ? <div className={styles.alert} role="alert">份额小数位必须是 0 到 12 的整数。</div> : null}
         <section className={styles.drawerSection}>
           <div className={styles.sectionHeading}><span className={styles.step}>01</span><div><h3>标的身份</h3><p>选择资产类别并记录券商账户中的标的信息。</p></div></div>
           <FormField label="所属资产类别" required><select value={assetClassId} onChange={(event) => setAssetClassId(event.target.value)}>{activeClasses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></FormField>
           <div className={styles.fieldGrid}>
             <FormField label="标的代码" required><input type="text" value={symbol} onChange={(event) => setSymbol(event.target.value)} /></FormField>
             <FormField label="标的名称" required><input type="text" value={name} onChange={(event) => setName(event.target.value)} /></FormField>
-            <FormField label="上市市场" required><select value={market} onChange={(event) => { const next = event.target.value; setMarket(next); if (next !== "US") { setCostFx("1"); setBaselineFx("1"); } }}><option value="" disabled>请选择市场</option><option value="US">美股</option><option value="SH">上海 A 股</option><option value="SZ">深圳 A 股</option></select></FormField>
+            <FormField label="上市市场" required><select value={market} onChange={(event) => changeMarket(event.target.value)}><option value="" disabled>请选择市场</option><option value="US">美股</option><option value="SH">上海 A 股</option><option value="SZ">深圳 A 股</option></select></FormField>
             <FormField label="账户名称" required><input type="text" value={accountName} onChange={(event) => setAccountName(event.target.value)} /></FormField>
             <FormField label="交易币种" required><input type="text" value={currency} readOnly /></FormField>
           </div>

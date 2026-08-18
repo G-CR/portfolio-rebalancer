@@ -446,7 +446,8 @@ describe("HoldingsPage", () => {
       average_cost_price: "0",
       cost_fx_to_cny: "1",
       baseline_fx_to_cny: "1",
-      lot_size: "1",
+      lot_size: "0.01",
+      quantity_precision: 2,
       preferred_data_source: "yahoo",
     });
     expect(await screen.findByText("SPY")).toBeInTheDocument();
@@ -479,7 +480,92 @@ describe("HoldingsPage", () => {
       trade_currency: "CNY",
       cost_fx_to_cny: "1",
       baseline_fx_to_cny: "1",
+      lot_size: "100",
+      quantity_precision: 0,
     }));
+  });
+
+  it("applies editable trade-unit defaults whenever the market changes", async () => {
+    const user = userEvent.setup();
+    let body: Record<string, unknown> | undefined;
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+      http.post("/api/holdings", async ({ request }) => {
+        body = await request.json() as Record<string, unknown>;
+        return HttpResponse.json(holdingFixture, { status: 201 });
+      }),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    await user.type(screen.getByRole("textbox", { name: "标的代码" }), "563020");
+    await user.type(screen.getByRole("textbox", { name: "标的名称" }), "A 股 ETF");
+    await user.type(screen.getByRole("textbox", { name: "账户名称" }), "证券账户");
+    await user.click(screen.getByText("高级设置"));
+
+    const market = screen.getByRole("combobox", { name: "上市市场" });
+    const lotSize = screen.getByRole("textbox", { name: "最小交易单位" });
+    const precision = screen.getByRole("textbox", { name: "份额小数位" });
+
+    await user.selectOptions(market, "US");
+    expect(lotSize).toHaveValue("0.01");
+    expect(precision).toHaveValue("2");
+
+    await user.selectOptions(market, "SH");
+    expect(lotSize).toHaveValue("100");
+    expect(precision).toHaveValue("0");
+
+    await user.clear(lotSize);
+    await user.type(lotSize, "50");
+    await user.clear(precision);
+    await user.type(precision, "1");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+
+    await waitFor(() => expect(body).toMatchObject({
+      market: "SH",
+      lot_size: "50",
+      quantity_precision: 1,
+    }));
+  });
+
+  it("blocks unsafe lot size and quantity precision before submit", async () => {
+    const user = userEvent.setup();
+    let requestCount = 0;
+    renderWithProviders(<HoldingsPage />, { handlers: [
+      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
+      http.get("/api/holdings", () => HttpResponse.json([])),
+      http.post("/api/holdings", () => {
+        requestCount += 1;
+        return HttpResponse.json(holdingFixture, { status: 201 });
+      }),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
+    await user.type(screen.getByRole("textbox", { name: "标的代码" }), "SPY");
+    await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPY ETF");
+    await user.type(screen.getByRole("textbox", { name: "账户名称" }), "美股账户");
+    await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "US");
+    await user.click(screen.getByText("高级设置"));
+
+    const lotSize = screen.getByRole("textbox", { name: "最小交易单位" });
+    const precision = screen.getByRole("textbox", { name: "份额小数位" });
+    await user.clear(lotSize);
+    await user.type(lotSize, "0");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("最小交易单位必须是大于 0 的十进制数");
+
+    await user.clear(lotSize);
+    await user.type(lotSize, "-1");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("最小交易单位必须是大于 0 的十进制数");
+
+    await user.clear(lotSize);
+    await user.type(lotSize, "0.01");
+    await user.clear(precision);
+    await user.type(precision, "13");
+    await user.click(screen.getByRole("button", { name: "创建持仓" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("份额小数位必须是 0 到 12 的整数");
+    expect(requestCount).toBe(0);
   });
 
   it("requires market selection before creating a holding", async () => {
