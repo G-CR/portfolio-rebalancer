@@ -815,6 +815,12 @@ async def test_create_holding_rejects_unsafe_trade_unit_fields(
 @pytest.mark.parametrize(
     ("payload", "code", "field"),
     [
+        ({"lot_size": None}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
+        (
+            {"quantity_precision": None},
+            "HOLDING_QUANTITY_PRECISION_INVALID",
+            "quantity_precision",
+        ),
         ({"lot_size": "0"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         ({"lot_size": "-1"}, "HOLDING_LOT_SIZE_INVALID", "lot_size"),
         (

@@ -329,12 +329,20 @@ class HoldingUpdate(BaseModel):
     @classmethod
     def validate_lot_size(cls, value: Decimal | None) -> Decimal | None:
         if value is None:
-            return None
+            raise PydanticCustomError(
+                "holding_lot_size_invalid",
+                "Lot size must be positive.",
+                {"field": "lot_size"},
+            )
         return _ensure_positive_lot_size(value)
 
     @field_validator("quantity_precision")
     @classmethod
     def validate_quantity_precision(cls, value: int | None) -> int | None:
         if value is None:
-            return None
+            raise PydanticCustomError(
+                "holding_quantity_precision_invalid",
+                "Quantity precision must be between 0 and 12.",
+                {"field": "quantity_precision"},
+            )
         return _ensure_quantity_precision(value)
