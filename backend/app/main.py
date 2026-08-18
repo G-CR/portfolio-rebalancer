@@ -40,6 +40,14 @@ async def request_validation_exception_handler(_, exc: RequestValidationError) -
             "HOLDING_TRADE_CURRENCY_INVALID",
             "Trade currency must be exactly three ASCII letters.",
         ),
+        "holding_lot_size_invalid": (
+            "HOLDING_LOT_SIZE_INVALID",
+            "Lot size must be positive.",
+        ),
+        "holding_quantity_precision_invalid": (
+            "HOLDING_QUANTITY_PRECISION_INVALID",
+            "Quantity precision must be between 0 and 12.",
+        ),
     }
     if first_error["type"] in holding_validation_errors:
         code, message = holding_validation_errors[first_error["type"]]

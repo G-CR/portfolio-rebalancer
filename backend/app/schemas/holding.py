@@ -21,6 +21,35 @@ def _ensure_non_negative(value: Decimal, field_name: str) -> Decimal:
     return value
 
 
+MAX_QUANTITY_PRECISION = 12
+
+
+def _ensure_positive_lot_size(value: Decimal) -> Decimal:
+    if value <= 0:
+        raise PydanticCustomError(
+            "holding_lot_size_invalid",
+            "Lot size must be positive.",
+            {"field": "lot_size"},
+        )
+    return value
+
+
+def _ensure_quantity_precision(value: int) -> int:
+    if value < 0:
+        raise PydanticCustomError(
+            "negative_numeric_field",
+            "{field} must be non-negative.",
+            {"field": "quantity_precision"},
+        )
+    if value > MAX_QUANTITY_PRECISION:
+        raise PydanticCustomError(
+            "holding_quantity_precision_invalid",
+            "Quantity precision must be between 0 and 12.",
+            {"field": "quantity_precision"},
+        )
+    return value
+
+
 def _trim_decimal(value: Decimal) -> str:
     normalized = format(value.normalize(), "f")
     if normalized == "-0":
@@ -94,7 +123,7 @@ class HoldingReplacementRequest(BaseModel):
     cost_fx_to_cny: DecimalString
     baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
-    quantity_precision: int = Field(le=12)
+    quantity_precision: int
     preferred_data_source: Literal[
         "yahoo", "sina", "akshare", "tushare", "alpha_vantage"
     ] | None = None
@@ -139,13 +168,22 @@ class HoldingReplacementRequest(BaseModel):
         "average_cost_price",
         "cost_fx_to_cny",
         "baseline_fx_to_cny",
-        "lot_size",
     )
     @classmethod
     def non_negative_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_non_negative(value, info.field_name)
 
-    @field_validator("source_version", "quantity_precision")
+    @field_validator("lot_size")
+    @classmethod
+    def validate_lot_size(cls, value: Decimal) -> Decimal:
+        return _ensure_positive_lot_size(value)
+
+    @field_validator("quantity_precision")
+    @classmethod
+    def validate_quantity_precision(cls, value: int) -> int:
+        return _ensure_quantity_precision(value)
+
+    @field_validator("source_version")
     @classmethod
     def non_negative_integer(cls, value: int, info) -> int:
         if value < 0:
@@ -211,22 +249,20 @@ class HoldingCreate(BaseModel):
         "average_cost_price",
         "cost_fx_to_cny",
         "baseline_fx_to_cny",
-        "lot_size",
     )
     @classmethod
     def validate_non_negative_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_non_negative(value, info.field_name)
 
+    @field_validator("lot_size")
+    @classmethod
+    def validate_lot_size(cls, value: Decimal) -> Decimal:
+        return _ensure_positive_lot_size(value)
+
     @field_validator("quantity_precision")
     @classmethod
     def validate_quantity_precision(cls, value: int) -> int:
-        if value < 0:
-            raise PydanticCustomError(
-                "negative_numeric_field",
-                "{field} must be non-negative.",
-                {"field": "quantity_precision"},
-            )
-        return value
+        return _ensure_quantity_precision(value)
 
 
 class HoldingUpdate(BaseModel):
@@ -280,7 +316,6 @@ class HoldingUpdate(BaseModel):
         "average_cost_price",
         "cost_fx_to_cny",
         "baseline_fx_to_cny",
-        "lot_size",
     )
     @classmethod
     def validate_non_negative_decimal(
@@ -290,15 +325,16 @@ class HoldingUpdate(BaseModel):
             return None
         return _ensure_non_negative(value, info.field_name)
 
+    @field_validator("lot_size")
+    @classmethod
+    def validate_lot_size(cls, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        return _ensure_positive_lot_size(value)
+
     @field_validator("quantity_precision")
     @classmethod
     def validate_quantity_precision(cls, value: int | None) -> int | None:
         if value is None:
             return None
-        if value < 0:
-            raise PydanticCustomError(
-                "negative_numeric_field",
-                "{field} must be non-negative.",
-                {"field": "quantity_precision"},
-            )
-        return value
+        return _ensure_quantity_precision(value)
