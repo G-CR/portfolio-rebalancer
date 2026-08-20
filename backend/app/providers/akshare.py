@@ -10,10 +10,25 @@ from app.providers.base import MarketQuote, ProviderPayloadError, ProviderReques
 class AkshareProvider:
     source = "akshare"
 
+    def __init__(self) -> None:
+        self._price_rows_task: asyncio.Task[list[dict[str, Any]]] | None = None
+        self._price_snapshot_fetched_at: datetime | None = None
+
     async def fetch_price(self, symbol: str) -> MarketQuote:
-        fetched_at = datetime.now(UTC)
-        payload = await asyncio.to_thread(self._blocking_fetch_price_rows, symbol)
-        return self.normalize_price(symbol, payload, fetched_at=fetched_at)
+        if self._price_rows_task is None:
+            self._price_snapshot_fetched_at = datetime.now(UTC)
+            self._price_rows_task = asyncio.create_task(
+                asyncio.to_thread(self._blocking_fetch_price_rows)
+            )
+
+        payload = await self._price_rows_task
+        if self._price_snapshot_fetched_at is None:  # pragma: no cover - invariant
+            raise RuntimeError("AKShare snapshot timestamp was not initialized.")
+        return self.normalize_price(
+            symbol,
+            payload,
+            fetched_at=self._price_snapshot_fetched_at,
+        )
 
     async def fetch_fx(self, base: str, quote: str) -> MarketQuote:
         raise ProviderRequestError("AKShare FX refresh is not configured for this service.")
@@ -58,7 +73,7 @@ class AkshareProvider:
             fetched_at=fetched_at or datetime.now(UTC),
         )
 
-    def _blocking_fetch_price_rows(self, symbol: str) -> list[dict[str, Any]]:
+    def _blocking_fetch_price_rows(self) -> list[dict[str, Any]]:
         try:
             import akshare as ak  # pragma: no cover - import exercised only in real refreshes
         except ImportError as exc:  # pragma: no cover - environment dependent

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -215,6 +216,80 @@ def test_akshare_runtime_dependency_is_installed() -> None:
     import akshare
 
     assert callable(akshare.fund_etf_spot_em)
+
+
+@pytest.mark.asyncio
+async def test_akshare_reuses_one_snapshot_for_sequential_symbols_and_new_instance_refreshes(
+    monkeypatch,
+) -> None:
+    rows = [
+        {"代码": "159209", "最新价": "1.142", "时间": "2026-08-20 15:00:00"},
+        {"代码": "518850", "最新价": "9.324", "时间": "2026-08-20 15:00:00"},
+    ]
+    calls = 0
+
+    def load_rows(self) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        return rows
+
+    monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", load_rows)
+
+    provider = AkshareProvider()
+    first = await provider.fetch_price("159209")
+    second = await provider.fetch_price("518850")
+
+    assert calls == 1
+    assert first.value == Decimal("1.142")
+    assert second.value == Decimal("9.324")
+    assert first.fetched_at == second.fetched_at
+
+    await AkshareProvider().fetch_price("159209")
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_akshare_same_instance_concurrent_symbols_share_snapshot(monkeypatch) -> None:
+    calls = 0
+
+    def load_rows(self) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        return [
+            {"代码": "159209", "最新价": "1.142", "时间": "2026-08-20 15:00:00"},
+            {"代码": "518850", "最新价": "9.324", "时间": "2026-08-20 15:00:00"},
+        ]
+
+    monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", load_rows)
+    provider = AkshareProvider()
+    quotes = await asyncio.gather(
+        provider.fetch_price("159209"),
+        provider.fetch_price("518850"),
+    )
+
+    assert calls == 1
+    assert [quote.symbol for quote in quotes] == ["159209", "518850"]
+
+
+@pytest.mark.asyncio
+async def test_akshare_same_instance_reuses_snapshot_failure(monkeypatch) -> None:
+    calls = 0
+
+    def fail_rows(self) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        raise ProviderRequestError("AKShare request failed.")
+
+    monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", fail_rows)
+    provider = AkshareProvider()
+    results = await asyncio.gather(
+        provider.fetch_price("159209"),
+        provider.fetch_price("518850"),
+        return_exceptions=True,
+    )
+
+    assert calls == 1
+    assert all(isinstance(result, ProviderRequestError) for result in results)
 
 
 @pytest.mark.asyncio
