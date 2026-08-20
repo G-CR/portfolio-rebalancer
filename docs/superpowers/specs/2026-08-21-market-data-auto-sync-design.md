@@ -31,7 +31,7 @@ When the signature changes after the initial load, the synchronization layer:
 3. Invalidates holdings and snapshot query roots.
 4. Invalidates portfolio analytics only when every required item has an effective value, preserving the existing protection against incomplete-data refresh loops.
 
-Manual refresh writes its returned collection into the same market-data cache. The shared synchronization layer observes that one cache transition and performs dependent-query invalidation once; the mutation does not separately duplicate the same invalidations.
+Manual refresh writes its returned collection into the same market-data cache and explicitly asks the shared synchronization layer to propagate the result once. Unlike automatic polling, an explicit manual refresh propagates even when the returned revision is unchanged; this preserves the existing behavior that clears a rebalance preview after the user requests fresh data. The synchronization layer records the applied revision so the cache observer does not repeat the same invalidations.
 
 The first successful market-data load establishes the baseline signature and does not invalidate downstream queries. This avoids redundant requests during initial application startup.
 
@@ -51,7 +51,7 @@ When fresh data is detected, mounted screens rerender from updated queries witho
 
 - `useMarketData` owns the query timing policy: 30-second interval, focus refetch, and reconnect refetch.
 - A small market-data synchronization helper/hook owns revision calculation, first-load baselining, and downstream cache invalidation.
-- `useRefreshMarketData` remains responsible for the POST request and placing the returned collection in the market-data cache; dependent invalidation moves to the shared synchronization path.
+- `useRefreshMarketData` remains responsible for the POST request, placing the returned collection in the market-data cache, and requesting one forced propagation through the shared synchronization path.
 - Global React Query defaults remain unchanged so unrelated application queries do not begin polling or refetching on focus.
 
 The synchronization helper depends only on a `MarketDataCollection` and React Query's `QueryClient`, making its change-detection behavior independently testable.
@@ -67,7 +67,7 @@ Automated tests must prove:
 - A changed response advances the refresh version and invalidates holdings and snapshots.
 - A complete changed response invalidates portfolio analytics.
 - An incomplete changed response does not invalidate portfolio analytics.
-- Manual refresh produces one cache transition and one dependent synchronization, not duplicate invalidations.
+- Manual refresh produces one dependent synchronization even when the returned revision is unchanged, without duplicate invalidations.
 - Background failure retains cached data and does not activate the manual-refresh alert.
 - A market-data revision change clears an existing rebalance preview through the current refresh-version contract.
 
