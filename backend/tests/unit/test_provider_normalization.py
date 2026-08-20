@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
+import inspect
 from threading import Event
 from zoneinfo import ZoneInfo
 
@@ -291,7 +292,11 @@ async def test_akshare_caller_cancellation_does_not_cancel_shared_snapshot(monke
     monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", load_rows)
     provider = AkshareProvider()
     cancelled_caller = asyncio.create_task(provider.fetch_price("159209"))
-    await asyncio.wait_for(asyncio.to_thread(started.wait), timeout=1)
+    started_observed = await asyncio.wait_for(
+        asyncio.to_thread(started.wait, 1),
+        timeout=2,
+    )
+    assert started_observed
 
     with pytest.raises(RuntimeError, match="controlled cancellation test path"):
         try:
@@ -307,6 +312,13 @@ async def test_akshare_caller_cancellation_does_not_cancel_shared_snapshot(monke
 
     assert calls == 1
     assert quote.symbol == "518850"
+
+
+def test_akshare_cancellation_fixture_bounds_worker_start_wait() -> None:
+    source = inspect.getsource(test_akshare_caller_cancellation_does_not_cancel_shared_snapshot)
+
+    assert "asyncio.to_thread(started.wait, 1)" in source
+    assert "timeout=2" in source
 
 
 @pytest.mark.asyncio
