@@ -282,7 +282,7 @@ async def test_akshare_caller_cancellation_does_not_cancel_shared_snapshot(monke
         nonlocal calls
         calls += 1
         started.set()
-        release.wait()
+        release.wait(timeout=1)
         return [
             {"代码": "159209", "最新价": "1.142", "时间": "2026-08-20 15:00:00"},
             {"代码": "518850", "最新价": "9.324", "时间": "2026-08-20 15:00:00"},
@@ -291,13 +291,18 @@ async def test_akshare_caller_cancellation_does_not_cancel_shared_snapshot(monke
     monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", load_rows)
     provider = AkshareProvider()
     cancelled_caller = asyncio.create_task(provider.fetch_price("159209"))
-    await asyncio.to_thread(started.wait)
+    await asyncio.wait_for(asyncio.to_thread(started.wait), timeout=1)
 
-    cancelled_caller.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled_caller
+    with pytest.raises(RuntimeError, match="controlled cancellation test path"):
+        try:
+            cancelled_caller.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_caller
+            raise RuntimeError("controlled cancellation test path")
+        finally:
+            release.set()
 
-    release.set()
+    assert release.is_set()
     quote = await provider.fetch_price("518850")
 
     assert calls == 1
