@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
+from threading import Event
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -272,6 +273,38 @@ async def test_akshare_same_instance_concurrent_symbols_share_snapshot(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_akshare_caller_cancellation_does_not_cancel_shared_snapshot(monkeypatch) -> None:
+    calls = 0
+    started = Event()
+    release = Event()
+
+    def load_rows(self) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        started.set()
+        release.wait()
+        return [
+            {"代码": "159209", "最新价": "1.142", "时间": "2026-08-20 15:00:00"},
+            {"代码": "518850", "最新价": "9.324", "时间": "2026-08-20 15:00:00"},
+        ]
+
+    monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", load_rows)
+    provider = AkshareProvider()
+    cancelled_caller = asyncio.create_task(provider.fetch_price("159209"))
+    await asyncio.to_thread(started.wait)
+
+    cancelled_caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_caller
+
+    release.set()
+    quote = await provider.fetch_price("518850")
+
+    assert calls == 1
+    assert quote.symbol == "518850"
+
+
+@pytest.mark.asyncio
 async def test_akshare_same_instance_reuses_snapshot_failure(monkeypatch) -> None:
     calls = 0
 
@@ -290,6 +323,10 @@ async def test_akshare_same_instance_reuses_snapshot_failure(monkeypatch) -> Non
 
     assert calls == 1
     assert all(isinstance(result, ProviderRequestError) for result in results)
+
+    with pytest.raises(ProviderRequestError, match="AKShare request failed"):
+        await provider.fetch_price("159209")
+    assert calls == 1
 
 
 @pytest.mark.asyncio

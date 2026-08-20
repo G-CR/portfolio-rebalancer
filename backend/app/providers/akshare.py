@@ -21,7 +21,7 @@ class AkshareProvider:
                 asyncio.to_thread(self._blocking_fetch_price_rows)
             )
 
-        payload = await self._price_rows_task
+        payload = await asyncio.shield(self._price_rows_task)
         if self._price_snapshot_fetched_at is None:  # pragma: no cover - invariant
             raise RuntimeError("AKShare snapshot timestamp was not initialized.")
         return self.normalize_price(
