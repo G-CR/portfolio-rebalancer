@@ -73,31 +73,6 @@ Add:
 
 ```python
 @pytest.mark.asyncio
-async def test_akshare_separate_instances_do_not_share_snapshot(monkeypatch) -> None:
-    calls = 0
-
-    def load_rows(self) -> list[dict[str, object]]:
-        nonlocal calls
-        calls += 1
-        return [
-            {"代码": "159209", "最新价": "1.142", "时间": "2026-08-20 15:00:00"},
-            {"代码": "518850", "最新价": "9.324", "时间": "2026-08-20 15:00:00"},
-        ]
-
-    monkeypatch.setattr(AkshareProvider, "_blocking_fetch_price_rows", load_rows)
-    quotes = await asyncio.gather(
-        AkshareProvider().fetch_price("159209"),
-        AkshareProvider().fetch_price("518850"),
-    )
-
-    assert calls == 2
-    assert [quote.symbol for quote in quotes] == ["159209", "518850"]
-```
-
-The test above deliberately proves separate provider instances do not share a global cache. Add the actual same-instance concurrency contract separately:
-
-```python
-@pytest.mark.asyncio
 async def test_akshare_same_instance_concurrent_symbols_share_snapshot(monkeypatch) -> None:
     calls = 0
 
