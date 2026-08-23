@@ -102,11 +102,11 @@ class BackupStorage:
             os.replace(partial_path, destination)
             destination.chmod(PRIVATE_FILE_MODE)
             self._fsync_directory(self.safety_dir)
-            self._retain_newest_safety_backups()
-            return metadata.model_copy(update={"size_bytes": destination.stat().st_size})
         except BaseException:
             partial_path.unlink(missing_ok=True)
             raise
+        self._retain_newest_safety_backups()
+        return metadata
 
     def list_safety_backups(self) -> list[SafetyBackupResponse]:
         backups: list[SafetyBackupResponse] = []
@@ -156,9 +156,15 @@ class BackupStorage:
             )
 
     def _retain_newest_safety_backups(self) -> None:
-        backups = self.list_safety_backups()
+        try:
+            backups = self.list_safety_backups()
+        except Exception:
+            return
         for expired in backups[self.safety_retention :]:
-            self.delete_safety_backup(expired.id)
+            try:
+                self.delete_safety_backup(expired.id)
+            except Exception:
+                continue
 
     def _atomic_write(self, destination: Path, payload: bytes) -> None:
         temporary_path: Path | None = None

@@ -41,6 +41,27 @@ def _mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
+def _completed_export(
+    storage: BackupStorage,
+    *,
+    expires_at: datetime,
+    create_file: bool = True,
+) -> BackupOperation:
+    operation = BackupOperation.new("export", now=expires_at - storage.export_ttl).model_copy(
+        update={
+            "status": "succeeded",
+            "stage": BackupStage.COMPLETED,
+            "download_ready": True,
+            "updated_at": expires_at - storage.export_ttl,
+            "expires_at": expires_at,
+        }
+    )
+    storage.write_operation(operation)
+    if create_file:
+        storage.export_path(operation.id).write_bytes(b"sensitive")
+    return operation
+
+
 def test_storage_initializes_private_directories_and_atomically_writes_private_journal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -99,6 +120,39 @@ async def test_manager_rejects_a_second_active_operation_without_queueing(tmp_pa
     release.set()
     await manager.wait(first.id)
     assert manager.get(first.id).status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_starts_accept_exactly_one_operation(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    manager = BackupOperationManager(storage)
+    start_gate = asyncio.Event()
+    runner_release = asyncio.Event()
+
+    async def runner(_):
+        await runner_release.wait()
+
+    async def contender(kind):
+        await start_gate.wait()
+        try:
+            return await manager.start(kind, runner)
+        except BackupOperationConflict as exc:
+            return exc
+
+    contenders = [
+        asyncio.create_task(contender("export")),
+        asyncio.create_task(contender("restore")),
+    ]
+    start_gate.set()
+    results = await asyncio.gather(*contenders)
+
+    accepted = [result for result in results if isinstance(result, BackupOperation)]
+    conflicts = [result for result in results if isinstance(result, BackupOperationConflict)]
+    assert len(accepted) == 1
+    assert len(conflicts) == 1
+    runner_release.set()
+    await manager.wait(accepted[0].id)
 
 
 @pytest.mark.asyncio
@@ -171,6 +225,96 @@ def test_cleanup_expires_completed_manual_export_after_thirty_minutes(tmp_path: 
     assert BackupOperationManager(storage).get(operation.id).download_ready is False
 
 
+@pytest.mark.parametrize("offset", [timedelta(0), timedelta(microseconds=1)])
+def test_get_reconciles_export_at_or_after_exact_expiry(
+    tmp_path: Path, offset: timedelta
+) -> None:
+    storage = BackupStorage(tmp_path, export_ttl=timedelta(minutes=30))
+    storage.initialize()
+    deadline = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    operation = _completed_export(storage, expires_at=deadline)
+    manager = BackupOperationManager(storage, clock=lambda: deadline + offset)
+
+    reconciled = manager.get(operation.id)
+
+    assert reconciled.status == "succeeded"
+    assert reconciled.download_ready is False
+    assert not storage.export_path(operation.id).exists()
+
+
+def test_recovery_reconciles_missing_succeeded_export(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    operation = _completed_export(
+        storage,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        create_file=False,
+    )
+    manager = BackupOperationManager(storage)
+
+    manager.recover()
+
+    recovered = manager.get(operation.id)
+    assert recovered.status == "succeeded"
+    assert recovered.download_ready is False
+
+
+@pytest.mark.asyncio
+async def test_cleanup_wakes_at_nearest_export_deadline(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path, export_ttl=timedelta(milliseconds=50))
+    storage.initialize()
+    manager = BackupOperationManager(storage, cleanup_interval_seconds=60)
+    manager.start_cleanup()
+
+    async def export_runner(context):
+        storage.export_path(context.operation_id).write_bytes(b"archive")
+
+    operation = await manager.start("export", export_runner)
+    await manager.wait(operation.id)
+
+    async with asyncio.timeout(1):
+        while storage.export_path(operation.id).exists():
+            await asyncio.sleep(0.01)
+
+    assert manager.get(operation.id).download_ready is False
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_loop_contains_filesystem_failure_and_cleans_later_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    operation = _completed_export(
+        storage,
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    manager = BackupOperationManager(storage, cleanup_interval_seconds=0.01)
+    real_cleanup = manager.cleanup_expired
+    cleaned = asyncio.Event()
+    calls = 0
+
+    def flaky_cleanup(*, now=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("synthetic cleanup failure /private/path")
+        real_cleanup(now=now)
+        cleaned.set()
+
+    monkeypatch.setattr(manager, "cleanup_expired", flaky_cleanup)
+    manager.start_cleanup()
+
+    async with asyncio.timeout(1):
+        await cleaned.wait()
+
+    assert calls >= 2
+    assert not storage.export_path(operation.id).exists()
+    assert manager.get(operation.id).download_ready is False
+    await manager.stop()
+
+
 def test_safety_retention_deletes_oldest_only_after_sixth_is_valid_and_durable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -235,3 +379,118 @@ def test_failed_sixth_safety_validation_preserves_existing_five(tmp_path: Path) 
         storage.publish_safety_backup(invalid_id, invalid)
 
     assert {item.id for item in storage.list_safety_backups()} == set(existing_ids)
+
+
+def test_safety_publication_succeeds_when_best_effort_retention_has_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=10)
+    storage.initialize()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    existing_ids = []
+    for index in range(5):
+        backup_id = uuid4()
+        existing_ids.append(backup_id)
+        partial = storage.safety_partial_path(backup_id)
+        _write_archive(partial, base + timedelta(minutes=index))
+        storage.publish_safety_backup(backup_id, partial)
+
+    storage.safety_retention = 2
+    real_unlink = Path.unlink
+    attempted: list[Path] = []
+    failed_once = False
+
+    def flaky_unlink(path: Path, *args, **kwargs):
+        nonlocal failed_once
+        if path.parent == storage.safety_dir and path.suffix == ".portfolio-backup":
+            attempted.append(path)
+            if not failed_once:
+                failed_once = True
+                raise OSError("synthetic unlink failure /private/path")
+        return real_unlink(path, *args, **kwargs)
+
+    real_fsync_directory = storage._fsync_directory
+    fsync_failed = False
+
+    def flaky_fsync_directory(path: Path) -> None:
+        nonlocal fsync_failed
+        if path == storage.safety_dir and failed_once and not fsync_failed:
+            fsync_failed = True
+            raise OSError("synthetic fsync failure /private/path")
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    monkeypatch.setattr(storage, "_fsync_directory", flaky_fsync_directory)
+    newest_id = uuid4()
+    partial = storage.safety_partial_path(newest_id)
+    _write_archive(partial, base + timedelta(minutes=10))
+
+    published = storage.publish_safety_backup(newest_id, partial)
+
+    assert published.id == newest_id
+    assert storage.safety_path(newest_id).exists()
+    assert len(attempted) >= 2
+    assert any(not storage.safety_path(backup_id).exists() for backup_id in existing_ids)
+
+
+@pytest.mark.asyncio
+async def test_stop_interrupts_operation_cancelled_before_runner_starts(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    manager = BackupOperationManager(storage)
+    runner_called = False
+
+    async def runner(_):
+        nonlocal runner_called
+        runner_called = True
+
+    operation = await manager.start("restore", runner)
+    await manager.stop()
+
+    persisted = manager.get(operation.id)
+    assert runner_called is False
+    assert persisted.status == "interrupted"
+    assert persisted.error is not None
+    assert persisted.error.code == "BACKUP_INTERRUPTED"
+    assert manager._active_operation_id is None
+    assert manager._tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_stop_blocks_concurrent_and_future_starts(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    manager = BackupOperationManager(storage)
+
+    async def runner(_):
+        await asyncio.sleep(0)
+
+    await manager._state_lock.acquire()
+    stop_task = asyncio.create_task(manager.stop())
+    await asyncio.sleep(0)
+    start_task = asyncio.create_task(manager.start("restore", runner))
+    manager._state_lock.release()
+
+    await stop_task
+    with pytest.raises(BackupOperationConflict):
+        await start_task
+    with pytest.raises(BackupOperationConflict):
+        await manager.start("export", runner)
+    assert manager._active_operation_id is None
+    assert manager._tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_completed_tasks_are_removed_from_manager_registry(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    manager = BackupOperationManager(storage)
+
+    async def runner(_):
+        return None
+
+    operation = await manager.start("restore", runner)
+    await manager.wait(operation.id)
+    await asyncio.sleep(0)
+
+    assert operation.id not in manager._tasks

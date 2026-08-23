@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -10,6 +10,7 @@ from app.api.routes import backups as backup_routes
 from app.backups.archive import ArchiveMetadata, write_archive
 from app.backups.constants import DATA_MEMBERS
 from app.main import app
+from app.schemas.backup import BackupOperation, BackupStage
 
 
 async def _poll_terminal(api_client, operation_id: str) -> dict[str, object]:
@@ -58,6 +59,60 @@ async def test_export_operation_can_be_polled_and_downloaded_without_caching(api
     )
     assert unavailable.status_code == 409
     assert unavailable.json()["detail"]["code"] == "BACKUP_DOWNLOAD_NOT_READY"
+
+
+@pytest.mark.parametrize("offset", [timedelta(0), timedelta(microseconds=1)])
+async def test_export_download_rejects_exactly_at_and_after_expiry(
+    api_client, monkeypatch, offset: timedelta
+) -> None:
+    storage = app.state.backup_storage
+    manager = app.state.backup_operation_manager
+    deadline = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    operation = BackupOperation.new("export", now=deadline - timedelta(minutes=30)).model_copy(
+        update={
+            "status": "succeeded",
+            "stage": BackupStage.COMPLETED,
+            "download_ready": True,
+            "expires_at": deadline,
+        }
+    )
+    storage.write_operation(operation)
+    storage.export_path(operation.id).write_bytes(b"sensitive archive")
+    monkeypatch.setattr(manager, "_clock", lambda: deadline + offset)
+
+    response = await api_client.get(f"/api/backups/operations/{operation.id}/download")
+    polled = await api_client.get(f"/api/backups/operations/{operation.id}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "BACKUP_DOWNLOAD_NOT_READY"
+    assert polled.status_code == 200
+    assert polled.json()["status"] == "succeeded"
+    assert polled.json()["download_ready"] is False
+    assert not storage.export_path(operation.id).exists()
+
+
+async def test_recovery_reconciles_crash_window_missing_export(api_client) -> None:
+    storage = app.state.backup_storage
+    manager = app.state.backup_operation_manager
+    operation = BackupOperation.new("export").model_copy(
+        update={
+            "status": "succeeded",
+            "stage": BackupStage.COMPLETED,
+            "download_ready": True,
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+        }
+    )
+    storage.write_operation(operation)
+
+    manager.recover()
+
+    polled = await api_client.get(f"/api/backups/operations/{operation.id}")
+    downloaded = await api_client.get(f"/api/backups/operations/{operation.id}/download")
+    assert polled.status_code == 200
+    assert polled.json()["status"] == "succeeded"
+    assert polled.json()["download_ready"] is False
+    assert downloaded.status_code == 409
+    assert downloaded.json()["detail"]["code"] == "BACKUP_DOWNLOAD_NOT_READY"
 
 
 async def test_concurrent_export_returns_sanitized_conflict(api_client, monkeypatch) -> None:
