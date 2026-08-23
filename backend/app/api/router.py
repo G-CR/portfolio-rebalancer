@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.routes.analytics import router as analytics_router
 from app.api.routes.asset_classes import router as asset_classes_router
+from app.api.routes.backups import router as backups_router
 from app.api.routes.cost_adjustments import router as cost_adjustments_router
 from app.api.routes.email import router as email_router
 from app.api.routes.health import router as health_router
@@ -14,6 +15,7 @@ from app.api.routes.snapshots import router as snapshots_router
 api_router = APIRouter(prefix="/api")
 api_router.include_router(analytics_router)
 api_router.include_router(asset_classes_router)
+api_router.include_router(backups_router)
 api_router.include_router(cost_adjustments_router)
 api_router.include_router(email_router)
 api_router.include_router(health_router)

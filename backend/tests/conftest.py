@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+import shutil
+import tempfile
 from collections.abc import AsyncIterator
 
 from httpx import ASGITransport, AsyncClient
@@ -7,8 +10,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.main import app
-from app.db.session import engine as app_engine
 from tests.database_safety import require_safe_test_database
 
 BUSINESS_TABLES = (
@@ -29,6 +30,12 @@ DATABASE_URL = require_safe_test_database(
     os.getenv("DATABASE_URL"),
     os.getenv("PYTEST_DATABASE_RESET_TOKEN"),
 )
+TEST_BACKUP_ROOT = Path(tempfile.mkdtemp(prefix="portfolio-test-backups-"))
+os.environ["BACKUP_ROOT"] = str(TEST_BACKUP_ROOT)
+
+from app.main import app  # noqa: E402
+from app.db.session import engine as app_engine  # noqa: E402
+
 engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, poolclass=NullPool)
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -37,6 +44,7 @@ SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 async def _dispose_test_engine() -> AsyncIterator[None]:
     yield
     await engine.dispose()
+    shutil.rmtree(TEST_BACKUP_ROOT, ignore_errors=True)
 
 
 async def _truncate_business_tables(session: AsyncSession) -> None:
@@ -72,6 +80,8 @@ async def db_session(_reset_database: None) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def api_client(_reset_database: None) -> AsyncIterator[AsyncClient]:
+    shutil.rmtree(TEST_BACKUP_ROOT, ignore_errors=True)
+    TEST_BACKUP_ROOT.mkdir(mode=0o700)
     await app_engine.dispose()
     async with app.router.lifespan_context(app):
         async with AsyncClient(

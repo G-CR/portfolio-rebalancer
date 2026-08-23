@@ -27,6 +27,7 @@
       retries: 10
     volumes:
       - secret_data:/run/portfolio-secrets
+      - backup_data:/var/lib/portfolio-backups
     expose:
       - "8000"
 
@@ -61,5 +62,6 @@
       - "5432"
 
 volumes:
+  backup_data:
   postgres_data:
   secret_data:

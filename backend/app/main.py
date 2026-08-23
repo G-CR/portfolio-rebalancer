@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -9,19 +10,36 @@ from fastapi.exception_handlers import (
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
+from app.core.config import get_settings
 from app.db.session import engine
 from app.db.session import SessionFactory
 from app.services.asset_classes import seed_default_strategy
+from app.services.backup_operations import BackupOperationManager
+from app.services.backup_storage import BackupStorage
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    storage = BackupStorage(
+        settings.backup_root,
+        export_ttl=timedelta(seconds=settings.backup_export_ttl_seconds),
+        upload_ttl=timedelta(seconds=settings.backup_upload_ttl_seconds),
+        safety_retention=settings.backup_safety_retention,
+    )
+    manager = BackupOperationManager(storage)
     try:
+        storage.initialize()
+        manager.recover()
+        manager.start_cleanup()
+        app.state.backup_storage = storage
+        app.state.backup_operation_manager = manager
         async with SessionFactory() as session:
             async with session.begin():
                 await seed_default_strategy(session)
         yield
     finally:
+        await manager.stop()
         await engine.dispose()
 
 
