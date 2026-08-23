@@ -16,7 +16,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from app.backups.archive import ArchiveMetadata, write_archive
-from app.backups.canonical import canonical_json_bytes
+from app.backups.canonical import canonical_json_bytes, logical_checksum
+from app.backups import migrations
 from app.backups.constants import CURRENT_FORMAT_VERSION, DATA_MEMBERS
 from app.services.backup_storage import BackupStorage
 from app.services.backup_operations import BackupOperationManager
@@ -95,10 +96,37 @@ def _source() -> dict[str, list[dict[str, Any]]]:
             "fx_neutral_weight": "1.000000000000", "price_status": "valid", "fx_status": "valid",
             "created_at": dt,
         })
+    result = {
+        "feasible": True, "max_drift_before": "0", "max_drift_after": "0",
+        "fx_required_cny": "0", "remaining_cny": "0", "remaining_usd": "0",
+        "projected_weights": [{"asset_class_id": str(IDS["asset"]), "before": "1", "after": "1", "target": "1"}],
+        "trades": [],
+    }
+    market_ids = {"price:SYNTH": str(IDS["market"])}
+    version_payload = {
+        "market_data_record_ids": market_ids,
+        "holding_versions": {str(IDS["holding"]): 1},
+        "asset_class_targets": {str(IDS["asset"]): "1"},
+    }
+    data_version = hashlib.sha256(
+        json.dumps(version_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     source["data/rebalance_plans.json"] = [{
         "id": IDS["plan"], "strategy_mode": "actual", "status": "completed",
-        "data_version": "synthetic", "create_idempotency_key": "create",
-        "input_summary": {}, "suggested_actions": {}, "projected_result": {},
+        "data_version": data_version, "create_idempotency_key": "create",
+        "input_summary": {
+            "session_token": "synthetic-session", "request_token": "synthetic-request",
+            "available_cny": "0", "available_usd": "0", "valuation_basis": "actual",
+            "allow_sell": None, "allow_fx": None, "tolerance": None,
+            "minimum_trade_cny": None, "acknowledge_stale_data": False,
+            "holding_versions": version_payload["holding_versions"], "market_data_record_ids": market_ids,
+            "asset_class_targets": version_payload["asset_class_targets"],
+            "resolved_constraints": {"allow_sell": True, "allow_fx": True, "tolerance": "0.01", "minimum_trade_cny": "100"},
+        },
+        "suggested_actions": [],
+        "projected_result": {"valuation_basis": "actual", "result": result,
+                             "fx_comparison": {"valuation_basis": "fx_neutral", "result": result},
+                             "data_status": "valid"},
         "before_snapshot_id": IDS["before"], "after_snapshot_id": IDS["after"],
         "started_at": dt, "cancelled_at": None, "created_at": dt, "updated_at": dt,
         "baseline_reset_at": dt, "start_market_data_record_ids": {"price:SYNTH": str(IDS["market"])},
@@ -108,7 +136,7 @@ def _source() -> dict[str, list[dict[str, Any]]]:
     }]
     source["data/settings.json"] = [{
         "id": IDS["settings"], "refresh_hour": 7, "refresh_minute": 30,
-        "provider_priority": ["yahoo"], "default_tolerance": "0.010000000000",
+        "provider_priority": ["yahoo", "sina", "akshare", "tushare", "alpha_vantage"], "default_tolerance": "0.010000000000",
         "minimum_trade_amount_cny": "100.000000000000", "allow_sell": True,
         "allow_fx": True, "rebalance_available_cny": "0.000000000000",
         "rebalance_available_usd": "0.000000000000", "rebalance_valuation_basis": "actual",
@@ -142,7 +170,7 @@ def _validate(tmp_path: Path, source: dict[str, list[dict[str, Any]]]) -> None:
 
 def test_valid_backup_returns_bounded_descriptor_and_closes_snapshot(tmp_path: Path, monkeypatch) -> None:
     from app.services import backup_validation as module
-    real_inspect = module.inspect_archive
+    real_inspect = module.open_verified_archive
     handles = []
 
     def tracked(path: Path):
@@ -150,7 +178,7 @@ def test_valid_backup_returns_bounded_descriptor_and_closes_snapshot(tmp_path: P
         handles.append(inspected)
         return inspected
 
-    monkeypatch.setattr(module, "inspect_archive", tracked)
+    monkeypatch.setattr(module, "open_verified_archive", tracked)
     validated = validate_backup(
         _archive(tmp_path), path_id="upload:test",
         expires_at=NOW + timedelta(minutes=30), workspace_root=tmp_path,
@@ -163,6 +191,44 @@ def test_valid_backup_returns_bounded_descriptor_and_closes_snapshot(tmp_path: P
     assert handles[0]._snapshot.closed
 
 
+def test_older_rows_are_migrated_before_current_schema_and_checksum(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _archive(tmp_path)
+    with ZipFile(current) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        members = {name: archive.read(name) for name in archive.namelist() if name != "manifest.json"}
+    current_checksum = manifest["logical_checksum"]
+    credentials = json.loads(members["credentials.json"])
+    credentials[0]["secret"] = credentials[0].pop("value")
+    members["credentials.json"] = canonical_json_bytes(credentials)
+    old_document = {member: json.loads(payload) for member, payload in members.items()}
+    old_checksum = logical_checksum(old_document)
+    manifest["format_version"] = 0
+    manifest["logical_checksum"] = old_checksum
+    manifest["members"]["credentials.json"] = {
+        "byte_length": len(members["credentials.json"]),
+        "sha256": hashlib.sha256(members["credentials.json"]).hexdigest(),
+    }
+    old = tmp_path / "synthetic-v0.portfolio-backup"
+    with ZipFile(old, "w", compression=ZIP_DEFLATED) as archive:
+        for member, payload in members.items():
+            archive.writestr(member, payload)
+        archive.writestr("manifest.json", canonical_json_bytes(manifest))
+
+    def v0_to_v1(member: str, row: dict[str, Any]) -> dict[str, Any]:
+        if member == "credentials.json":
+            row = dict(row)
+            row["value"] = row.pop("secret")
+        return row
+
+    monkeypatch.setitem(migrations.MIGRATIONS, 0, v0_to_v1)
+    validated = validate_backup(old, path_id="upload:test", workspace_root=tmp_path)
+    assert validated.source_format_version == 0
+    assert validated.canonical_logical_checksum == current_checksum
+    assert validated.canonical_logical_checksum != old_checksum
+
+
 @pytest.mark.parametrize(
     ("member", "field", "invalid"),
     [
@@ -171,6 +237,7 @@ def test_valid_backup_returns_bounded_descriptor_and_closes_snapshot(tmp_path: P
         ("data/snapshots.json", "snapshot_type", "unknown"),
         ("data/settings.json", "email_smtp_security", "plain"),
         ("credentials.json", "validation_status", "unknown"),
+        ("credentials.json", "validation_status", "untested"),
         ("data/asset_classes.json", "target_weight", "10000000000000000.000000000000"),
         ("data/holdings.json", "quantity", "1.0000000000001"),
     ],
@@ -183,6 +250,64 @@ def test_strict_enum_and_numeric_contracts_are_rejected(
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+@pytest.mark.parametrize(
+    ("member", "field", "invalid"),
+    [
+        ("data/asset_classes.json", "target_weight", "-0.000000000001"),
+        ("data/asset_classes.json", "target_weight", "1.000000000001"),
+        ("data/holdings.json", "quantity_precision", -1),
+        ("data/holdings.json", "quantity_precision", 13),
+        ("data/holdings.json", "lot_size", "0.000000000000"),
+        ("data/holdings.json", "quantity", "-0.000000000001"),
+        ("data/holding_defaults.json", "commission_rate", "-0.000000000001"),
+        ("data/market_data_overrides.json", "value", "0.000000000000"),
+        ("data/market_data.json", "value", "0.000000000000"),
+        ("data/cost_adjustments.json", "after_quantity", "-0.000000000001"),
+        ("data/settings.json", "default_tolerance", "1.000000000001"),
+        ("data/settings.json", "rebalance_available_cny", "-0.000000000001"),
+        ("data/settings.json", "email_recipient", "not-an-email"),
+    ],
+)
+def test_persisted_domain_constraint_families_are_rejected(
+    tmp_path: Path, member: str, field: str, invalid: object,
+) -> None:
+    source = _source()
+    source[member][0][field] = invalid
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+@pytest.mark.parametrize("priority", [["yahoo"], ["yahoo"] * 5])
+def test_provider_priority_requires_all_five_exactly_once(tmp_path: Path, priority: list[str]) -> None:
+    source = _source()
+    source["data/settings.json"][0]["provider_priority"] = priority
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+def test_rebalance_response_shape_requires_every_plan_response_key(tmp_path: Path) -> None:
+    source = _source()
+    del source["data/rebalance_plans.json"][0]["input_summary"]["available_cny"]
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+@pytest.mark.parametrize("map_field", ["input_summary", "start_market_data_record_ids", "completion_market_data_record_ids"])
+def test_every_market_reference_key_must_match_target_semantics(tmp_path: Path, map_field: str) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    if map_field == "input_summary":
+        plan[map_field]["market_data_record_ids"] = {"price:WRONG": str(IDS["market"])}
+    else:
+        plan[map_field] = {"fx:USD/CNY": str(IDS["market"])}
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_RELATIONSHIP_INVALID"
 
 
 def test_iso_trade_and_fee_currencies_are_not_restricted_to_cny_and_usd(
@@ -201,8 +326,17 @@ def test_rebalance_market_input_references_accept_manual_overrides(tmp_path: Pat
     source = _source()
     reference_map = {"price:SYNTH": str(IDS["override"])}
     plan = source["data/rebalance_plans.json"][0]
+    plan["input_summary"]["market_data_record_ids"] = reference_map
     plan["start_market_data_record_ids"] = reference_map
     plan["completion_market_data_record_ids"] = reference_map
+    version_payload = {
+        "market_data_record_ids": reference_map,
+        "holding_versions": plan["input_summary"]["holding_versions"],
+        "asset_class_targets": plan["input_summary"]["asset_class_targets"],
+    }
+    plan["data_version"] = hashlib.sha256(
+        json.dumps(version_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
     _validate(tmp_path, source)
 
@@ -406,11 +540,87 @@ def test_crashed_token_claim_still_carries_upload_expiry(tmp_path: Path) -> None
     [journal] = storage.uploads_dir.glob("*.token.json")
     claim = storage.uploads_dir / journal.name.replace(".token.json", ".token.claimed")
     os.replace(journal, claim)
+    stale = (NOW - timedelta(minutes=6)).timestamp()
+    os.utime(claim, (stale, stale))
 
     manager = BackupOperationManager(storage, clock=lambda: expires_at)
     assert manager.cleanup_expired(now=expires_at) is False
     assert not retained.exists()
     assert not claim.exists()
+
+
+def test_cleanup_does_not_steal_an_active_atomic_token_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import backup_validation as module
+    storage = BackupStorage(tmp_path / "backups")
+    storage.initialize()
+    archive = _archive(tmp_path)
+    retained = storage.uploads_dir / "retained.portfolio-backup"
+    retained.write_bytes(archive.read_bytes())
+    validated = validate_backup(
+        retained, path_id="upload:retained", expires_at=NOW + timedelta(minutes=30),
+        workspace_root=storage.tmp_dir,
+    )
+    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+    token = registry.issue(validated)
+    claimed = threading.Event()
+    release = threading.Event()
+
+    def pause(_path: Path) -> None:
+        claimed.set()
+        assert release.wait(timeout=5)
+
+    monkeypatch.setattr(module, "_after_token_claim", pause)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(registry.consume, token)
+        assert claimed.wait(timeout=5)
+        assert registry.cleanup_expired() is False
+        assert list(storage.uploads_dir.glob("*.token.claimed"))
+        release.set()
+        assert future.result(timeout=5).path_id == "upload:retained"
+
+
+def test_naive_token_expiry_is_sanitized_as_invalid(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path / "backups")
+    storage.initialize()
+    archive = _archive(tmp_path)
+    retained = storage.uploads_dir / "retained.portfolio-backup"
+    retained.write_bytes(archive.read_bytes())
+    validated = validate_backup(
+        retained, path_id="upload:retained", expires_at=NOW + timedelta(minutes=30),
+        workspace_root=storage.tmp_dir,
+    )
+    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+    token = registry.issue(validated)
+    [journal] = storage.uploads_dir.glob("*.token.json")
+    document = json.loads(journal.read_text())
+    document["expires_at"] = "2026-08-24T04:30:00"
+    journal.write_bytes(canonical_json_bytes(document))
+    with pytest.raises(BackupValidationError) as exc_info:
+        registry.consume(token)
+    assert exc_info.value.code == "BACKUP_TOKEN_INVALID"
+
+
+def test_open_index_closes_connection_when_schema_setup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import backup_validation as module
+
+    class FailingConnection:
+        closed = False
+
+        def execute(self, _statement: str) -> None:
+            raise sqlite3.OperationalError("synthetic-private-sql")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FailingConnection()
+    monkeypatch.setattr(module.sqlite3, "connect", lambda _path: connection)
+    with pytest.raises(sqlite3.OperationalError):
+        module._open_index(tmp_path / "semantic.sqlite3")
+    assert connection.closed is True
 
 
 def test_semantic_index_resource_failures_are_typed_and_sanitized(

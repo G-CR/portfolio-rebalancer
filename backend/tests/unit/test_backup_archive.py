@@ -392,7 +392,7 @@ def test_unexpected_validation_failure_closes_snapshot(
     def fail_validation(*_: Any, **__: Any) -> int:
         raise RuntimeError("injected validation failure")
 
-    monkeypatch.setattr(archive_module, "_store_member_rows", fail_validation)
+    monkeypatch.setattr(archive_module, "iter_current_rows", fail_validation)
 
     with pytest.raises(RuntimeError, match="injected validation failure"):
         inspect_archive(valid)
@@ -694,3 +694,29 @@ def test_committed_v1_golden_fixture_opens_through_production_reader() -> None:
     rows = list(iter_current_rows(inspected, "data/asset_classes.json"))
     assert rows[0]["name"] == "黄金夹具"
     assert rows[0]["notes"] is None
+
+
+def test_single_logical_row_is_rejected_incrementally_before_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = empty_source()
+    source["credentials.json"] = [{
+        "id": FIXED_UUID, "provider": "yahoo", "value": "x" * 200,
+        "masked_value": "****", "validation_status": None, "validation_message": None,
+        "last_validated_at": None, "created_at": FIXED_TIME, "updated_at": FIXED_TIME,
+    }]
+    path = write_valid_archive(tmp_path, source)
+    monkeypatch.setattr(archive_module, "MAX_LOGICAL_ROW_BYTES", 64)
+    monkeypatch.setattr(archive_module, "ROW_SCAN_CHUNK_BYTES", 7)
+    validated = False
+    original = archive_module._validate_row
+
+    def track_validation(member: str, row: object):
+        nonlocal validated
+        validated = True
+        return original(member, row)
+
+    monkeypatch.setattr(archive_module, "_validate_row", track_validation)
+    with pytest.raises(ArchiveLimitExceeded):
+        inspect_archive(path)
+    assert validated is False

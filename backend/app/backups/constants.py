@@ -24,3 +24,7 @@ MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_AGGREGATE_COMPRESSION_RATIO = 100
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 STREAM_CHUNK_BYTES = 1024 * 1024
+# A single logical row is bounded independently of the 2 GiB archive limit so
+# JSON parsing can never turn one hostile scalar/container into unbounded RAM.
+MAX_LOGICAL_ROW_BYTES = 16 * 1024 * 1024
+ROW_SCAN_CHUNK_BYTES = 64 * 1024

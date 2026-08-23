@@ -54,6 +54,24 @@ def _validation_error(exc: BackupValidationError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.to_detail())
 
 
+def _internal_preview_error() -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={"code": "BACKUP_PREVIEW_FAILED", "message": "Backup preview could not be prepared."},
+    )
+
+
+def _resource_error() -> HTTPException:
+    return HTTPException(
+        status_code=507,
+        detail={"code": "BACKUP_RESOURCE_LIMIT", "message": "Backup could not be retained within available resources."},
+    )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 async def _current_record_counts() -> dict[str, int]:
     counts: dict[str, int] = {}
     async with SessionFactory() as session:
@@ -96,9 +114,7 @@ def _preview(
 
 
 def _publish_upload(storage: BackupStorage, partial: Path, destination: Path) -> None:
-    storage.secure_file(partial)
     os.replace(partial, destination)
-    destination.chmod(0o600)
     storage._fsync_directory(storage.uploads_dir)
 
 
@@ -108,15 +124,14 @@ async def _validated_preview(
     *,
     path_id: str,
 ) -> BackupPreviewResponse:
-    expires_at = datetime.now(timezone.utc) + storage.upload_ttl
     validated = await asyncio.to_thread(
         validate_backup,
         path,
         path_id=path_id,
-        expires_at=expires_at,
         workspace_root=storage.tmp_dir,
     )
     current_counts = await _current_record_counts()
+    validated = replace(validated, expires_at=_utcnow() + storage.upload_ttl)
     token = await asyncio.to_thread(RestoreTokenRegistry(storage).issue, validated)
     return _preview(validated, current_counts, token)
 
@@ -139,8 +154,8 @@ async def post_upload(request: Request, response: Response) -> BackupPreviewResp
     token_issued = False
     try:
         observed = 0
-        with partial.open("xb") as output:
-            os.chmod(partial, 0o600)
+        descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
             async for chunk in request.stream():
                 observed += len(chunk)
                 if observed > MAX_COMPRESSED_BYTES:
@@ -153,18 +168,17 @@ async def post_upload(request: Request, response: Response) -> BackupPreviewResp
             output.flush()
             os.fsync(output.fileno())
 
-        expires_at = datetime.now(timezone.utc) + storage.upload_ttl
         validated = await asyncio.to_thread(
             validate_backup,
             partial,
             path_id=f"upload:{upload_id}",
-            expires_at=expires_at,
             workspace_root=storage.tmp_dir,
         )
+        current_counts = await _current_record_counts()
+        validated = replace(validated, expires_at=_utcnow() + storage.upload_ttl)
         await asyncio.to_thread(_publish_upload, storage, partial, destination)
         published = True
         validated = replace(validated, retained_archive_path=destination)
-        current_counts = await _current_record_counts()
         token = await asyncio.to_thread(RestoreTokenRegistry(storage).issue, validated)
         token_issued = True
         response.headers.update(NO_STORE_HEADERS)
@@ -172,17 +186,22 @@ async def post_upload(request: Request, response: Response) -> BackupPreviewResp
     except BackupValidationError as exc:
         raise _validation_error(exc) from exc
     except OSError:
-        raise HTTPException(
-            status_code=507,
-            detail={
-                "code": "BACKUP_RESOURCE_LIMIT",
-                "message": "Backup could not be retained within available resources.",
-            },
-        ) from None
+        raise _resource_error() from None
+    except HTTPException:
+        raise
+    except Exception:
+        raise _internal_preview_error() from None
     finally:
-        partial.unlink(missing_ok=True)
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
         if published and not token_issued:
-            destination.unlink(missing_ok=True)
+            try:
+                destination.unlink(missing_ok=True)
+                storage._fsync_directory(storage.uploads_dir)
+            except OSError:
+                pass
 
 
 @router.post("/export", response_model=BackupOperationResponse, status_code=202)
@@ -272,7 +291,11 @@ async def preview_safety_backup(
 ) -> BackupPreviewResponse:
     storage = _storage(request)
     path = storage.safety_path(backup_id)
-    if not path.is_file():
+    try:
+        exists = path.is_file()
+    except OSError:
+        raise _resource_error() from None
+    if not exists:
         raise HTTPException(
             status_code=404,
             detail={
@@ -288,6 +311,12 @@ async def preview_safety_backup(
         )
     except BackupValidationError as exc:
         raise _validation_error(exc) from exc
+    except OSError:
+        raise _resource_error() from None
+    except HTTPException:
+        raise
+    except Exception:
+        raise _internal_preview_error() from None
     response.headers.update(NO_STORE_HEADERS)
     return preview
 

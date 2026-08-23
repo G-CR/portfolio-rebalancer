@@ -31,8 +31,10 @@ from app.backups.constants import (
     MAX_AGGREGATE_COMPRESSION_RATIO,
     MAX_COMPRESSED_BYTES,
     MAX_MANIFEST_BYTES,
+    MAX_LOGICAL_ROW_BYTES,
     MAX_UNCOMPRESSED_BYTES,
     STREAM_CHUNK_BYTES,
+    ROW_SCAN_CHUNK_BYTES,
 )
 from app.backups.contracts import CONTRACTS_BY_MEMBER, Codec, TableContract
 from app.backups.migrations import (
@@ -139,6 +141,82 @@ class InspectedArchive:
         except Exception:
             pass
 
+    def iter_source_rows(self, member: str) -> Iterator[dict[str, Any]]:
+        if member not in DATA_MEMBERS or self._verification_token is not _VERIFIED_ARCHIVE_TOKEN:
+            raise InvalidBackupDocument("archive verification handle is invalid")
+        info = self._zip.getinfo(member)
+        try:
+            with self._zip.open(info) as raw:
+                bounded = _BoundedRows(raw)
+                for item in ijson.items(bounded, "item"):
+                    if not isinstance(item, dict) or not all(isinstance(key, str) for key in item):
+                        raise InvalidBackupDocument("backup collection item must be an object")
+                    _validate_json_tree(item)
+                    yield item
+        except (ArchiveLimitExceeded, InvalidBackupDocument):
+            raise
+        except (ijson.JSONError, UnicodeDecodeError, BadZipFile, OSError, RuntimeError):
+            raise InvalidBackupDocument("backup collection JSON is malformed") from None
+
+
+class _BoundedRows:
+    """Incrementally reject oversized top-level array items before JSON materialization."""
+
+    def __init__(self, source: BinaryIO) -> None:
+        self.source = source
+        self.started = False
+        self.in_row = False
+        self.in_string = False
+        self.escaped = False
+        self.depth = 0
+        self.row_bytes = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if size == 0:
+            return b""
+        requested = ROW_SCAN_CHUNK_BYTES if size < 0 else min(size, ROW_SCAN_CHUNK_BYTES)
+        chunk = self.source.read(requested)
+        self._scan(chunk)
+        return chunk
+
+    def _scan(self, chunk: bytes) -> None:
+        for byte in chunk:
+            if not self.started:
+                if chr(byte).isspace():
+                    continue
+                if byte != ord("["):
+                    raise InvalidBackupDocument("backup collection must be a JSON array")
+                self.started = True
+                continue
+            if not self.in_row:
+                if chr(byte).isspace() or byte in (ord(","), ord("]")):
+                    continue
+                if byte != ord("{"):
+                    raise InvalidBackupDocument("backup collection item must be an object")
+                self.in_row = True
+                self.depth = 1
+                self.row_bytes = 1
+                continue
+            self.row_bytes += 1
+            if self.row_bytes > MAX_LOGICAL_ROW_BYTES:
+                raise ArchiveLimitExceeded("backup row exceeds the resource limit")
+            if self.in_string:
+                if self.escaped:
+                    self.escaped = False
+                elif byte == ord("\\"):
+                    self.escaped = True
+                elif byte == ord('"'):
+                    self.in_string = False
+                continue
+            if byte == ord('"'):
+                self.in_string = True
+            elif byte in (ord("{"), ord("[")):
+                self.depth += 1
+            elif byte in (ord("}"), ord("]")):
+                self.depth -= 1
+                if self.depth == 0:
+                    self.in_row = False
+
 
 def _zip_info(member: str) -> ZipInfo:
     info = ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))
@@ -150,9 +228,10 @@ def _zip_info(member: str) -> ZipInfo:
 
 def _open_row_store(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
-    connection.execute("PRAGMA journal_mode=OFF")
-    connection.execute("PRAGMA synchronous=OFF")
-    connection.execute(
+    try:
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        connection.execute(
         """
         CREATE TABLE rows (
             member TEXT NOT NULL,
@@ -161,8 +240,11 @@ def _open_row_store(path: Path) -> sqlite3.Connection:
             PRIMARY KEY (member, order_key)
         ) WITHOUT ROWID
         """
-    )
-    return connection
+        )
+        return connection
+    except Exception:
+        connection.close()
+        raise
 
 
 def _validate_json_tree(value: object) -> None:
@@ -541,41 +623,6 @@ def _verify_member_bytes(archive: ZipFile, info: ZipInfo, expected: MemberDigest
         raise InvalidBackupArchive("backup member checksum does not match its manifest")
 
 
-def _require_json_array(archive: ZipFile, info: ZipInfo) -> None:
-    try:
-        with archive.open(info) as source:
-            while chunk := source.read(1):
-                if not chunk.isspace():
-                    if chunk != b"[":
-                        raise InvalidBackupDocument("backup collection must be a JSON array")
-                    return
-    except (BadZipFile, OSError, RuntimeError) as exc:
-        raise InvalidBackupArchive("backup member is unreadable") from exc
-    raise InvalidBackupDocument("backup collection is empty")
-
-
-def _store_member_rows(
-    archive: ZipFile,
-    info: ZipInfo,
-    member: str,
-    connection: sqlite3.Connection,
-) -> int:
-    _require_json_array(archive, info)
-    count = 0
-    contract = CONTRACTS_BY_MEMBER[member]
-    try:
-        with archive.open(info) as member_stream:
-            for item in ijson.items(member_stream, "item"):
-                row = _validate_row(member, item)
-                _insert_row(connection, contract, row)
-                count += 1
-    except InvalidBackupDocument:
-        raise
-    except (ijson.JSONError, UnicodeDecodeError, BadZipFile, OSError, RuntimeError):
-        raise InvalidBackupDocument("backup collection JSON is malformed") from None
-    return count
-
-
 def _check_archive_metadata(compressed_size: int, infos: list[ZipInfo]) -> dict[str, ZipInfo]:
     if compressed_size > MAX_COMPRESSED_BYTES:
         raise ArchiveLimitExceeded("backup exceeds the compressed resource limit")
@@ -617,7 +664,7 @@ def _snapshot_archive(path: Path) -> tuple[BinaryIO, int, str]:
         raise
 
 
-def inspect_archive(path: Path) -> InspectedArchive:
+def open_verified_archive(path: Path) -> InspectedArchive:
     path = Path(path)
     snapshot: BinaryIO | None = None
     archive: ZipFile | None = None
@@ -632,23 +679,6 @@ def inspect_archive(path: Path) -> InspectedArchive:
         manifest = _parse_manifest(raw_manifest, version)
         for member in DATA_MEMBERS:
             _verify_member_bytes(archive, by_name[member], manifest.members[member])
-        with tempfile.TemporaryDirectory(dir=path.parent) as workspace_name:
-            connection = _open_row_store(Path(workspace_name) / "rows.sqlite3")
-            try:
-                for member in DATA_MEMBERS:
-                    count = _store_member_rows(
-                        archive,
-                        by_name[member],
-                        member,
-                        connection,
-                    )
-                    if count != manifest.record_counts[member]:
-                        raise InvalidBackupDocument("backup record count does not match manifest")
-                connection.commit()
-                if _logical_checksum_from_store(connection) != manifest.logical_checksum:
-                    raise InvalidBackupDocument("backup logical checksum does not match manifest")
-            finally:
-                connection.close()
         inspected = InspectedArchive(
             path=path,
             manifest=manifest,
@@ -658,7 +688,6 @@ def inspect_archive(path: Path) -> InspectedArchive:
             _zip=archive,
             _verification_token=_VERIFIED_ARCHIVE_TOKEN,
         )
-        migrate_to_current(inspected)
         owns_resources = False
         return inspected
     except (
@@ -681,6 +710,32 @@ def inspect_archive(path: Path) -> InspectedArchive:
             finally:
                 if snapshot is not None:
                     snapshot.close()
+
+
+def inspect_archive(path: Path) -> InspectedArchive:
+    inspected = open_verified_archive(path)
+    try:
+        migrated = migrate_to_current(inspected)
+        with tempfile.TemporaryDirectory(dir=Path(path).parent) as workspace_name:
+            connection = _open_row_store(Path(workspace_name) / "rows.sqlite3")
+            try:
+                for member in DATA_MEMBERS:
+                    count = 0
+                    for row in iter_current_rows(migrated, member):
+                        _insert_row(connection, CONTRACTS_BY_MEMBER[member], row)
+                        count += 1
+                    if count != inspected.manifest.record_counts[member]:
+                        raise InvalidBackupDocument("backup record count does not match manifest")
+                connection.commit()
+                checksum = _logical_checksum_from_store(connection)
+                if inspected.format_version == CURRENT_FORMAT_VERSION and checksum != inspected.manifest.logical_checksum:
+                    raise InvalidBackupDocument("backup logical checksum does not match manifest")
+            finally:
+                connection.close()
+        return inspected
+    except Exception:
+        inspected.close()
+        raise
 
 
 def _verified_inspected_archive(
@@ -711,12 +766,6 @@ def iter_current_rows(
     if member not in DATA_MEMBERS:
         raise InvalidBackupDocument("requested member is not a backup collection")
     inspected = _verified_inspected_archive(archive)
-    info = inspected._zip.getinfo(member)
-    with inspected._zip.open(info) as member_stream:
-        try:
-            for item in ijson.items(member_stream, "item"):
-                yield _validate_row(member, item)
-        except InvalidBackupDocument:
-            raise
-        except (ijson.JSONError, UnicodeDecodeError, BadZipFile, OSError, RuntimeError):
-            raise InvalidBackupDocument("backup collection JSON is malformed") from None
+    migrated = archive if isinstance(archive, MigratedArchive) else migrate_to_current(inspected)
+    for item in migrated.iter_rows(member):
+        yield _validate_row(member, item)

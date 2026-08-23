@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -19,15 +19,18 @@ from app.backups.archive import (
     InvalidBackupArchive,
     InvalidBackupDocument,
     UnsupportedBackupVersion,
-    inspect_archive,
+    open_verified_archive,
     iter_current_rows,
 )
-from app.backups.canonical import JsonValue, canonical_json_bytes
+from app.backups.canonical import JsonValue, canonical_json_bytes, canonical_parsed_json_bytes
 from app.backups.constants import CURRENT_FORMAT_VERSION, DATA_MEMBERS, STREAM_CHUNK_BYTES
 from app.backups.contracts import CONTRACTS_BY_MEMBER, Codec
 from app.backups.migrations import BackupMigrationError, migrate_to_current
 from app.core.decimal import fits_numeric_28_12
 from app.db.models import DEFAULT_SETTINGS_ID
+from app.schemas.rebalance import RebalanceComparisonResponse, RebalanceResultResponse, TradeSuggestionResponse
+from app.schemas.email_settings import EmailSettingsUpdate
+from pydantic import TypeAdapter, ValidationError
 from app.services.backup_storage import BackupStorage
 
 
@@ -58,7 +61,7 @@ _ENUM_FIELDS: dict[tuple[str, str], set[str]] = {
     ("data/settings.json", "rebalance_valuation_basis"): {"actual", "fx_neutral"},
     ("data/settings.json", "email_smtp_security"): {"ssl", "starttls"},
     ("credentials.json", "provider"): {*_PROVIDERS, "smtp"},
-    ("credentials.json", "validation_status"): {"valid", "failed", "untested"},
+    ("credentials.json", "validation_status"): {"valid", "failed"},
 }
 
 
@@ -94,7 +97,7 @@ class ValidatedBackup:
     record_counts: dict[str, int]
     credential_categories: tuple[str, ...]
     warnings: tuple[str, ...]
-    expires_at: datetime
+    expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,9 +110,10 @@ class RestoreTokenBinding:
 
 def _open_index(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
-    connection.execute("PRAGMA journal_mode=OFF")
-    connection.execute("PRAGMA synchronous=OFF")
-    connection.executescript(
+    try:
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        connection.executescript(
         """
         CREATE TABLE identities (
             member TEXT NOT NULL,
@@ -127,16 +131,111 @@ def _open_index(path: Path) -> sqlite3.Connection:
             owner_id TEXT NOT NULL,
             target_member TEXT NOT NULL,
             target_id TEXT NOT NULL,
-            kind TEXT NOT NULL
+            kind TEXT NOT NULL,
+            semantic_key TEXT
         );
         CREATE INDEX refs_target ON refs(target_member, target_id);
         CREATE TABLE snapshots (
             id TEXT PRIMARY KEY,
             snapshot_type TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE market_inputs (
+            id TEXT PRIMARY KEY,
+            semantic_key TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE current_rows (
+            member TEXT NOT NULL,
+            order_key TEXT NOT NULL,
+            payload BLOB NOT NULL,
+            PRIMARY KEY (member, order_key)
+        ) WITHOUT ROWID;
+        CREATE TABLE asset_weights (active INTEGER NOT NULL, weight TEXT NOT NULL);
         """
-    )
-    return connection
+        )
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def _decimal(value: JsonValue) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        raise _Incompatible from None
+
+
+def _uuid_decimal_map(value: JsonValue, *, bounded: bool) -> None:
+    if not isinstance(value, dict):
+        raise _Incompatible
+    for key, item in value.items():
+        try:
+            if str(UUID(key)) != key:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise _Incompatible from None
+        number = _decimal(item)
+        if not fits_numeric_28_12(number) or number < 0 or (bounded and number > 1):
+            raise _Incompatible
+
+
+def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
+    summary = row["input_summary"]
+    projected = row["projected_result"]
+    actions = row["suggested_actions"]
+    expected_summary = {
+        "session_token", "request_token", "available_cny", "available_usd",
+        "valuation_basis", "allow_sell", "allow_fx", "tolerance",
+        "minimum_trade_cny", "acknowledge_stale_data", "holding_versions",
+        "market_data_record_ids", "asset_class_targets", "resolved_constraints",
+    }
+    if not isinstance(summary, dict) or set(summary) != expected_summary:
+        raise _Incompatible
+    if not isinstance(summary["session_token"], str) or not isinstance(summary["request_token"], str):
+        raise _Incompatible
+    if summary["valuation_basis"] != row["strategy_mode"] or not isinstance(summary["acknowledge_stale_data"], bool):
+        raise _Incompatible
+    for field in ("available_cny", "available_usd"):
+        if _decimal(summary[field]) < 0:
+            raise _Incompatible
+    for optional in ("allow_sell", "allow_fx"):
+        if summary[optional] is not None and not isinstance(summary[optional], bool):
+            raise _Incompatible
+    for optional in ("tolerance", "minimum_trade_cny"):
+        if summary[optional] is not None and _decimal(summary[optional]) < 0:
+            raise _Incompatible
+    if summary["tolerance"] is not None and _decimal(summary["tolerance"]) > 1:
+        raise _Incompatible
+    versions = summary["holding_versions"]
+    if not isinstance(versions, dict):
+        raise _Incompatible
+    for key, value in versions.items():
+        try:
+            canonical = str(UUID(key)) == key
+        except (ValueError, TypeError):
+            canonical = False
+        if not canonical or isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise _Incompatible
+    _uuid_decimal_map(summary["asset_class_targets"], bounded=True)
+    resolved = summary["resolved_constraints"]
+    if not isinstance(resolved, dict) or set(resolved) != {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}:
+        raise _Incompatible
+    if not isinstance(resolved["allow_sell"], bool) or not isinstance(resolved["allow_fx"], bool):
+        raise _Incompatible
+    if _decimal(resolved["tolerance"]) < 0 or _decimal(resolved["tolerance"]) > 1 or _decimal(resolved["minimum_trade_cny"]) < 0:
+        raise _Incompatible
+    if not isinstance(actions, list) or not isinstance(projected, dict) or set(projected) != {"valuation_basis", "result", "fx_comparison", "data_status"}:
+        raise _Incompatible
+    if projected["valuation_basis"] != row["strategy_mode"] or projected["data_status"] not in {"valid", "stale", "manual"}:
+        raise _Incompatible
+    try:
+        TypeAdapter(list[TradeSuggestionResponse]).validate_python(actions)
+        result = RebalanceResultResponse.model_validate(projected["result"])
+        RebalanceComparisonResponse.model_validate(projected["fx_comparison"])
+    except ValidationError:
+        raise _Incompatible from None
+    if [item.model_dump(mode="json") for item in result.trades] != actions:
+        raise _Incompatible
 
 
 def _require_json_shape(member: str, row: dict[str, JsonValue]) -> None:
@@ -147,16 +246,15 @@ def _require_json_shape(member: str, row: dict[str, JsonValue]) -> None:
     for field in object_fields.get(member, ()):
         if not isinstance(row[field], dict):
             raise _Incompatible
-    if member == "data/rebalance_plans.json" and not isinstance(
-        row["suggested_actions"], (dict, list)
-    ):
-        raise _Incompatible
+    if member == "data/rebalance_plans.json":
+        _rebalance_shapes(row)
     if member == "data/settings.json":
         providers = row["provider_priority"]
         if (
             not isinstance(providers, list)
             or any(not isinstance(provider, str) or provider not in _PROVIDERS for provider in providers)
-            or len(set(providers)) != len(providers)
+            or len(providers) != len(_PROVIDERS)
+            or set(providers) != _PROVIDERS
         ):
             raise _Incompatible
 
@@ -206,6 +304,52 @@ def _validate_scalars(member: str, row: dict[str, JsonValue]) -> None:
             raise _Incompatible
         if not 1 <= int(row["email_smtp_port"]) <= 65535:
             raise _Incompatible
+        for field in ("default_tolerance", "minimum_trade_amount_cny", "rebalance_available_cny", "rebalance_available_usd"):
+            if _decimal(row[field]) < 0:
+                raise _Incompatible
+        if _decimal(row["default_tolerance"]) > 1:
+            raise _Incompatible
+        try:
+            email = EmailSettingsUpdate.model_validate({
+                "enabled": row["email_enabled"], "recipient": row["email_recipient"],
+                "smtp_host": row["email_smtp_host"], "smtp_port": row["email_smtp_port"],
+                "smtp_security": row["email_smtp_security"],
+                "smtp_username": row["email_smtp_username"], "from_address": row["email_from"],
+            })
+        except ValidationError:
+            raise _Incompatible from None
+        if (
+            email.recipient != row["email_recipient"]
+            or email.smtp_host != row["email_smtp_host"]
+            or email.smtp_username != row["email_smtp_username"]
+            or email.from_address != row["email_from"]
+        ):
+            raise _Incompatible
+    elif member == "data/asset_classes.json":
+        weight = _decimal(row["target_weight"])
+        if weight < 0 or weight > 1:
+            raise _Incompatible
+    elif member == "data/holdings.json":
+        if not 0 <= int(row["quantity_precision"]) <= 12 or _decimal(row["lot_size"]) <= 0 or int(row["version"]) < 0:
+            raise _Incompatible
+        for field in ("quantity", "average_cost_price", "cost_fx_to_cny", "baseline_fx_to_cny"):
+            if _decimal(row[field]) < 0:
+                raise _Incompatible
+    elif member == "data/holding_defaults.json":
+        for field in ("commission_rate", "minimum_commission", "per_share_fee", "fixed_fee"):
+            if _decimal(row[field]) < 0:
+                raise _Incompatible
+    elif member == "data/market_data_overrides.json" and _decimal(row["value"]) <= 0:
+        raise _Incompatible
+    elif member == "data/market_data.json" and row["value"] is not None and _decimal(row["value"]) <= 0:
+        raise _Incompatible
+    elif member == "data/cost_adjustments.json":
+        for field in (
+            "before_quantity", "before_average_cost_price", "before_cost_fx_to_cny",
+            "after_quantity", "after_average_cost_price", "after_cost_fx_to_cny",
+        ):
+            if _decimal(row[field]) < 0:
+                raise _Incompatible
     _require_json_shape(member, row)
 
 
@@ -231,13 +375,14 @@ def _add_ref(
     target_member: str,
     target_id: JsonValue,
     kind: str,
+    semantic_key: str | None = None,
 ) -> None:
     if target_id is None:
         return
     connection.execute(
-        "INSERT INTO refs(owner_member, owner_id, target_member, target_id, kind) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (member, owner_id, target_member, str(target_id), kind),
+        "INSERT INTO refs(owner_member, owner_id, target_member, target_id, kind, semantic_key) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (member, owner_id, target_member, str(target_id), kind, semantic_key),
     )
 
 
@@ -250,7 +395,7 @@ def _validate_reference_map(
 ) -> None:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
         raise _Incompatible
-    for reference in value.values():
+    for key, reference in value.items():
         if not isinstance(reference, str):
             raise _Incompatible
         try:
@@ -259,9 +404,9 @@ def _validate_reference_map(
             raise _Incompatible from None
         if str(parsed) != reference:
             raise _Incompatible
-        _add_ref(
-            connection, member, owner_id, "market_input", reference, kind
-        )
+        if not (key.startswith("price:") or key.startswith("fx:")) or not key.partition(":")[2]:
+            raise _Incompatible
+        _add_ref(connection, member, owner_id, "market_input", reference, kind, key)
 
 
 def _validate_rebalance(
@@ -293,7 +438,29 @@ def _validate_rebalance(
     if not valid:
         raise _RelationshipInvalid
     owner_id = str(row["id"])
+    summary = row["input_summary"]
+    assert isinstance(summary, dict)
+    version_payload = {
+        "market_data_record_ids": summary["market_data_record_ids"],
+        "holding_versions": summary["holding_versions"],
+        "asset_class_targets": summary["asset_class_targets"],
+    }
+    expected_version = hashlib.sha256(
+        json.dumps(version_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if row["data_version"] != expected_version:
+        raise _RelationshipInvalid
+    _validate_reference_map(
+        connection, "data/rebalance_plans.json", owner_id,
+        summary["market_data_record_ids"], "input_market_data",
+    )
+    for holding_id in summary["holding_versions"]:
+        _add_ref(connection, "data/rebalance_plans.json", owner_id, "data/holdings.json", holding_id, "input_holding")
+    for asset_id in summary["asset_class_targets"]:
+        _add_ref(connection, "data/rebalance_plans.json", owner_id, "data/asset_classes.json", asset_id, "input_asset")
     if has_start:
+        if row["start_market_data_record_ids"] != summary["market_data_record_ids"]:
+            raise _RelationshipInvalid
         _add_ref(
             connection, "data/rebalance_plans.json", owner_id,
             "data/snapshots.json", row["before_snapshot_id"], "rebalance_before",
@@ -327,8 +494,10 @@ def _index_row(
     except sqlite3.IntegrityError:
         raise _RelationshipInvalid from None
 
-    if member == "data/asset_classes.json" and row["is_active"]:
-        _insert_unique(connection, "active_asset_name", row["name"], owner_id)
+    if member == "data/asset_classes.json":
+        connection.execute("INSERT INTO asset_weights(active, weight) VALUES (?, ?)", (int(bool(row["is_active"])), str(row["target_weight"])))
+        if row["is_active"]:
+            _insert_unique(connection, "active_asset_name", row["name"], owner_id)
     elif member == "data/holdings.json":
         _add_ref(connection, member, owner_id, "data/asset_classes.json", row["asset_class_id"], "fk")
         if row["is_active"]:
@@ -343,6 +512,9 @@ def _index_row(
             connection, "market_data",
             [row["data_type"], row["symbol"], row["source"], row["market_time"]], owner_id,
         )
+        connection.execute("INSERT INTO market_inputs(id, semantic_key) VALUES (?, ?)", (owner_id, f"{row['data_type']}:{row['symbol']}"))
+    elif member == "data/market_data_overrides.json":
+        connection.execute("INSERT INTO market_inputs(id, semantic_key) VALUES (?, ?)", (owner_id, f"{row['data_type']}:{row['symbol']}"))
     elif member == "data/cost_adjustments.json":
         _add_ref(connection, member, owner_id, "data/holdings.json", row["holding_id"], "fk")
     elif member == "data/snapshots.json":
@@ -393,6 +565,17 @@ def _verify_relationships(connection: sqlite3.Connection) -> None:
     ).fetchone()
     if missing_market_input is not None:
         raise _RelationshipInvalid
+    mismatched_market_input = connection.execute(
+        """
+        SELECT 1 FROM refs AS reference
+        JOIN market_inputs AS target ON target.id = reference.target_id
+        WHERE reference.target_member = 'market_input'
+          AND target.semantic_key != reference.semantic_key
+        LIMIT 1
+        """
+    ).fetchone()
+    if mismatched_market_input is not None:
+        raise _RelationshipInvalid
     invalid_snapshot = connection.execute(
         """
         SELECT 1
@@ -405,52 +588,95 @@ def _verify_relationships(connection: sqlite3.Connection) -> None:
     ).fetchone()
     if invalid_snapshot is not None:
         raise _RelationshipInvalid
+    weights = (
+        Decimal(value)
+        for (value,) in connection.execute(
+            "SELECT weight FROM asset_weights WHERE active = 1"
+        )
+    )
+    if sum(weights, Decimal(0)) != Decimal(1):
+        raise _RelationshipInvalid
+
+
+def _current_checksum(connection: sqlite3.Connection) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"{")
+    for member_index, member in enumerate(sorted(DATA_MEMBERS)):
+        if member_index:
+            digest.update(b",")
+        digest.update(canonical_json_bytes(member))
+        digest.update(b":[")
+        rows = connection.execute("SELECT payload FROM current_rows WHERE member = ? ORDER BY order_key", (member,))
+        for row_index, (payload,) in enumerate(rows):
+            if row_index:
+                digest.update(b",")
+            digest.update(bytes(payload))
+        digest.update(b"]")
+    digest.update(b"}")
+    return digest.hexdigest()
 
 
 def validate_backup(
     path: Path,
     *,
     path_id: str,
-    expires_at: datetime,
+    expires_at: datetime | None = None,
     workspace_root: Path,
 ) -> ValidatedBackup:
-    if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+    if expires_at is not None and (expires_at.tzinfo is None or expires_at.utcoffset() is None):
         raise ValueError("expires_at must be timezone-aware")
     try:
         workspace_root = Path(workspace_root)
         workspace_root.mkdir(parents=True, exist_ok=True)
-        with inspect_archive(path) as inspected:
+        with open_verified_archive(path) as inspected:
             migrated = migrate_to_current(inspected)
             categories: set[str] = set()
             with tempfile.TemporaryDirectory(dir=workspace_root) as workspace_name:
                 connection = _open_index(Path(workspace_name) / "semantic.sqlite3")
                 try:
+                    record_counts: dict[str, int] = {}
                     for member in DATA_MEMBERS:
+                        count = 0
+                        contract = CONTRACTS_BY_MEMBER[member]
                         for row in iter_current_rows(migrated, member):
                             category = _index_row(connection, member, row)
+                            try:
+                                connection.execute(
+                                    "INSERT INTO current_rows(member, order_key, payload) VALUES (?, ?, ?)",
+                                    (member, str(row[contract.order_key]), canonical_parsed_json_bytes(row)),
+                                )
+                            except sqlite3.IntegrityError:
+                                raise _RelationshipInvalid from None
+                            count += 1
                             if category is not None:
                                 categories.add(category)
+                        record_counts[member] = count
+                        if count != inspected.manifest.record_counts[member]:
+                            raise _Incompatible
                     if connection.execute(
                         "SELECT COUNT(*) FROM identities WHERE member = 'data/settings.json'"
                     ).fetchone()[0] != 1:
                         raise _Incompatible
                     connection.commit()
                     _verify_relationships(connection)
+                    canonical_checksum = _current_checksum(connection)
+                    if inspected.format_version == CURRENT_FORMAT_VERSION and canonical_checksum != inspected.manifest.logical_checksum:
+                        raise _Incompatible
                 finally:
                     connection.close()
             return ValidatedBackup(
                 retained_archive_path=Path(path),
                 path_id=path_id,
                 archive_sha256=inspected.archive_sha256,
-                canonical_logical_checksum=inspected.manifest.logical_checksum,
+                canonical_logical_checksum=canonical_checksum,
                 source_format_version=inspected.manifest.format_version,
                 current_format_version=CURRENT_FORMAT_VERSION,
                 source_application_version=inspected.manifest.source_application_version,
                 exported_at=datetime.fromisoformat(inspected.manifest.exported_at),
-                record_counts=dict(inspected.manifest.record_counts),
+                record_counts=record_counts,
                 credential_categories=tuple(sorted(categories)),
                 warnings=("Backup archives contain plaintext credentials.",),
-                expires_at=expires_at.astimezone(timezone.utc),
+                expires_at=expires_at.astimezone(timezone.utc) if expires_at is not None else None,
             )
     except BackupValidationError:
         raise
@@ -488,6 +714,9 @@ def validate_backup(
 
 
 class RestoreTokenRegistry:
+    # A consumer owns its atomic claim for this lease. Maintenance only recovers
+    # claims whose owner could not have remained live for the whole interval.
+    CLAIM_STALE_AFTER = timedelta(minutes=5)
     def __init__(
         self,
         storage: BackupStorage,
@@ -529,6 +758,8 @@ class RestoreTokenRegistry:
         resolved = self._resolve_path(validated.path_id)
         if resolved.resolve() != validated.retained_archive_path.resolve():
             raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.")
+        if validated.expires_at is None:
+            raise BackupValidationError("BACKUP_PREVIEW_FAILED", "Backup preview could not be prepared.", status_code=500)
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
         payload = canonical_json_bytes({
@@ -547,6 +778,9 @@ class RestoreTokenRegistry:
         for token_claim in self.storage.uploads_dir.glob("*.token.claimed"):
             token_hash = token_claim.name.removesuffix(".token.claimed")
             try:
+                claimed_at = datetime.fromtimestamp(token_claim.stat().st_mtime, timezone.utc)
+                if now - claimed_at < self.CLAIM_STALE_AFTER:
+                    continue
                 os.replace(token_claim, self._consumed_path(token_hash))
                 self.storage._fsync_directory(self.storage.uploads_dir)
             except OSError:
@@ -602,17 +836,23 @@ class RestoreTokenRegistry:
         claim_path = self._claim_path(token_hash)
         try:
             os.replace(journal_path, claim_path)
+            claimed_timestamp = self._clock().timestamp()
+            os.utime(claim_path, (claimed_timestamp, claimed_timestamp))
             self.storage._fsync_directory(self.storage.uploads_dir)
         except OSError:
             raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.") from None
         try:
             try:
-                document = json.loads(claim_path.read_bytes())
+                _after_token_claim(claim_path)
+                with claim_path.open("rb") as source:
+                    document = json.load(source)
                 if set(document) != {"token_hash", "archive_sha256", "path_id", "expires_at"}:
                     raise ValueError
                 if not hmac.compare_digest(document["token_hash"], token_hash):
                     raise ValueError
                 expires_at = datetime.fromisoformat(document["expires_at"])
+                if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+                    raise ValueError
                 path_id = str(document["path_id"])
                 expected_hash = str(document["archive_sha256"])
             except (OSError, TypeError, ValueError, KeyError):
@@ -640,3 +880,7 @@ class RestoreTokenRegistry:
             except OSError:
                 # The durable claim remains discoverable by periodic maintenance.
                 pass
+
+
+def _after_token_claim(_claim_path: Path) -> None:
+    """Deterministic test seam after the durable atomic claim is established."""

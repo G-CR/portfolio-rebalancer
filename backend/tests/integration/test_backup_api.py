@@ -294,11 +294,17 @@ def _preview_source() -> tuple[dict[str, list[dict[str, object]]], str]:
     source: dict[str, list[dict[str, object]]] = {member: [] for member in DATA_MEMBERS}
     timestamp = datetime(2026, 8, 24, 4, 0, tzinfo=timezone.utc)
     secret = "synthetic-smtp-secret-never-leak"
+    source["data/asset_classes.json"] = [{
+        "id": UUID("00000000-0000-0000-0000-000000000900"),
+        "name": "Synthetic", "target_weight": "1.000000000000",
+        "display_order": 0, "is_active": True, "notes": None,
+        "created_at": timestamp, "updated_at": timestamp,
+    }]
     source["data/settings.json"] = [{
         "id": DEFAULT_SETTINGS_ID,
         "refresh_hour": 7,
         "refresh_minute": 30,
-        "provider_priority": ["yahoo"],
+        "provider_priority": ["yahoo", "sina", "akshare", "tushare", "alpha_vantage"],
         "default_tolerance": "0.010000000000",
         "minimum_trade_amount_cny": "100.000000000000",
         "allow_sell": True,
@@ -321,7 +327,7 @@ def _preview_source() -> tuple[dict[str, list[dict[str, object]]], str]:
         "provider": "smtp",
         "value": secret,
         "masked_value": "****leak",
-        "validation_status": "untested",
+        "validation_status": None,
         "validation_message": None,
         "last_validated_at": None,
         "created_at": timestamp,
@@ -363,9 +369,14 @@ async def test_upload_streams_validates_and_never_mutates_database(
     before = await _business_table_hashes()
     archive, secret = _preview_archive(tmp_path / "state.portfolio-backup")
 
+    async def chunks():
+        with archive.open("rb") as source:
+            while chunk := source.read(37):
+                yield chunk
+
     response = await api_client.post(
         "/api/backups/upload",
-        content=archive.read_bytes(),
+        content=chunks(),
         headers={
             "Content-Type": "application/octet-stream",
             "X-Backup-Filename": "state.portfolio-backup",
@@ -410,6 +421,94 @@ async def test_upload_enforces_limit_while_streaming_and_removes_partial(
     )
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "BACKUP_RESOURCE_LIMIT"
+    assert not list(app.state.backup_storage.tmp_dir.glob("*.partial"))
+
+
+async def test_upload_ttl_starts_after_slow_validation_and_count_query(
+    api_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive, _ = _preview_archive(tmp_path / "slow.portfolio-backup")
+    start = datetime(2026, 8, 24, 4, 0, tzinfo=timezone.utc)
+    finished = start + timedelta(hours=2)
+    clock = [start]
+    real_validate = backup_routes.validate_backup
+    real_counts = backup_routes._current_record_counts
+
+    def slow_validate(*args, **kwargs):
+        result = real_validate(*args, **kwargs)
+        clock[0] = start + timedelta(hours=1)
+        return result
+
+    async def slow_counts():
+        result = await real_counts()
+        clock[0] = finished
+        return result
+
+    monkeypatch.setattr(backup_routes, "validate_backup", slow_validate)
+    monkeypatch.setattr(backup_routes, "_current_record_counts", slow_counts)
+    monkeypatch.setattr(backup_routes, "_utcnow", lambda: clock[0])
+    response = await api_client.post(
+        "/api/backups/upload", content=archive.read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 200
+    assert datetime.fromisoformat(response.json()["expires_at"]) == finished + timedelta(minutes=30)
+
+
+async def test_upload_partial_creation_does_not_depend_on_chmod(
+    api_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive, _ = _preview_archive(tmp_path / "atomic.portfolio-backup")
+    real_chmod = os.chmod
+
+    def reject_upload_chmod(path, mode, *args, **kwargs):
+        if str(path).endswith(".upload.partial"):
+            raise OSError("must-not-run")
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(backup_routes.os, "chmod", reject_upload_chmod)
+    response = await api_client.post(
+        "/api/backups/upload", content=archive.read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("failure_site", ["counts", "token"])
+async def test_upload_internal_failures_are_fixed_and_sanitized(
+    api_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_site: str,
+) -> None:
+    archive, _ = _preview_archive(tmp_path / f"{failure_site}.portfolio-backup")
+    secret = "private-sql-path SELECT credential-secret"
+    if failure_site == "counts":
+        async def fail_counts():
+            raise RuntimeError(secret)
+        monkeypatch.setattr(backup_routes, "_current_record_counts", fail_counts)
+    else:
+        monkeypatch.setattr(backup_routes.RestoreTokenRegistry, "issue", lambda *_: (_ for _ in ()).throw(RuntimeError(secret)))
+    response = await api_client.post(
+        "/api/backups/upload", content=archive.read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] == {"code": "BACKUP_PREVIEW_FAILED", "message": "Backup preview could not be prepared."}
+    assert secret not in response.text
+    assert not list(app.state.backup_storage.tmp_dir.glob("*.partial"))
+
+
+async def test_upload_fsync_failure_is_resource_typed_and_cleanup_does_not_leak(
+    api_client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive, _ = _preview_archive(tmp_path / "fsync.portfolio-backup")
+    secret = "private-fsync-path credential-secret"
+    monkeypatch.setattr(backup_routes.os, "fsync", lambda *_: (_ for _ in ()).throw(OSError(secret)))
+    response = await api_client.post(
+        "/api/backups/upload", content=archive.read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 507
+    assert response.json()["detail"]["code"] == "BACKUP_RESOURCE_LIMIT"
+    assert secret not in response.text
     assert not list(app.state.backup_storage.tmp_dir.glob("*.partial"))
 
 
