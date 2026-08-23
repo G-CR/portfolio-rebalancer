@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.backups.archive import ArchiveMetadata, inspect_archive, iter_current_rows
+from app.backups.archive import ArchiveMetadata, inspect_archive, iter_current_rows, write_archive
 from app.backups.canonical import encode_json_value
 from app.backups.constants import DATA_MEMBERS
 from app.backups.contracts import CREDENTIAL_CONTRACT, TABLE_CONTRACTS
@@ -640,6 +640,85 @@ def select_transaction_setting(name: str) -> Any:
     return text(f"SELECT current_setting('{name}')")
 
 
+class _ExitFailingTransaction:
+    def __init__(self, delegate: Any, *, fail: bool) -> None:
+        self.delegate = delegate
+        self.fail = fail
+
+    async def __aenter__(self) -> Any:
+        return await self.delegate.__aenter__()
+
+    async def __aexit__(self, *args: Any) -> bool:
+        result = await self.delegate.__aexit__(*args)
+        if self.fail:
+            raise RuntimeError("injected transaction exit failure")
+        return result
+
+
+class _ExitFailingSession:
+    def __init__(self, delegate: AsyncSession, *, failure_phase: str) -> None:
+        self.delegate = delegate
+        self.failure_phase = failure_phase
+
+    async def __aenter__(self) -> _ExitFailingSession:
+        await self.delegate.__aenter__()
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        result = await self.delegate.__aexit__(*args)
+        if self.failure_phase == "session":
+            raise RuntimeError("injected session exit failure")
+        return result
+
+    def begin(self) -> _ExitFailingTransaction:
+        return _ExitFailingTransaction(
+            self.delegate.begin(),
+            fail=self.failure_phase == "transaction",
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.delegate, name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_phase", ["transaction", "session"])
+async def test_manual_export_publishes_only_after_transaction_and_session_exit(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+) -> None:
+    key_path = tmp_path / "synthetic-fernet.key"
+    SecretStore(key_path)
+    destination = tmp_path / "existing.portfolio-backup"
+    write_archive(destination, {member: [] for member in DATA_MEMBERS}, _metadata())
+    sentinel_bytes = destination.read_bytes()
+    real_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    monkeypatch.setattr(
+        backup_export_module,
+        "SessionFactory",
+        lambda: _ExitFailingSession(
+            real_factory(),
+            failure_phase=failure_phase,
+        ),
+    )
+    monkeypatch.setattr(
+        backup_export_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            secret_key_path=str(key_path),
+            timezone="Asia/Shanghai",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=f"injected {failure_phase} exit failure"):
+        await export_database_backup(destination)
+
+    assert destination.read_bytes() == sentinel_bytes
+    assert not list(tmp_path.glob(f".{destination.name}.*.complete"))
+
+
 @pytest.mark.asyncio
 async def test_decryption_failure_is_sanitized_and_leaves_no_archive(
     db_session: AsyncSession,
@@ -674,3 +753,42 @@ async def test_decryption_failure_is_sanitized_and_leaves_no_archive(
     assert "not-a-fernet-token" not in str(exc_info.value)
     assert not destination.exists()
     assert not list(tmp_path.glob("*.partial"))
+
+
+@pytest.mark.asyncio
+async def test_unicode_decryption_failure_does_not_retain_or_log_plaintext_bytes(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_store = SecretStore(tmp_path / "synthetic-fernet.key")
+    secret_bytes = b"\xffsynthetic-plaintext-must-not-escape"
+    db_session.add(
+        EncryptedSecret(
+            id=_id(7100),
+            provider="synthetic-provider",
+            encrypted_value=secret_store.fernet.encrypt(secret_bytes).decode("ascii"),
+            masked_value="****cape",
+            validation_status=None,
+            validation_message=None,
+            last_validated_at=None,
+            created_at=FIXED_TIME,
+            updated_at=FIXED_TIME,
+        )
+    )
+    await db_session.commit()
+
+    async with db_session.begin():
+        with pytest.raises(BackupExportError, match="credential decryption failed") as exc_info:
+            await export_logical_backup(
+                db_session,
+                tmp_path / "must-not-exist.portfolio-backup",
+                secret_store=secret_store,
+                metadata=_metadata(),
+            )
+
+    error = exc_info.value
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    exposed_text = "\n".join((repr(error), caplog.text))
+    assert "synthetic-plaintext-must-not-escape" not in exposed_text

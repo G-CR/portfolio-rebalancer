@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
@@ -124,10 +125,14 @@ class DatabaseLogicalSource:
                 encrypted_value = row["value"]
                 if not isinstance(encrypted_value, str):
                     raise BackupExportError("credential decryption failed")
+                decrypted_value: str | None = None
                 try:
-                    row["value"] = self.secret_store.decrypt(encrypted_value.encode("ascii"))
-                except (InvalidToken, UnicodeDecodeError, UnicodeEncodeError) as exc:
-                    raise BackupExportError("credential decryption failed") from exc
+                    decrypted_value = self.secret_store.decrypt(encrypted_value.encode("ascii"))
+                except (InvalidToken, UnicodeDecodeError, UnicodeEncodeError):
+                    pass
+                if decrypted_value is None:
+                    raise BackupExportError("credential decryption failed") from None
+                row["value"] = decrypted_value
         return rows
 
     def _batch_statement(
@@ -183,15 +188,32 @@ def build_export_metadata(settings: Settings) -> ArchiveMetadata:
 async def export_database_backup(destination: Path) -> ArchiveSummary:
     """Manually export one read-only, repeatable-read database snapshot."""
 
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     settings = get_settings()
-    async with SessionFactory() as session:
-        async with session.begin():
-            await session.execute(
-                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            )
-            return await export_logical_backup(
-                session,
-                destination,
-                secret_store=SecretStore(Path(settings.secret_key_path)),
-                metadata=build_export_metadata(settings),
-            )
+    staged_archive: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{destination.name}.",
+            suffix=".complete",
+            dir=destination.parent,
+            delete=False,
+        ) as temporary:
+            staged_archive = Path(temporary.name)
+        async with SessionFactory() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                )
+                summary = await export_logical_backup(
+                    session,
+                    staged_archive,
+                    secret_store=SecretStore(Path(settings.secret_key_path)),
+                    metadata=build_export_metadata(settings),
+                )
+        os.replace(staged_archive, destination)
+        staged_archive = None
+        return summary
+    finally:
+        if staged_archive is not None:
+            staged_archive.unlink(missing_ok=True)
