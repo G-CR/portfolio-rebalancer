@@ -5,8 +5,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-import hashlib
-import json
 import logging
 from typing import Literal
 from uuid import UUID, uuid4
@@ -31,6 +29,7 @@ from app.schemas.rebalance import (
 from app.services.baseline import reset_baseline_fx
 from app.services.errors import ServiceError
 from app.services.market_data import refresh_all_required_data
+from app.services.rebalance_version import rebalance_data_version
 from app.services.snapshots import (
     EventSnapshotCapture,
     EventSnapshotItemCapture,
@@ -189,7 +188,7 @@ async def create_rebalance_plan(
         prepared=prepared,
         refresh_attempted=refresh_attempted,
     )
-    data_version = _data_version(
+    data_version = rebalance_data_version(
         market_data_record_ids=prepared.market_data_record_ids,
         holding_versions=prepared.holding_versions,
         asset_class_targets=prepared.asset_class_targets,
@@ -278,7 +277,7 @@ async def start_rebalance_plan(
         )
 
     capture = await _capture_lifecycle_bundle(session)
-    if plan.data_version != _data_version(
+    if plan.data_version != rebalance_data_version(
         market_data_record_ids=capture.market_data_record_ids,
         holding_versions=capture.holding_version_map,
         asset_class_targets=capture.asset_class_target_map,
@@ -875,21 +874,6 @@ def _serialize_result(result: RebalanceResult) -> RebalanceResultResponse:
             for item in result.trades
         ),
     )
-
-
-def _data_version(
-    *,
-    market_data_record_ids: dict[str, str],
-    holding_versions: dict[str, int],
-    asset_class_targets: dict[str, str],
-    **_ignored,
-) -> str:
-    payload = {
-        "market_data_record_ids": market_data_record_ids,
-        "holding_versions": holding_versions,
-        "asset_class_targets": asset_class_targets,
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 async def _get_locked_plan(session: AsyncSession, plan_id: UUID) -> RebalancePlan:

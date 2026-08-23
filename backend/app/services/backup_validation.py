@@ -32,6 +32,7 @@ from app.schemas.rebalance import RebalanceComparisonResponse, RebalanceResultRe
 from app.schemas.email_settings import EmailSettingsUpdate
 from pydantic import TypeAdapter, ValidationError
 from app.services.backup_storage import BackupStorage
+from app.services.rebalance_version import rebalance_data_version
 
 try:  # Linux production uses flock; the fallback keeps local Windows tests faithful.
     import fcntl
@@ -225,7 +226,7 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
             canonical = str(UUID(key)) == key
         except (ValueError, TypeError):
             canonical = False
-        if not canonical or isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        if not canonical or isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise _Incompatible
     _uuid_decimal_map(summary.get("asset_class_targets", {}), bounded=True)
     resolved = summary.get("resolved_constraints", summary)
@@ -491,6 +492,14 @@ def _validate_rebalance(
     owner_id = str(row["id"])
     summary = row["input_summary"]
     assert isinstance(summary, dict)
+    if {"resolved_constraints", "asset_class_targets"}.issubset(summary):
+        expected_version = rebalance_data_version(
+            market_data_record_ids=summary["market_data_record_ids"],
+            holding_versions=summary["holding_versions"],
+            asset_class_targets=summary["asset_class_targets"],
+        )
+        if row["data_version"] != expected_version:
+            raise _RelationshipInvalid
     _validate_reference_map(
         connection, "data/rebalance_plans.json", owner_id,
         summary["market_data_record_ids"], "input_market_data",

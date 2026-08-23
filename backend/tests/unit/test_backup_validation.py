@@ -26,6 +26,7 @@ from app.services.backup_validation import (
     RestoreTokenRegistry,
     validate_backup,
 )
+from app.services.rebalance_version import rebalance_data_version
 
 
 NOW = datetime(2026, 8, 24, 4, 0, tzinfo=timezone.utc)
@@ -108,9 +109,7 @@ def _source() -> dict[str, list[dict[str, Any]]]:
         "holding_versions": {str(IDS["holding"]): 1},
         "asset_class_targets": {str(IDS["asset"]): "1"},
     }
-    data_version = hashlib.sha256(
-        json.dumps(version_payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    data_version = rebalance_data_version(**version_payload)
     source["data/rebalance_plans.json"] = [{
         "id": IDS["plan"], "strategy_mode": "actual", "status": "completed",
         "data_version": data_version, "create_idempotency_key": "create",
@@ -313,14 +312,16 @@ def test_rebalance_response_shape_requires_every_plan_response_key(tmp_path: Pat
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
 
 
-def test_legacy_rebalance_fallback_and_missing_asset_targets_are_supported(
-    tmp_path: Path,
+@pytest.mark.parametrize("missing_asset_targets", [False, True])
+def test_legacy_rebalance_fallback_and_optional_asset_targets_are_supported(
+    tmp_path: Path, missing_asset_targets: bool,
 ) -> None:
     source = _source()
     plan = source["data/rebalance_plans.json"][0]
     plan["input_summary"].update(plan["input_summary"]["resolved_constraints"])
     plan["input_summary"].pop("resolved_constraints")
-    plan["input_summary"].pop("asset_class_targets")
+    if missing_asset_targets:
+        plan["input_summary"].pop("asset_class_targets")
     plan["data_version"] = "legacy-opaque-version"
 
     _validate(tmp_path, source)
@@ -336,6 +337,50 @@ def test_legacy_rebalance_fallback_still_requires_renderer_constraint_keys(
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+def test_modern_rebalance_data_version_must_match_exact_inputs(tmp_path: Path) -> None:
+    source = _source()
+    source["data/rebalance_plans.json"][0]["data_version"] = "0" * 64
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+
+    assert exc_info.value.code == "BACKUP_RELATIONSHIP_INVALID"
+
+
+def test_modern_rebalance_exact_data_version_is_accepted(tmp_path: Path) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    summary = plan["input_summary"]
+    plan["data_version"] = rebalance_data_version(
+        market_data_record_ids=summary["market_data_record_ids"],
+        holding_versions=summary["holding_versions"],
+        asset_class_targets=summary["asset_class_targets"],
+    )
+
+    _validate(tmp_path, source)
+
+
+def test_holding_version_zero_is_rejected(tmp_path: Path) -> None:
+    source = _source()
+    source["data/rebalance_plans.json"][0]["input_summary"]["holding_versions"] = {
+        str(IDS["holding"]): 0,
+    }
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+def test_holding_version_one_is_accepted(tmp_path: Path) -> None:
+    source = _source()
+    source["data/rebalance_plans.json"][0]["input_summary"]["holding_versions"] = {
+        str(IDS["holding"]): 1,
+    }
+
+    _validate(tmp_path, source)
 
 
 @pytest.mark.parametrize(
@@ -415,9 +460,7 @@ def test_rebalance_market_input_references_accept_manual_overrides(tmp_path: Pat
         "holding_versions": plan["input_summary"]["holding_versions"],
         "asset_class_targets": plan["input_summary"]["asset_class_targets"],
     }
-    plan["data_version"] = hashlib.sha256(
-        json.dumps(version_payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    plan["data_version"] = rebalance_data_version(**version_payload)
 
     _validate(tmp_path, source)
 
