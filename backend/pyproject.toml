@@ -11,6 +11,7 @@ dependencies = [
     "cryptography>=45,<47",
     "fastapi>=0.116,<1",
     "greenlet>=3.1,<4",
+    "ijson>=3.4,<4",
     "pydantic-settings>=2.10,<3",
     "sqlalchemy>=2.0,<3",
     "uvicorn[standard]>=0.35,<1",
