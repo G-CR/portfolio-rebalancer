@@ -382,7 +382,14 @@ def _validate_scalars(member: str, row: dict[str, JsonValue]) -> None:
         if weight < 0 or weight > 1:
             raise _Incompatible
     elif member == "data/holdings.json":
-        if not 0 <= int(row["quantity_precision"]) <= 12 or _decimal(row["lot_size"]) <= 0 or int(row["version"]) < 0:
+        version = row["version"]
+        if (
+            not 0 <= int(row["quantity_precision"]) <= 12
+            or _decimal(row["lot_size"]) <= 0
+            or isinstance(version, bool)
+            or not isinstance(version, int)
+            or version < 1
+        ):
             raise _Incompatible
         for field in ("quantity", "average_cost_price", "cost_fx_to_cny", "baseline_fx_to_cny"):
             if _decimal(row[field]) < 0:

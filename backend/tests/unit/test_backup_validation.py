@@ -279,6 +279,16 @@ def test_persisted_domain_constraint_families_are_rejected(
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
 
 
+def test_persisted_holding_version_zero_is_rejected(tmp_path: Path) -> None:
+    source = _source()
+    source["data/holdings.json"][0]["version"] = 0
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
 @pytest.mark.parametrize("priority", [[], ["akshare", "yahoo", "tushare", "alpha_vantage"]])
 def test_provider_priority_accepts_and_preserves_seed_and_known_legacy_subsets(
     tmp_path: Path, priority: list[str],
