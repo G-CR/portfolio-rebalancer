@@ -133,10 +133,16 @@ class BackupOperationManager:
                     completed_exports.add(operation.id)
         self.storage.cleanup_orphans(valid_export_ids=completed_exports)
         self.cleanup_expired(now=now)
+        self.storage.enforce_safety_retention()
 
-    def cleanup_expired(self, *, now: datetime | None = None) -> None:
+    def cleanup_expired(self, *, now: datetime | None = None) -> bool:
         timestamp = now or self._clock()
-        for operation in self.storage.list_operations():
+        maintenance_failed = False
+        try:
+            operations = self.storage.list_operations()
+        except Exception:
+            return True
+        for operation in operations:
             if operation.kind != "export" or operation.status != "succeeded":
                 continue
             try:
@@ -146,8 +152,8 @@ class BackupOperationManager:
                     retry_expired_artifact=True,
                 )
             except Exception:
-                continue
-        self.storage.enforce_safety_retention()
+                maintenance_failed = True
+        return maintenance_failed
 
     def consume_export(self, operation_id: UUID) -> None:
         operation = self._read_operation(operation_id)
@@ -302,15 +308,26 @@ class BackupOperationManager:
 
     async def _cleanup_loop(self) -> None:
         while True:
-            try:
-                self.cleanup_expired()
-            except Exception:
-                pass
-            try:
-                timeout = self._seconds_until_next_expiry()
-            except Exception:
-                timeout = self.cleanup_interval_seconds
             self._cleanup_wakeup.clear()
+            try:
+                maintenance_failed = bool(self.cleanup_expired())
+            except Exception:
+                maintenance_failed = True
+            retention_debt = False
+            try:
+                if self.storage.has_safety_retention_debt():
+                    await asyncio.to_thread(self.storage.enforce_safety_retention)
+                    retention_debt = self.storage.has_safety_retention_debt()
+            except Exception:
+                maintenance_failed = True
+                retention_debt = True
+            if maintenance_failed or retention_debt:
+                timeout = self.cleanup_interval_seconds
+            else:
+                try:
+                    timeout = self._seconds_until_next_expiry()
+                except Exception:
+                    timeout = self.cleanup_interval_seconds
             try:
                 await asyncio.wait_for(self._cleanup_wakeup.wait(), timeout=timeout)
             except TimeoutError:

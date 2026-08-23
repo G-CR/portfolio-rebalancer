@@ -167,6 +167,18 @@ class BackupStorage:
             except Exception:
                 continue
 
+    def has_safety_retention_debt(self) -> bool:
+        candidate_count = 0
+        for path in self.safety_dir.glob("*.portfolio-backup"):
+            try:
+                UUID(path.stem)
+            except ValueError:
+                continue
+            candidate_count += 1
+            if candidate_count > self.safety_retention:
+                return True
+        return False
+
     def _atomic_write(self, destination: Path, payload: bytes) -> None:
         temporary_path: Path | None = None
         try:

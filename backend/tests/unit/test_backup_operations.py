@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import stat
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -380,6 +381,56 @@ async def test_cleanup_loop_contains_filesystem_failure_and_cleans_later_expiry(
     await manager.stop()
 
 
+@pytest.mark.asyncio
+async def test_atomic_journal_failure_retries_at_bounded_interval_then_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    operation = _completed_export(
+        storage,
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    manager = BackupOperationManager(storage, cleanup_interval_seconds=0.05)
+    real_write = storage.write_operation
+    writes_blocked = True
+    write_attempts = 0
+    heartbeats = 0
+
+    def blocked_atomic_write(candidate):
+        nonlocal write_attempts
+        if candidate.id == operation.id and candidate.download_ready is False:
+            write_attempts += 1
+            if writes_blocked:
+                raise OSError("synthetic atomic journal failure /private/path")
+        real_write(candidate)
+
+    async def heartbeat() -> None:
+        nonlocal heartbeats
+        deadline = asyncio.get_running_loop().time() + 0.13
+        while asyncio.get_running_loop().time() < deadline:
+            heartbeats += 1
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(storage, "write_operation", blocked_atomic_write)
+    manager.start_cleanup()
+    await heartbeat()
+
+    assert heartbeats > 10
+    assert 2 <= write_attempts <= 4
+    assert storage.read_operation(operation.id).download_ready is True
+    assert storage.export_path(operation.id).exists()
+
+    writes_blocked = False
+    manager._cleanup_wakeup.set()
+    async with asyncio.timeout(1):
+        while storage.export_path(operation.id).exists():
+            await asyncio.sleep(0.01)
+
+    assert storage.read_operation(operation.id).download_ready is False
+    await manager.stop()
+
+
 def test_safety_retention_deletes_oldest_only_after_sixth_is_valid_and_durable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -564,6 +615,7 @@ async def test_cleanup_loop_retries_inner_safety_retention_failure(
     manager = BackupOperationManager(storage, cleanup_interval_seconds=0.01)
     real_delete = storage.delete_safety_backup
     deleted = asyncio.Event()
+    event_loop = asyncio.get_running_loop()
     calls = 0
 
     def flaky_delete(backup_id):
@@ -572,7 +624,7 @@ async def test_cleanup_loop_retries_inner_safety_retention_failure(
         if calls <= 2:
             raise OSError("persistent synthetic retention failure /private/path")
         result = real_delete(backup_id)
-        deleted.set()
+        event_loop.call_soon_threadsafe(deleted.set)
         return result
 
     monkeypatch.setattr(storage, "delete_safety_backup", flaky_delete)
@@ -583,6 +635,86 @@ async def test_cleanup_loop_retries_inner_safety_retention_failure(
 
     assert calls == 3
     assert len(storage.list_safety_backups()) == 5
+    await manager.stop()
+
+
+def test_safety_debt_check_with_five_candidates_never_inspects_archives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=5)
+    storage.initialize()
+    for _ in range(5):
+        storage.safety_path(uuid4()).write_bytes(b"candidate")
+
+    def fail_inspection(*_args, **_kwargs):
+        raise AssertionError("cheap debt check must not inspect archives")
+
+    monkeypatch.setattr(storage, "_inspect_safety", fail_inspection)
+
+    assert storage.has_safety_retention_debt() is False
+
+
+@pytest.mark.asyncio
+async def test_normal_cleanup_skips_safety_enforcer_without_debt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=5)
+    storage.initialize()
+    checked = asyncio.Event()
+    calls = 0
+
+    def cheap_check() -> bool:
+        checked.set()
+        return False
+
+    def unexpected_enforcement() -> None:
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(storage, "has_safety_retention_debt", cheap_check)
+    monkeypatch.setattr(storage, "enforce_safety_retention", unexpected_enforcement)
+    manager = BackupOperationManager(storage, cleanup_interval_seconds=60)
+    manager.start_cleanup()
+
+    async with asyncio.timeout(1):
+        await checked.wait()
+    await asyncio.sleep(0)
+
+    assert calls == 0
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_blocked_safety_enforcement_does_not_block_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=5)
+    storage.initialize()
+    for _ in range(6):
+        storage.safety_path(uuid4()).write_bytes(b"candidate")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_enforcement() -> None:
+        entered.set()
+        release.wait(timeout=1)
+
+    async def heartbeat() -> None:
+        await asyncio.sleep(0.02)
+        release.set()
+
+    monkeypatch.setattr(storage, "enforce_safety_retention", blocked_enforcement)
+    manager = BackupOperationManager(storage, cleanup_interval_seconds=60)
+    started_at = asyncio.get_running_loop().time()
+    heartbeat_task = asyncio.create_task(heartbeat())
+    manager.start_cleanup()
+
+    async with asyncio.timeout(1):
+        while not entered.is_set():
+            await asyncio.sleep(0)
+        await heartbeat_task
+
+    assert asyncio.get_running_loop().time() - started_at < 0.2
     await manager.stop()
 
 
