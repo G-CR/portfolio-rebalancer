@@ -571,7 +571,7 @@ def test_restore_batch_exact_row_limit_does_not_prefetch_row_1001(
 ) -> None:
     template = _validated_source()["data/asset_classes.json"][0]
     rows = []
-    for index in range(1000):
+    for index in range(1001):
         row = copy.deepcopy(template)
         row["id"] = UUID(int=index + 1)
         row["notes"] = None
@@ -595,8 +595,16 @@ def test_restore_batch_exact_row_limit_does_not_prefetch_row_1001(
     assert len(first) == 1000
     assert converted == 1000
     assert not hasattr(reader, "pending_database_row")
-    assert reader.next_batch() == []
-    assert converted == 1000
+    second = reader.next_batch()
+    assert len(second) == 1
+    assert converted == 1001
+    assert not hasattr(reader, "pending_database_row")
+    third = reader.next_batch()
+    assert third == []
+    assert converted == 1001
+    assert [row["id"] for row in [*first, *second]] == [
+        row["id"] for row in rows
+    ]
 
 
 @pytest.mark.asyncio
