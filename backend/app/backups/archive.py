@@ -8,7 +8,7 @@ import stat
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -122,8 +122,10 @@ class InspectedArchive:
         return self.manifest.format_version
 
     def close(self) -> None:
-        self._zip.close()
-        self._snapshot.close()
+        try:
+            self._zip.close()
+        finally:
+            self._snapshot.close()
 
     def __enter__(self) -> InspectedArchive:
         return self
@@ -233,6 +235,8 @@ def _validate_field(value: object, codec: Codec) -> None:
             raise InvalidBackupDocument("backup datetime must be timezone-aware")
         if parsed_datetime.isoformat() != value:
             raise InvalidBackupDocument("backup datetime is not canonical")
+        if parsed_datetime.utcoffset() != timedelta(0):
+            raise InvalidBackupDocument("backup datetime must use canonical UTC")
     elif codec is Codec.JSON:
         _validate_json_tree(value)
 
@@ -473,6 +477,8 @@ def _parse_manifest(document: dict[str, Any], version: int) -> BackupManifest:
         raise InvalidBackupDocument("export timestamp must be timezone-aware")
     if parsed_exported_at.isoformat() != exported_at:
         raise InvalidBackupDocument("export timestamp is not canonical")
+    if parsed_exported_at.utcoffset() != timedelta(0):
+        raise InvalidBackupDocument("export timestamp must use canonical UTC")
     if not isinstance(checksum, str) or len(checksum) != 64:
         raise InvalidBackupDocument("logical checksum is invalid")
     try:
@@ -615,6 +621,7 @@ def inspect_archive(path: Path) -> InspectedArchive:
     path = Path(path)
     snapshot: BinaryIO | None = None
     archive: ZipFile | None = None
+    owns_resources = True
     try:
         snapshot, compressed_size, archive_sha256 = _snapshot_archive(path)
         archive = ZipFile(snapshot)
@@ -642,6 +649,18 @@ def inspect_archive(path: Path) -> InspectedArchive:
                     raise InvalidBackupDocument("backup logical checksum does not match manifest")
             finally:
                 connection.close()
+        inspected = InspectedArchive(
+            path=path,
+            manifest=manifest,
+            archive_sha256=archive_sha256,
+            compressed_size=compressed_size,
+            _snapshot=snapshot,
+            _zip=archive,
+            _verification_token=_VERIFIED_ARCHIVE_TOKEN,
+        )
+        migrate_to_current(inspected)
+        owns_resources = False
+        return inspected
     except (
         ArchiveLimitExceeded,
         BackupMigrationError,
@@ -649,35 +668,19 @@ def inspect_archive(path: Path) -> InspectedArchive:
         InvalidBackupDocument,
         UnsupportedBackupVersion,
     ):
-        if archive is not None:
-            archive.close()
-        if snapshot is not None:
-            snapshot.close()
         raise
     except BadZipFile:
-        if archive is not None:
-            archive.close()
-        if snapshot is not None:
-            snapshot.close()
         raise InvalidBackupArchive("backup is not a valid ZIP archive") from None
     except OSError:
-        if archive is not None:
-            archive.close()
-        if snapshot is not None:
-            snapshot.close()
         raise InvalidBackupArchive("backup archive is unavailable") from None
-    assert archive is not None and snapshot is not None
-    inspected = InspectedArchive(
-        path=path,
-        manifest=manifest,
-        archive_sha256=archive_sha256,
-        compressed_size=compressed_size,
-        _snapshot=snapshot,
-        _zip=archive,
-        _verification_token=_VERIFIED_ARCHIVE_TOKEN,
-    )
-    migrate_to_current(inspected)
-    return inspected
+    finally:
+        if owns_resources:
+            try:
+                if archive is not None:
+                    archive.close()
+            finally:
+                if snapshot is not None:
+                    snapshot.close()
 
 
 def _verified_inspected_archive(

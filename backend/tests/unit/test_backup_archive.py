@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -107,6 +108,42 @@ def rewrite_manifest_and_member(
         destination,
         replace={member: payload, "manifest.json": manifest_payload},
     )
+
+
+class TrackingSnapshot:
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+        self.close_called = False
+
+    @property
+    def closed(self) -> bool:
+        return self.delegate.closed
+
+    def close(self) -> None:
+        self.close_called = True
+        self.delegate.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.delegate, name)
+
+
+def track_temporary_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[TrackingSnapshot]:
+    real_temporary_file = archive_module.tempfile.TemporaryFile
+    snapshots: list[TrackingSnapshot] = []
+
+    def tracking_temporary_file(*args: Any, **kwargs: Any) -> TrackingSnapshot:
+        snapshot = TrackingSnapshot(real_temporary_file(*args, **kwargs))
+        snapshots.append(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(
+        archive_module.tempfile,
+        "TemporaryFile",
+        tracking_temporary_file,
+    )
+    return snapshots
 
 
 def test_v1_constants_freeze_exact_archive_limits_and_members() -> None:
@@ -244,6 +281,48 @@ def test_writer_is_deterministic_and_round_trips_rows(tmp_path: Path) -> None:
     ]
 
 
+def test_reader_rejects_non_utc_datetime_even_with_matching_logical_checksum(
+    tmp_path: Path,
+) -> None:
+    source = empty_source()
+    source["data/asset_classes.json"] = [
+        {
+            "id": FIXED_UUID,
+            "name": "noncanonical timestamp",
+            "target_weight": Decimal("1.000000000000"),
+            "display_order": 0,
+            "is_active": True,
+            "notes": None,
+            "created_at": FIXED_TIME,
+            "updated_at": FIXED_TIME,
+        }
+    ]
+    valid = write_valid_archive(tmp_path, source)
+    with ZipFile(valid) as archive:
+        document = {
+            member: json.loads(archive.read(member)) for member in DATA_MEMBERS
+        }
+    row = document["data/asset_classes.json"][0]
+    row["created_at"] = "2026-08-23T20:34:56.123456+08:00"
+    row["updated_at"] = "2026-08-23T20:34:56.123456+08:00"
+    payload = json.dumps(
+        document["data/asset_classes.json"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    hostile = rewrite_manifest_and_member(
+        valid,
+        tmp_path / "non-utc-datetime.portfolio-backup",
+        "data/asset_classes.json",
+        payload,
+        logical_checksum=logical_checksum(document),
+    )
+
+    with pytest.raises(InvalidBackupDocument, match="UTC"):
+        inspect_archive(hostile)
+
+
 def test_writer_inspector_and_iterator_preserve_nested_fractional_json_numbers(
     tmp_path: Path,
 ) -> None:
@@ -301,6 +380,72 @@ def test_archive_requires_exact_allowlisted_members(tmp_path: Path) -> None:
 def test_missing_archive_path_raises_typed_sanitized_error(tmp_path: Path) -> None:
     with pytest.raises(InvalidBackupArchive):
         inspect_archive(tmp_path / "missing.portfolio-backup")
+
+
+def test_unexpected_validation_failure_closes_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid = write_valid_archive(tmp_path)
+    snapshots = track_temporary_snapshots(monkeypatch)
+
+    def fail_validation(*_: Any, **__: Any) -> int:
+        raise RuntimeError("injected validation failure")
+
+    monkeypatch.setattr(archive_module, "_store_member_rows", fail_validation)
+
+    with pytest.raises(RuntimeError, match="injected validation failure"):
+        inspect_archive(valid)
+
+    assert len(snapshots) == 1
+    assert snapshots[0].close_called
+
+
+def test_migration_failure_closes_snapshot_without_relying_on_finalizer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid = write_valid_archive(tmp_path)
+    snapshots = track_temporary_snapshots(monkeypatch)
+    retained_archives: list[Any] = []
+
+    def fail_migration(inspected: Any) -> None:
+        retained_archives.append(inspected)
+        raise RuntimeError("injected migration failure")
+
+    monkeypatch.setattr(archive_module, "migrate_to_current", fail_migration)
+
+    with pytest.raises(RuntimeError, match="injected migration failure"):
+        inspect_archive(valid)
+
+    assert retained_archives
+    assert len(snapshots) == 1
+    assert snapshots[0].close_called
+
+
+def test_inspected_archive_close_closes_snapshot_when_zip_close_raises(
+    tmp_path: Path,
+) -> None:
+    inspected = inspect_archive(write_valid_archive(tmp_path))
+
+    class RaisingZip:
+        def close(self) -> None:
+            raise RuntimeError("injected ZIP close failure")
+
+    class RecordingSnapshot:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    snapshot = RecordingSnapshot()
+    failing = replace(inspected, _snapshot=snapshot, _zip=RaisingZip())
+    try:
+        with pytest.raises(RuntimeError, match="injected ZIP close failure"):
+            failing.close()
+        assert snapshot.closed
+    finally:
+        inspected.close()
 
 
 @pytest.mark.parametrize(
