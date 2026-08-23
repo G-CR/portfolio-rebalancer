@@ -91,7 +91,13 @@ class BackupStorage:
     def delete_export(self, operation_id: UUID) -> None:
         self.export_path(operation_id).unlink(missing_ok=True)
 
-    def publish_safety_backup(self, backup_id: UUID, partial_path: Path) -> SafetyBackupResponse:
+    def publish_safety_backup(
+        self,
+        backup_id: UUID,
+        partial_path: Path,
+        *,
+        enforce_retention: bool = True,
+    ) -> SafetyBackupResponse:
         partial_path = Path(partial_path)
         expected_partial = self.safety_partial_path(backup_id)
         if partial_path != expected_partial:
@@ -106,7 +112,8 @@ class BackupStorage:
         except BaseException:
             partial_path.unlink(missing_ok=True)
             raise
-        self.enforce_safety_retention()
+        if enforce_retention:
+            self.enforce_safety_retention()
         return metadata
 
     def list_safety_backups(self) -> list[SafetyBackupResponse]:

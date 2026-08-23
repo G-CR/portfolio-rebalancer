@@ -33,8 +33,12 @@ class BackupOperationContext:
     async def set_stage(self, stage: BackupStage) -> None:
         self._manager.set_stage(self.operation_id, stage)
 
+    async def set_safety_backup_id(self, backup_id: UUID) -> None:
+        self._manager.set_safety_backup_id(self.operation_id, backup_id)
+
 
 OperationRunner = Callable[[BackupOperationContext], Awaitable[object]]
+OperationPrepare = Callable[[], Awaitable[None] | None]
 Clock = Callable[[], datetime]
 
 
@@ -60,10 +64,20 @@ class BackupOperationManager:
         self._stopped = False
         self._stopped_event = asyncio.Event()
 
-    async def start(self, kind: OperationKind, runner: OperationRunner) -> BackupOperation:
+    async def start(
+        self,
+        kind: OperationKind,
+        runner: OperationRunner,
+        *,
+        prepare: OperationPrepare | None = None,
+    ) -> BackupOperation:
         async with self._state_lock:
             if self._stopping or self._stopped or self._active_operation_id is not None:
                 raise BackupOperationConflict()
+            if prepare is not None:
+                preparation = prepare()
+                if preparation is not None:
+                    await preparation
             operation = BackupOperation.new(kind, now=self._clock())
             self.storage.write_operation(operation)
             self._active_operation_id = operation.id
@@ -102,6 +116,15 @@ class BackupOperationManager:
     def set_stage(self, operation_id: UUID, stage: BackupStage) -> BackupOperation:
         operation = self.get(operation_id).model_copy(
             update={"stage": stage, "updated_at": self._clock()}
+        )
+        self.storage.write_operation(operation)
+        return operation
+
+    def set_safety_backup_id(
+        self, operation_id: UUID, backup_id: UUID
+    ) -> BackupOperation:
+        operation = self.get(operation_id).model_copy(
+            update={"safety_backup_id": backup_id, "updated_at": self._clock()}
         )
         self.storage.write_operation(operation)
         return operation

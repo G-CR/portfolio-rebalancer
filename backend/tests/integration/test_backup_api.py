@@ -541,3 +541,45 @@ async def test_safety_preview_missing_is_typed_and_sanitized(api_client) -> None
             "message": "Safety backup was not found.",
         }
     }
+
+
+async def test_confirmed_restore_consumes_token_and_reports_safety_backup(
+    api_client, tmp_path: Path
+) -> None:
+    archive, secret = _preview_archive(tmp_path / "restore.portfolio-backup")
+    uploaded = await api_client.post(
+        "/api/backups/upload",
+        content=archive.read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert uploaded.status_code == 200
+    token = uploaded.json()["restore_token"]
+
+    rejected = await api_client.post(
+        "/api/backups/restore",
+        json={"restore_token": token, "confirmation": "restore"},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "BACKUP_CONFIRMATION_INVALID"
+
+    started = await api_client.post(
+        "/api/backups/restore",
+        json={"restore_token": token, "confirmation": "恢复"},
+    )
+    assert started.status_code == 202
+    completed = await _poll_terminal(api_client, started.json()["id"])
+    assert completed["status"] == "succeeded"
+    assert completed["stage"] == "completed"
+    assert completed["safety_backup_id"]
+    assert secret not in str(completed)
+    async with SessionFactory() as session:
+        assert await session.scalar(
+            text("SELECT name FROM asset_classes WHERE id = '00000000-0000-0000-0000-000000000900'")
+        ) == "Synthetic"
+
+    replay = await api_client.post(
+        "/api/backups/restore",
+        json={"restore_token": token, "confirmation": "恢复"},
+    )
+    assert replay.status_code == 422
+    assert replay.json()["detail"]["code"] == "BACKUP_TOKEN_INVALID"

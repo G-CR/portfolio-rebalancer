@@ -21,7 +21,11 @@ from app.schemas.backup import (
     BackupOperationResponse,
     BackupPreviewResponse,
     SafetyBackupResponse,
+    BackupRestoreRequest,
 )
+from app.core.config import get_settings
+from app.core.secrets import SecretStore
+from app.services.backup_restore import restore_validated_backup
 from app.services.backup_export import export_database_backup
 from app.services.backup_operations import BackupOperationManager
 from app.services.backup_storage import BackupStorage
@@ -216,6 +220,73 @@ async def post_export(request: Request) -> BackupOperationResponse:
         operation = await manager.start("export", run_export)
     except ServiceError as exc:
         raise _service_error(exc) from exc
+    return BackupOperationResponse.model_validate(operation)
+
+
+@router.post("/restore", response_model=BackupOperationResponse, status_code=202)
+async def post_restore(
+    payload: BackupRestoreRequest,
+    request: Request,
+) -> BackupOperationResponse:
+    if payload.confirmation != "恢复":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "BACKUP_CONFIRMATION_INVALID",
+                "message": "Restore confirmation text is invalid.",
+            },
+        )
+    storage = _storage(request)
+    manager = _manager(request)
+    registry = RestoreTokenRegistry(storage)
+    binding_holder = []
+
+    async def consume_token() -> None:
+        binding_holder.append(
+            await asyncio.to_thread(registry.consume, payload.restore_token)
+        )
+
+    async def run_restore(context) -> None:
+        binding = binding_holder[0]
+        referenced_safety_id: UUID | None = None
+        if binding.path_id.startswith("safety:"):
+            referenced_safety_id = UUID(binding.path_id.partition(":")[2])
+        try:
+            validated = await asyncio.to_thread(
+                validate_backup,
+                binding.retained_archive_path,
+                path_id=binding.path_id,
+                expires_at=binding.expires_at,
+                workspace_root=storage.tmp_dir,
+            )
+            if validated.archive_sha256 != binding.archive_sha256:
+                raise BackupValidationError(
+                    "BACKUP_TOKEN_INVALID", "Restore token is invalid."
+                )
+            settings = get_settings()
+            async with SessionFactory() as session:
+                async with session.begin():
+                    result = await restore_validated_backup(
+                        session,
+                        validated,
+                        storage=storage,
+                        secret_store=SecretStore(Path(settings.secret_key_path)),
+                        progress=context,
+                    )
+                    await context.set_safety_backup_id(result.safety_backup_id)
+        finally:
+            if referenced_safety_id is not None:
+                manager.release_safety_backup(referenced_safety_id)
+
+    try:
+        operation = await manager.start("restore", run_restore, prepare=consume_token)
+    except BackupValidationError as exc:
+        raise _validation_error(exc) from exc
+    except ServiceError as exc:
+        raise _service_error(exc) from exc
+    binding = binding_holder[0]
+    if binding.path_id.startswith("safety:"):
+        manager.reference_safety_backup(UUID(binding.path_id.partition(":")[2]))
     return BackupOperationResponse.model_validate(operation)
 
 

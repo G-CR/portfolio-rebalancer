@@ -33,6 +33,12 @@ class BackupOperationResponse(BaseModel):
     stage: BackupStage
     error: BackupError | None = None
     download_ready: bool = False
+    safety_backup_id: UUID | None = None
+
+
+class BackupRestoreRequest(BaseModel):
+    restore_token: str = Field(min_length=1)
+    confirmation: str
 
 
 class BackupOperation(BackupOperationResponse):
