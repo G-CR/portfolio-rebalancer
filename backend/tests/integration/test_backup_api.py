@@ -91,6 +91,53 @@ async def test_export_download_rejects_exactly_at_and_after_expiry(
     assert not storage.export_path(operation.id).exists()
 
 
+async def test_expired_download_retries_artifact_deletion_after_inner_failure(
+    api_client, monkeypatch
+) -> None:
+    storage = app.state.backup_storage
+    manager = app.state.backup_operation_manager
+    deadline = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    operation = BackupOperation.new("export", now=deadline - timedelta(minutes=30)).model_copy(
+        update={
+            "status": "succeeded",
+            "stage": BackupStage.COMPLETED,
+            "download_ready": True,
+            "expires_at": deadline,
+        }
+    )
+    storage.write_operation(operation)
+    storage.export_path(operation.id).write_bytes(b"sensitive archive")
+    monkeypatch.setattr(manager, "_clock", lambda: deadline)
+    real_delete = storage.delete_export
+    calls = 0
+
+    def flaky_delete(operation_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("synthetic delete failure /private/path")
+        real_delete(operation_id)
+
+    monkeypatch.setattr(storage, "delete_export", flaky_delete)
+
+    response = await api_client.get(f"/api/backups/operations/{operation.id}/download")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "BACKUP_DOWNLOAD_NOT_READY"
+    assert storage.read_operation(operation.id).download_ready is False
+    assert storage.export_path(operation.id).exists()
+    polled = await api_client.get(f"/api/backups/operations/{operation.id}")
+    assert polled.status_code == 200
+    assert polled.json()["download_ready"] is False
+    assert calls == 1
+    assert storage.export_path(operation.id).exists()
+
+    manager.cleanup_expired(now=deadline + timedelta(seconds=1))
+
+    assert calls == 2
+    assert not storage.export_path(operation.id).exists()
+
+
 async def test_recovery_reconciles_crash_window_missing_export(api_client) -> None:
     storage = app.state.backup_storage
     manager = app.state.backup_operation_manager

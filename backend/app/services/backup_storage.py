@@ -44,6 +44,7 @@ class BackupStorage:
         ):
             directory.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIRECTORY_MODE)
             directory.chmod(PRIVATE_DIRECTORY_MODE)
+        self.enforce_safety_retention()
 
     def operation_journal_path(self, operation_id: UUID) -> Path:
         return self.operations_dir / f"{operation_id}.json"
@@ -105,7 +106,7 @@ class BackupStorage:
         except BaseException:
             partial_path.unlink(missing_ok=True)
             raise
-        self._retain_newest_safety_backups()
+        self.enforce_safety_retention()
         return metadata
 
     def list_safety_backups(self) -> list[SafetyBackupResponse]:
@@ -155,7 +156,7 @@ class BackupStorage:
                 record_counts=dict(inspected.manifest.record_counts),
             )
 
-    def _retain_newest_safety_backups(self) -> None:
+    def enforce_safety_retention(self) -> None:
         try:
             backups = self.list_safety_backups()
         except Exception:

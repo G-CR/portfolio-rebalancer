@@ -242,6 +242,44 @@ def test_get_reconciles_export_at_or_after_exact_expiry(
     assert not storage.export_path(operation.id).exists()
 
 
+def test_expired_export_delete_failure_is_retried_after_readiness_clears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    deadline = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    operation = _completed_export(storage, expires_at=deadline)
+    manager = BackupOperationManager(
+        storage,
+        cleanup_interval_seconds=17,
+        clock=lambda: deadline,
+    )
+    real_delete = storage.delete_export
+    calls = 0
+
+    def flaky_delete(operation_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("synthetic delete failure /private/path")
+        real_delete(operation_id)
+
+    monkeypatch.setattr(storage, "delete_export", flaky_delete)
+
+    unavailable = manager.get(operation.id)
+    assert unavailable.download_ready is False
+    assert storage.export_path(operation.id).exists()
+    assert manager._seconds_until_next_expiry() == 17
+    assert manager.get(operation.id).download_ready is False
+    assert calls == 1
+    assert storage.export_path(operation.id).exists()
+
+    manager.cleanup_expired(now=deadline + timedelta(seconds=1))
+
+    assert calls == 2
+    assert not storage.export_path(operation.id).exists()
+
+
 def test_recovery_reconciles_missing_succeeded_export(tmp_path: Path) -> None:
     storage = BackupStorage(tmp_path)
     storage.initialize()
@@ -257,6 +295,33 @@ def test_recovery_reconciles_missing_succeeded_export(tmp_path: Path) -> None:
     recovered = manager.get(operation.id)
     assert recovered.status == "succeeded"
     assert recovered.download_ready is False
+
+
+def test_recovery_preserves_expired_delete_debt_for_periodic_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    deadline = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    operation = _completed_export(storage, expires_at=deadline)
+    manager = BackupOperationManager(storage, clock=lambda: deadline)
+    real_unlink = Path.unlink
+    deletion_blocked = True
+
+    def blocked_unlink(path: Path, *args, **kwargs):
+        if deletion_blocked and path == storage.export_path(operation.id):
+            raise OSError("persistent synthetic delete failure /private/path")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", blocked_unlink)
+
+    manager.recover()
+
+    assert manager.get(operation.id).download_ready is False
+    assert storage.export_path(operation.id).exists()
+    deletion_blocked = False
+    manager.cleanup_expired(now=deadline + timedelta(seconds=1))
+    assert not storage.export_path(operation.id).exists()
 
 
 @pytest.mark.asyncio
@@ -431,6 +496,94 @@ def test_safety_publication_succeeds_when_best_effort_retention_has_failures(
     assert storage.safety_path(newest_id).exists()
     assert len(attempted) >= 2
     assert any(not storage.safety_path(backup_id).exists() for backup_id in existing_ids)
+
+
+def test_safety_retention_debt_is_retried_without_new_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=10)
+    storage.initialize()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    backup_ids = []
+    for index in range(5):
+        backup_id = uuid4()
+        backup_ids.append(backup_id)
+        partial = storage.safety_partial_path(backup_id)
+        _write_archive(partial, base + timedelta(minutes=index))
+        storage.publish_safety_backup(backup_id, partial)
+
+    storage.safety_retention = 5
+    real_unlink = Path.unlink
+    failed = False
+
+    def fail_first_retention_unlink(path: Path, *args, **kwargs):
+        nonlocal failed
+        if path.parent == storage.safety_dir and not failed:
+            failed = True
+            raise OSError("synthetic retention failure /private/path")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_first_retention_unlink)
+    newest_id = uuid4()
+    newest_partial = storage.safety_partial_path(newest_id)
+    _write_archive(newest_partial, base + timedelta(minutes=5))
+
+    published = storage.publish_safety_backup(newest_id, newest_partial)
+
+    assert published.id == newest_id
+    assert len(storage.list_safety_backups()) == 6
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+
+    BackupOperationManager(storage).recover()
+
+    retained = storage.list_safety_backups()
+    assert len(retained) == 5
+    assert [item.id for item in retained] == [
+        newest_id,
+        backup_ids[4],
+        backup_ids[3],
+        backup_ids[2],
+        backup_ids[1],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_loop_retries_inner_safety_retention_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=10)
+    storage.initialize()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for index in range(6):
+        backup_id = uuid4()
+        partial = storage.safety_partial_path(backup_id)
+        _write_archive(partial, base + timedelta(minutes=index))
+        storage.publish_safety_backup(backup_id, partial)
+    storage.safety_retention = 5
+
+    manager = BackupOperationManager(storage, cleanup_interval_seconds=0.01)
+    real_delete = storage.delete_safety_backup
+    deleted = asyncio.Event()
+    calls = 0
+
+    def flaky_delete(backup_id):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise OSError("persistent synthetic retention failure /private/path")
+        result = real_delete(backup_id)
+        deleted.set()
+        return result
+
+    monkeypatch.setattr(storage, "delete_safety_backup", flaky_delete)
+    manager.start_cleanup()
+
+    async with asyncio.timeout(1):
+        await deleted.wait()
+
+    assert calls == 3
+    assert len(storage.list_safety_backups()) == 5
+    await manager.stop()
 
 
 @pytest.mark.asyncio

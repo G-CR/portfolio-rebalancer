@@ -77,7 +77,11 @@ class BackupOperationManager:
 
     def get(self, operation_id: UUID) -> BackupOperation:
         operation = self._read_operation(operation_id)
-        return self._reconcile_export_readiness(operation, now=self._clock())
+        return self._reconcile_export_readiness(
+            operation,
+            now=self._clock(),
+            retry_expired_artifact=False,
+        )
 
     def _read_operation(self, operation_id: UUID) -> BackupOperation:
         operation = self.storage.read_operation(operation_id)
@@ -120,8 +124,12 @@ class BackupOperationManager:
                 self.storage.write_operation(interrupted)
                 self.storage.delete_export(operation.id)
             elif operation.kind == "export" and operation.status == "succeeded":
-                operation = self._reconcile_export_readiness(operation, now=now)
-                if operation.download_ready:
+                operation = self._reconcile_export_readiness(
+                    operation,
+                    now=now,
+                    retry_expired_artifact=True,
+                )
+                if operation.download_ready or self.storage.export_path(operation.id).is_file():
                     completed_exports.add(operation.id)
         self.storage.cleanup_orphans(valid_export_ids=completed_exports)
         self.cleanup_expired(now=now)
@@ -132,9 +140,14 @@ class BackupOperationManager:
             if operation.kind != "export" or operation.status != "succeeded":
                 continue
             try:
-                self._reconcile_export_readiness(operation, now=timestamp)
+                self._reconcile_export_readiness(
+                    operation,
+                    now=timestamp,
+                    retry_expired_artifact=True,
+                )
             except Exception:
                 continue
+        self.storage.enforce_safety_retention()
 
     def consume_export(self, operation_id: UUID) -> None:
         operation = self._read_operation(operation_id)
@@ -308,22 +321,23 @@ class BackupOperationManager:
         operation: BackupOperation,
         *,
         now: datetime,
+        retry_expired_artifact: bool,
     ) -> BackupOperation:
         if (
             operation.kind != "export"
             or operation.status != "succeeded"
-            or not operation.download_ready
         ):
             return operation
         path = self.storage.export_path(operation.id)
+        path_exists = path.is_file()
         expired = operation.expires_at is not None and operation.expires_at <= now
-        if path.is_file() and not expired:
-            return operation
-        reconciled = operation.model_copy(
-            update={"download_ready": False, "updated_at": now}
-        )
-        self.storage.write_operation(reconciled)
-        if expired:
+        reconciled = operation
+        if operation.download_ready and (not path_exists or expired):
+            reconciled = operation.model_copy(
+                update={"download_ready": False, "updated_at": now}
+            )
+            self.storage.write_operation(reconciled)
+        if expired and path_exists and (operation.download_ready or retry_expired_artifact):
             try:
                 self.storage.delete_export(operation.id)
             except OSError:
