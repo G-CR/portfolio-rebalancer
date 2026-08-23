@@ -8,16 +8,21 @@ import stat
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from uuid import UUID
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile, ZipInfo
 
 import ijson
 
-from app.backups.canonical import JsonValue, canonical_json_bytes, encode_json_value
+from app.backups.canonical import (
+    JsonValue,
+    canonical_json_bytes,
+    canonical_parsed_json_bytes,
+    encode_json_value,
+)
 from app.backups.constants import (
     ALLOWED_MEMBERS,
     CURRENT_FORMAT_VERSION,
@@ -30,7 +35,12 @@ from app.backups.constants import (
     STREAM_CHUNK_BYTES,
 )
 from app.backups.contracts import CONTRACTS_BY_MEMBER, Codec, TableContract
-from app.backups.migrations import MigratedArchive, migrate_to_current, require_migration_path
+from app.backups.migrations import (
+    BackupMigrationError,
+    MigratedArchive,
+    migrate_to_current,
+    require_migration_path,
+)
 
 
 class BackupArchiveError(Exception):
@@ -51,6 +61,9 @@ class InvalidBackupDocument(BackupArchiveError):
 
 class UnsupportedBackupVersion(BackupArchiveError):
     pass
+
+
+_VERIFIED_ARCHIVE_TOKEN = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +111,31 @@ class ArchiveSummary:
 class InspectedArchive:
     path: Path
     manifest: BackupManifest
+    archive_sha256: str
+    compressed_size: int
+    _snapshot: BinaryIO
+    _zip: ZipFile
+    _verification_token: object
 
     @property
     def format_version(self) -> int:
         return self.manifest.format_version
+
+    def close(self) -> None:
+        self._zip.close()
+        self._snapshot.close()
+
+    def __enter__(self) -> InspectedArchive:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def _zip_info(member: str) -> ZipInfo:
@@ -238,7 +272,7 @@ def _insert_row(
     try:
         connection.execute(
             "INSERT INTO rows(member, order_key, payload) VALUES (?, ?, ?)",
-            (contract.member, str(order_key), canonical_json_bytes(row)),
+            (contract.member, str(order_key), canonical_parsed_json_bytes(row)),
         )
     except sqlite3.IntegrityError as exc:
         raise InvalidBackupDocument("duplicate backup row identity") from exc
@@ -356,7 +390,7 @@ def write_archive(
                 manifest = BackupManifest(
                     format_version=CURRENT_FORMAT_VERSION,
                     source_application_version=metadata.source_application_version,
-                    exported_at=metadata.exported_at.isoformat(),
+                    exported_at=metadata.exported_at.astimezone(timezone.utc).isoformat(),
                     display_timezone=metadata.display_timezone,
                     contains_plaintext_credentials=True,
                     record_counts=record_counts,
@@ -536,8 +570,8 @@ def _store_member_rows(
     return count
 
 
-def _check_archive_metadata(path: Path, infos: list[ZipInfo]) -> dict[str, ZipInfo]:
-    if path.stat().st_size > MAX_COMPRESSED_BYTES:
+def _check_archive_metadata(compressed_size: int, infos: list[ZipInfo]) -> dict[str, ZipInfo]:
+    if compressed_size > MAX_COMPRESSED_BYTES:
         raise ArchiveLimitExceeded("backup exceeds the compressed resource limit")
     names = [info.filename for info in infos]
     if len(names) != len(set(names)):
@@ -558,42 +592,112 @@ def _check_archive_metadata(path: Path, infos: list[ZipInfo]) -> dict[str, ZipIn
     return {info.filename: info for info in infos}
 
 
+def _snapshot_archive(path: Path) -> tuple[BinaryIO, int, str]:
+    snapshot = tempfile.TemporaryFile()
+    digest = hashlib.sha256()
+    observed = 0
+    try:
+        with path.open("rb") as source:
+            while chunk := source.read(STREAM_CHUNK_BYTES):
+                observed += len(chunk)
+                if observed > MAX_COMPRESSED_BYTES:
+                    raise ArchiveLimitExceeded("backup exceeds the compressed resource limit")
+                snapshot.write(chunk)
+                digest.update(chunk)
+        snapshot.seek(0)
+        return snapshot, observed, digest.hexdigest()
+    except Exception:
+        snapshot.close()
+        raise
+
+
 def inspect_archive(path: Path) -> InspectedArchive:
     path = Path(path)
+    snapshot: BinaryIO | None = None
+    archive: ZipFile | None = None
     try:
-        with ZipFile(path) as archive:
-            infos = archive.infolist()
-            by_name = _check_archive_metadata(path, infos)
-            raw_manifest = _read_manifest(archive, by_name[MANIFEST_MEMBER])
-            version = _format_version(raw_manifest)
-            manifest = _parse_manifest(raw_manifest, version)
-            for member in DATA_MEMBERS:
-                _verify_member_bytes(archive, by_name[member], manifest.members[member])
-            with tempfile.TemporaryDirectory(dir=path.parent) as workspace_name:
-                connection = _open_row_store(Path(workspace_name) / "rows.sqlite3")
-                try:
-                    for member in DATA_MEMBERS:
-                        count = _store_member_rows(
-                            archive,
-                            by_name[member],
-                            member,
-                            connection,
-                        )
-                        if count != manifest.record_counts[member]:
-                            raise InvalidBackupDocument("backup record count does not match manifest")
-                    connection.commit()
-                    if _logical_checksum_from_store(connection) != manifest.logical_checksum:
-                        raise InvalidBackupDocument("backup logical checksum does not match manifest")
-                finally:
-                    connection.close()
-    except (ArchiveLimitExceeded, InvalidBackupArchive, InvalidBackupDocument, UnsupportedBackupVersion):
+        snapshot, compressed_size, archive_sha256 = _snapshot_archive(path)
+        archive = ZipFile(snapshot)
+        infos = archive.infolist()
+        by_name = _check_archive_metadata(compressed_size, infos)
+        raw_manifest = _read_manifest(archive, by_name[MANIFEST_MEMBER])
+        version = _format_version(raw_manifest)
+        manifest = _parse_manifest(raw_manifest, version)
+        for member in DATA_MEMBERS:
+            _verify_member_bytes(archive, by_name[member], manifest.members[member])
+        with tempfile.TemporaryDirectory(dir=path.parent) as workspace_name:
+            connection = _open_row_store(Path(workspace_name) / "rows.sqlite3")
+            try:
+                for member in DATA_MEMBERS:
+                    count = _store_member_rows(
+                        archive,
+                        by_name[member],
+                        member,
+                        connection,
+                    )
+                    if count != manifest.record_counts[member]:
+                        raise InvalidBackupDocument("backup record count does not match manifest")
+                connection.commit()
+                if _logical_checksum_from_store(connection) != manifest.logical_checksum:
+                    raise InvalidBackupDocument("backup logical checksum does not match manifest")
+            finally:
+                connection.close()
+    except (
+        ArchiveLimitExceeded,
+        BackupMigrationError,
+        InvalidBackupArchive,
+        InvalidBackupDocument,
+        UnsupportedBackupVersion,
+    ):
+        if archive is not None:
+            archive.close()
+        if snapshot is not None:
+            snapshot.close()
         raise
     except BadZipFile:
+        if archive is not None:
+            archive.close()
+        if snapshot is not None:
+            snapshot.close()
         raise InvalidBackupArchive("backup is not a valid ZIP archive") from None
     except OSError:
+        if archive is not None:
+            archive.close()
+        if snapshot is not None:
+            snapshot.close()
         raise InvalidBackupArchive("backup archive is unavailable") from None
-    inspected = InspectedArchive(path=path, manifest=manifest)
+    assert archive is not None and snapshot is not None
+    inspected = InspectedArchive(
+        path=path,
+        manifest=manifest,
+        archive_sha256=archive_sha256,
+        compressed_size=compressed_size,
+        _snapshot=snapshot,
+        _zip=archive,
+        _verification_token=_VERIFIED_ARCHIVE_TOKEN,
+    )
     migrate_to_current(inspected)
+    return inspected
+
+
+def _verified_inspected_archive(
+    archive: InspectedArchive | MigratedArchive,
+) -> InspectedArchive:
+    if isinstance(archive, InspectedArchive):
+        inspected = archive
+        migrate_to_current(inspected)
+    elif isinstance(archive, MigratedArchive) and isinstance(archive.source, InspectedArchive):
+        inspected = archive.source
+        if archive.format_version != CURRENT_FORMAT_VERSION:
+            raise InvalidBackupDocument("archive migration handle is invalid")
+    else:
+        raise InvalidBackupDocument("archive has not been verified")
+    if (
+        inspected._verification_token is not _VERIFIED_ARCHIVE_TOKEN
+        or inspected._zip.fp is None
+        or inspected._snapshot.closed
+    ):
+        raise InvalidBackupDocument("archive verification handle is invalid")
     return inspected
 
 
@@ -603,14 +707,13 @@ def iter_current_rows(
 ) -> Iterator[dict[str, JsonValue]]:
     if member not in DATA_MEMBERS:
         raise InvalidBackupDocument("requested member is not a backup collection")
-    migrate_to_current(archive)
-    with ZipFile(archive.path) as zip_archive:
-        info = zip_archive.getinfo(member)
-        with zip_archive.open(info) as member_stream:
-            try:
-                for item in ijson.items(member_stream, "item"):
-                    yield _validate_row(member, item)
-            except InvalidBackupDocument:
-                raise
-            except (ijson.JSONError, UnicodeDecodeError, BadZipFile, OSError, RuntimeError):
-                raise InvalidBackupDocument("backup collection JSON is malformed") from None
+    inspected = _verified_inspected_archive(archive)
+    info = inspected._zip.getinfo(member)
+    with inspected._zip.open(info) as member_stream:
+        try:
+            for item in ijson.items(member_stream, "item"):
+                yield _validate_row(member, item)
+        except InvalidBackupDocument:
+            raise
+        except (ijson.JSONError, UnicodeDecodeError, BadZipFile, OSError, RuntimeError):
+            raise InvalidBackupDocument("backup collection JSON is malformed") from None

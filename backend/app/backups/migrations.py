@@ -24,15 +24,19 @@ class ArchiveLike(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class MigratedArchive:
-    path: Path
+    source: ArchiveLike
     format_version: int
+
+    @property
+    def path(self) -> Path:
+        return self.source.path
 
 
 Migration = Callable[[ArchiveLike], MigratedArchive]
 
 
 def _identity_v1(archive: ArchiveLike) -> MigratedArchive:
-    return MigratedArchive(path=archive.path, format_version=CURRENT_FORMAT_VERSION)
+    return MigratedArchive(source=archive, format_version=CURRENT_FORMAT_VERSION)
 
 
 MIGRATIONS: dict[int, Migration] = {1: _identity_v1}

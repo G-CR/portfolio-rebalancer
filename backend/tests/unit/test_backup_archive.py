@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
@@ -148,7 +149,7 @@ def test_credential_contract_replaces_only_encrypted_value_with_plaintext_value(
     assert "encrypted_value" not in CREDENTIAL_CONTRACT.columns
 
 
-def test_exact_scalar_encoding_preserves_precision_offsets_unicode_and_null() -> None:
+def test_exact_scalar_encoding_preserves_precision_unicode_and_null_and_uses_utc() -> None:
     value = {
         "decimal": Decimal("123.4500"),
         "date": date(2026, 8, 23),
@@ -161,7 +162,7 @@ def test_exact_scalar_encoding_preserves_precision_offsets_unicode_and_null() ->
     assert encoded == {
         "decimal": "123.4500",
         "date": "2026-08-23",
-        "datetime": "2026-08-23T20:34:56.123456+08:00",
+        "datetime": "2026-08-23T12:34:56.123456+00:00",
         "uuid": str(FIXED_UUID),
         "text": "资产配置",
         "null": None,
@@ -199,6 +200,15 @@ def test_logical_checksum_excludes_manifest() -> None:
     assert logical_checksum(document) == logical_checksum(changed)
 
 
+def test_canonical_checksum_normalizes_equal_datetimes_to_utc() -> None:
+    instant = datetime(2026, 8, 23, 12, 34, 56, 123456, tzinfo=timezone.utc)
+    shifted = instant.astimezone(timezone(timedelta(hours=8)))
+    utc_document = {"data/example.json": [{"id": "1", "captured_at": instant}]}
+    shifted_document = {"data/example.json": [{"id": "1", "captured_at": shifted}]}
+
+    assert logical_checksum(utc_document) == logical_checksum(shifted_document)
+
+
 def test_writer_is_deterministic_and_round_trips_rows(tmp_path: Path) -> None:
     row = {
         "id": FIXED_UUID,
@@ -232,6 +242,42 @@ def test_writer_is_deterministic_and_round_trips_rows(tmp_path: Path) -> None:
             "updated_at": FIXED_TIME.isoformat(),
         }
     ]
+
+
+def test_writer_inspector_and_iterator_preserve_nested_fractional_json_numbers(
+    tmp_path: Path,
+) -> None:
+    source = empty_source()
+    source["data/cost_adjustments.json"] = [
+        {
+            "id": FIXED_UUID,
+            "holding_id": UUID("00000000-0000-0000-0000-000000000124"),
+            "operation_type": "purchase",
+            "before_quantity": Decimal("0.000000000000"),
+            "before_average_cost_price": Decimal("0.000000000000"),
+            "before_cost_fx_to_cny": Decimal("1.000000000000"),
+            "after_quantity": Decimal("1.000000000000"),
+            "after_average_cost_price": Decimal("0.100000000000"),
+            "after_cost_fx_to_cny": Decimal("1.000000000000"),
+            "input_summary": {
+                "fraction": 0.1,
+                "nested": [1.25, {"ratio": 0.0000001}],
+            },
+            "note": None,
+            "created_at": FIXED_TIME,
+        }
+    ]
+    path = tmp_path / "fractional.portfolio-backup"
+    write_archive(path, source, metadata())
+
+    inspected = inspect_archive(path)
+    [row] = list(iter_current_rows(inspected, "data/cost_adjustments.json"))
+
+    assert inspected.manifest.logical_checksum == logical_checksum(source)
+    assert row["input_summary"] == {
+        "fraction": Decimal("0.1"),
+        "nested": [Decimal("1.25"), {"ratio": Decimal("0.0000001")}],
+    }
 
 
 def test_writer_requires_exact_source_members(tmp_path: Path) -> None:
@@ -456,6 +502,43 @@ def test_iter_current_rows_rejects_non_collection_member(tmp_path: Path) -> None
     inspected = inspect_archive(write_valid_archive(tmp_path))
     with pytest.raises(InvalidBackupDocument):
         list(iter_current_rows(inspected, "manifest.json"))
+
+
+def test_iteration_uses_the_exact_content_verified_before_path_replacement(
+    tmp_path: Path,
+) -> None:
+    source = empty_source()
+    source["data/asset_classes.json"] = [
+        {
+            "id": FIXED_UUID,
+            "name": "verified",
+            "target_weight": Decimal("1.000000000000"),
+            "display_order": 0,
+            "is_active": True,
+            "notes": None,
+            "created_at": FIXED_TIME,
+            "updated_at": FIXED_TIME,
+        }
+    ]
+    path = write_valid_archive(tmp_path, source)
+    inspected = inspect_archive(path)
+    replacement = tmp_path / "replacement.portfolio-backup"
+    replacement.write_bytes(b"not the inspected archive")
+    replacement.replace(path)
+
+    rows = list(iter_current_rows(inspected, "data/asset_classes.json"))
+
+    assert [row["name"] for row in rows] == ["verified"]
+
+
+def test_path_only_handle_cannot_cross_the_verified_iteration_boundary(
+    tmp_path: Path,
+) -> None:
+    path = write_valid_archive(tmp_path)
+    forged = SimpleNamespace(path=path, format_version=CURRENT_FORMAT_VERSION)
+
+    with pytest.raises(InvalidBackupDocument):
+        list(iter_current_rows(forged, "credentials.json"))  # type: ignore[arg-type]
 
 
 def test_committed_v1_golden_fixture_opens_through_production_reader() -> None:

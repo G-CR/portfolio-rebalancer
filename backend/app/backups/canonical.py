@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TypeAlias
 from uuid import UUID
 
-JsonScalar: TypeAlias = None | bool | int | float | str
+JsonScalar: TypeAlias = None | bool | int | float | Decimal | str
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 
@@ -28,7 +28,7 @@ def encode_json_value(value: object) -> JsonValue:
     if isinstance(value, datetime):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("datetimes must be timezone-aware")
-        return value.isoformat()
+        return value.astimezone(timezone.utc).isoformat()
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, dict):
@@ -51,6 +51,36 @@ def canonical_json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def canonical_parsed_json_bytes(value: object) -> bytes:
+    if value is None:
+        return b"null"
+    if value is True:
+        return b"true"
+    if value is False:
+        return b"false"
+    if isinstance(value, int):
+        return str(value).encode("ascii")
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("JSON floats must be finite")
+        value = Decimal(str(value))
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("JSON decimals must be finite")
+        return format(value, "f").encode("ascii")
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False).encode("utf-8")
+    if isinstance(value, list):
+        return b"[" + b",".join(canonical_parsed_json_bytes(item) for item in value) + b"]"
+    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
+        members = (
+            canonical_parsed_json_bytes(key) + b":" + canonical_parsed_json_bytes(value[key])
+            for key in sorted(value)
+        )
+        return b"{" + b",".join(members) + b"}"
+    raise TypeError(f"unsupported parsed JSON value type: {type(value).__name__}")
+
+
 def _canonical_document(document: dict[str, object]) -> dict[str, JsonValue]:
     result: dict[str, JsonValue] = {}
     for member, raw_rows in document.items():
@@ -64,4 +94,4 @@ def _canonical_document(document: dict[str, object]) -> dict[str, JsonValue]:
 
 
 def logical_checksum(document: dict[str, object]) -> str:
-    return hashlib.sha256(canonical_json_bytes(_canonical_document(document))).hexdigest()
+    return hashlib.sha256(canonical_parsed_json_bytes(_canonical_document(document))).hexdigest()
