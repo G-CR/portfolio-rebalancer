@@ -529,6 +529,76 @@ def test_restore_batches_are_bounded_by_encoded_bytes(tmp_path: Path) -> None:
     assert max(len(batch) for batch in batches) < len(rows)
 
 
+def test_restore_batch_at_byte_limit_does_not_decode_next_large_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = _validated_source()["data/asset_classes.json"][0]
+    rows = []
+    for index in range(2):
+        row = copy.deepcopy(template)
+        row["id"] = UUID(int=index + 1)
+        row["notes"] = "x" * (15 * 1024 * 1024)
+        rows.append(row)
+    converted = 0
+    real_database_row = restore_module._database_row
+
+    def tracking_database_row(*args, **kwargs):
+        nonlocal converted
+        converted += 1
+        return real_database_row(*args, **kwargs)
+
+    monkeypatch.setattr(restore_module, "_database_row", tracking_database_row)
+    reader = restore_module._ArchiveBatchReader(
+        None, SecretStore(tmp_path / "large-batch.key")
+    )
+    reader.member = "data/asset_classes.json"
+    reader.rows = iter(rows)
+
+    first = reader.next_batch()
+    assert len(first) == 1
+    assert converted == 1
+    assert not hasattr(reader, "pending_database_row")
+    first_bytes = restore_module._database_parameter_bytes(first[0])
+    assert restore_module.INSERT_BATCH_MAX_BYTES < first_bytes < 16 * 1024 * 1024
+    second = reader.next_batch()
+    assert len(second) == 1
+    assert converted == 2
+    assert not hasattr(reader, "pending_database_row")
+
+
+def test_restore_batch_exact_row_limit_does_not_prefetch_row_1001(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = _validated_source()["data/asset_classes.json"][0]
+    rows = []
+    for index in range(1000):
+        row = copy.deepcopy(template)
+        row["id"] = UUID(int=index + 1)
+        row["notes"] = None
+        rows.append(row)
+    converted = 0
+    real_database_row = restore_module._database_row
+
+    def tracking_database_row(*args, **kwargs):
+        nonlocal converted
+        converted += 1
+        return real_database_row(*args, **kwargs)
+
+    monkeypatch.setattr(restore_module, "_database_row", tracking_database_row)
+    reader = restore_module._ArchiveBatchReader(
+        None, SecretStore(tmp_path / "row-limit.key")
+    )
+    reader.member = "data/asset_classes.json"
+    reader.rows = iter(rows)
+
+    first = reader.next_batch()
+    assert len(first) == 1000
+    assert converted == 1000
+    assert not hasattr(reader, "pending_database_row")
+    assert reader.next_batch() == []
+    assert converted == 1000
+
+
 @pytest.mark.asyncio
 async def test_restore_hash_validation_publication_and_retention_keep_loop_responsive(
     db_session: AsyncSession,

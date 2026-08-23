@@ -171,7 +171,6 @@ class _ArchiveBatchReader:
         self.migrated = None
         self.rows = None
         self.member = ""
-        self.pending_database_row = None
 
     def open(self) -> None:
         inspected = open_verified_archive(self.validated.retained_archive_path)
@@ -188,28 +187,22 @@ class _ArchiveBatchReader:
         assert self.migrated is not None
         self.rows = iter_current_rows(self.migrated, member)
         self.member = member
-        self.pending_database_row = None
 
     def next_batch(self) -> list[dict[str, object]]:
         assert self.rows is not None
         batch: list[dict[str, object]] = []
         batch_bytes = 0
         for _ in range(INSERT_BATCH_SIZE):
-            if self.pending_database_row is not None:
-                database_row = self.pending_database_row
-                self.pending_database_row = None
-            else:
-                try:
-                    row = next(self.rows)
-                except StopIteration:
-                    break
-                database_row = _database_row(self.member, row, self.secret_store)
-            row_bytes = _database_parameter_bytes(database_row)
-            if batch and batch_bytes + row_bytes > INSERT_BATCH_MAX_BYTES:
-                self.pending_database_row = database_row
+            try:
+                row = next(self.rows)
+            except StopIteration:
                 break
+            database_row = _database_row(self.member, row, self.secret_store)
+            row_bytes = _database_parameter_bytes(database_row)
             batch.append(database_row)
             batch_bytes += row_bytes
+            if batch_bytes >= INSERT_BATCH_MAX_BYTES:
+                break
         return batch
 
     def close(self) -> None:

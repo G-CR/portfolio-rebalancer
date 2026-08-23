@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -544,6 +545,50 @@ async def test_safety_preview_missing_is_typed_and_sanitized(api_client) -> None
             "message": "Safety backup was not found.",
         }
     }
+
+
+async def test_manual_safety_delete_keeps_event_loop_responsive(
+    api_client, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = app.state.backup_storage
+    backup_id = storage.new_safety_id()
+    partial = storage.safety_partial_path(backup_id)
+    _preview_archive(partial)
+    storage.publish_safety_backup(backup_id, partial)
+    target = storage.safety_path(backup_id)
+    release = threading.Event()
+    real_unlink = Path.unlink
+
+    def slow_unlink(path: Path, *args, **kwargs):
+        if path == target:
+            assert release.wait(timeout=2)
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", slow_unlink)
+    ticks = 0
+    running = True
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    timer = threading.Timer(0.25, release.set)
+    timer.start()
+    try:
+        response = await api_client.delete(
+            f"/api/backups/safety/{backup_id}", params={"confirm": "true"}
+        )
+    finally:
+        release.set()
+        timer.join(timeout=2)
+        running = False
+        await heartbeat_task
+
+    assert response.status_code == 204
+    assert ticks >= 20
 
 
 async def test_confirmed_restore_consumes_token_and_reports_safety_backup(

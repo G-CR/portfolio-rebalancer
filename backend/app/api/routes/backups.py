@@ -420,7 +420,10 @@ async def delete_safety_backup(
             },
         )
     try:
-        deleted = _storage(request).delete_safety_backup(backup_id)
+        deleted = await _run_blocking(
+            _storage(request).delete_safety_backup,
+            backup_id,
+        )
     except BackupSourceInUseError:
         raise HTTPException(
             status_code=409,

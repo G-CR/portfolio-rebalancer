@@ -50,16 +50,19 @@ class BackupStorage:
         self.uploads_dir = self.root / "uploads"
         self.safety_dir = self.root / "safety"
         self.tmp_dir = self.root / "tmp"
-        self._source_lease_lock = threading.Lock()
+        self._source_lease_condition = threading.Condition(threading.Lock())
         self._source_leases: dict[str, int] = {}
+        self._deleting_sources: set[str] = set()
 
     def acquire_source_lease(self, path_id: str) -> BackupSourceLease:
-        with self._source_lease_lock:
+        with self._source_lease_condition:
+            while path_id in self._deleting_sources:
+                self._source_lease_condition.wait()
             self._source_leases[path_id] = self._source_leases.get(path_id, 0) + 1
         return BackupSourceLease(self, path_id)
 
     def _release_source_lease(self, path_id: str) -> None:
-        with self._source_lease_lock:
+        with self._source_lease_condition:
             count = self._source_leases.get(path_id, 0)
             if count <= 1:
                 self._source_leases.pop(path_id, None)
@@ -67,7 +70,7 @@ class BackupStorage:
                 self._source_leases[path_id] = count - 1
 
     def is_source_leased(self, path_id: str) -> bool:
-        with self._source_lease_lock:
+        with self._source_lease_condition:
             return self._source_leases.get(path_id, 0) > 0
 
     def is_safety_backup_leased(self, backup_id: UUID) -> bool:
@@ -171,15 +174,24 @@ class BackupStorage:
     def delete_safety_backup(self, backup_id: UUID) -> bool:
         path = self.safety_path(backup_id)
         path_id = f"safety:{backup_id}"
-        with self._source_lease_lock:
-            if self._source_leases.get(path_id, 0) > 0:
+        with self._source_lease_condition:
+            if (
+                self._source_leases.get(path_id, 0) > 0
+                or path_id in self._deleting_sources
+            ):
                 raise BackupSourceInUseError(path_id)
+            self._deleting_sources.add(path_id)
+        try:
             try:
                 path.unlink()
             except FileNotFoundError:
                 return False
-        self._fsync_directory(self.safety_dir)
-        return True
+            self._fsync_directory(self.safety_dir)
+            return True
+        finally:
+            with self._source_lease_condition:
+                self._deleting_sources.discard(path_id)
+                self._source_lease_condition.notify_all()
 
     def cleanup_orphans(self, *, valid_export_ids: set[UUID] | None = None) -> None:
         for directory in (self.tmp_dir, self.exports_dir, self.uploads_dir):

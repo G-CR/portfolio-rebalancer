@@ -492,6 +492,7 @@ def test_safety_delete_and_retention_are_atomic_with_source_lease_acquisition(
     unlink_entered = threading.Event()
     allow_unlink = threading.Event()
     lease_acquired = threading.Event()
+    other_lease_round_trip = threading.Event()
     real_unlink = Path.unlink
 
     def blocked_unlink(path: Path, *args, **kwargs):
@@ -507,7 +508,7 @@ def test_safety_delete_and_retention_are_atomic_with_source_lease_acquisition(
     else:
         delete = lambda: storage.delete_safety_backup(backup_id)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         delete_future = executor.submit(delete)
         assert unlink_entered.wait(timeout=5)
 
@@ -517,16 +518,75 @@ def test_safety_delete_and_retention_are_atomic_with_source_lease_acquisition(
             return lease
 
         lease_future = executor.submit(acquire)
+
+        def acquire_other():
+            lease = storage.acquire_source_lease(f"safety:{uuid4()}")
+            lease.release()
+            other_lease_round_trip.set()
+
+        other_future = executor.submit(acquire_other)
         try:
             assert not lease_acquired.wait(timeout=0.2)
+            assert other_lease_round_trip.wait(timeout=0.2)
         finally:
             allow_unlink.set()
         delete_future.result(timeout=5)
         lease = lease_future.result(timeout=5)
+        other_future.result(timeout=5)
 
     assert lease_acquired.is_set()
     assert not target.exists()
     lease.release()
+
+
+def test_failed_safety_unlink_clears_delete_claim_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=1)
+    storage.initialize()
+    backup_id = uuid4()
+    partial = storage.safety_partial_path(backup_id)
+    _write_archive(partial, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    storage.publish_safety_backup(backup_id, partial)
+    target = storage.safety_path(backup_id)
+    entered = threading.Event()
+    release = threading.Event()
+    acquired = threading.Event()
+    real_unlink = Path.unlink
+    fail_once = True
+
+    def failing_unlink(path: Path, *args, **kwargs):
+        nonlocal fail_once
+        if path == target and fail_once:
+            fail_once = False
+            entered.set()
+            assert release.wait(timeout=5)
+            raise OSError("synthetic unlink failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        delete_future = executor.submit(storage.delete_safety_backup, backup_id)
+        assert entered.wait(timeout=5)
+
+        def acquire_same():
+            lease = storage.acquire_source_lease(f"safety:{backup_id}")
+            acquired.set()
+            return lease
+
+        lease_future = executor.submit(acquire_same)
+        try:
+            assert not acquired.wait(timeout=0.2)
+        finally:
+            release.set()
+        with pytest.raises(OSError, match="synthetic unlink failure"):
+            delete_future.result(timeout=5)
+        lease = lease_future.result(timeout=5)
+
+    assert target.exists()
+    lease.release()
+    assert storage.delete_safety_backup(backup_id) is True
+    assert not target.exists()
 
 
 def test_failed_sixth_safety_validation_preserves_existing_five(tmp_path: Path) -> None:
