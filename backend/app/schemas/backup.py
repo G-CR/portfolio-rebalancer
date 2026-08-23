@@ -66,3 +66,23 @@ class SafetyBackupResponse(BaseModel):
     format_version: int
     size_bytes: int = Field(ge=0)
     record_counts: dict[str, int]
+
+
+class BackupCountComparison(BaseModel):
+    backup: int = Field(ge=0)
+    current: int = Field(ge=0)
+    delta: int
+
+
+class BackupPreviewResponse(BaseModel):
+    exported_at: datetime
+    source_application_version: str
+    source_format_version: int = Field(ge=0)
+    current_format_version: int = Field(ge=0)
+    record_counts: dict[str, int]
+    current_record_counts: dict[str, int]
+    count_comparison: dict[str, BackupCountComparison]
+    warnings: list[str]
+    credential_categories: list[str]
+    restore_token: str
+    expires_at: datetime

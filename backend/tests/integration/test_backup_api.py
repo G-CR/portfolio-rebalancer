@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import UUID
 
 import pytest
+from sqlalchemy import text
 
 from app.api.routes import backups as backup_routes
 from app.backups.archive import ArchiveMetadata, write_archive
 from app.backups.constants import DATA_MEMBERS
+from app.db.models import AssetClass, DEFAULT_SETTINGS_ID
+from app.db.session import SessionFactory
 from app.main import app
 from app.schemas.backup import BackupOperation, BackupStage
+from tests.conftest import BUSINESS_TABLES
 
 
 async def _poll_terminal(api_client, operation_id: str) -> dict[str, object]:
@@ -282,3 +288,157 @@ async def test_backup_errors_do_not_expose_raw_exception_or_paths(api_client, mo
     assert secret not in serialized
     assert "/var/lib" not in serialized
     assert "SELECT" not in serialized
+
+
+def _preview_source() -> tuple[dict[str, list[dict[str, object]]], str]:
+    source: dict[str, list[dict[str, object]]] = {member: [] for member in DATA_MEMBERS}
+    timestamp = datetime(2026, 8, 24, 4, 0, tzinfo=timezone.utc)
+    secret = "synthetic-smtp-secret-never-leak"
+    source["data/settings.json"] = [{
+        "id": DEFAULT_SETTINGS_ID,
+        "refresh_hour": 7,
+        "refresh_minute": 30,
+        "provider_priority": ["yahoo"],
+        "default_tolerance": "0.010000000000",
+        "minimum_trade_amount_cny": "100.000000000000",
+        "allow_sell": True,
+        "allow_fx": True,
+        "rebalance_available_cny": "0.000000000000",
+        "rebalance_available_usd": "0.000000000000",
+        "rebalance_valuation_basis": "actual",
+        "email_enabled": True,
+        "email_recipient": "synthetic@example.test",
+        "email_smtp_host": "smtp.example.test",
+        "email_smtp_port": 465,
+        "email_smtp_security": "ssl",
+        "email_smtp_username": "synthetic@example.test",
+        "email_from": "synthetic@example.test",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    }]
+    source["credentials.json"] = [{
+        "id": UUID("00000000-0000-0000-0000-000000000901"),
+        "provider": "smtp",
+        "value": secret,
+        "masked_value": "****leak",
+        "validation_status": "untested",
+        "validation_message": None,
+        "last_validated_at": None,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    }]
+    return source, secret
+
+
+def _preview_archive(path: Path) -> tuple[Path, str]:
+    source, secret = _preview_source()
+    write_archive(
+        path,
+        source,
+        ArchiveMetadata(
+            source_application_version="api-upload-test",
+            exported_at=datetime(2026, 8, 24, 4, 0, tzinfo=timezone.utc),
+            display_timezone="Asia/Shanghai",
+        ),
+    )
+    return path, secret
+
+
+async def _business_table_hashes() -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    async with SessionFactory() as session:
+        for table in BUSINESS_TABLES:
+            hashes[table] = str(await session.scalar(text(
+                f"SELECT md5(COALESCE(string_agg(to_jsonb(row_data)::text, '' "
+                f"ORDER BY to_jsonb(row_data)::text), '')) FROM {table} AS row_data"
+            )))
+    return hashes
+
+
+async def test_upload_streams_validates_and_never_mutates_database(
+    api_client, db_session, tmp_path: Path
+) -> None:
+    db_session.add(AssetClass(name="hash-sentinel", target_weight="0", display_order=999))
+    await db_session.commit()
+    before = await _business_table_hashes()
+    archive, secret = _preview_archive(tmp_path / "state.portfolio-backup")
+
+    response = await api_client.post(
+        "/api/backups/upload",
+        content=archive.read_bytes(),
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Backup-Filename": "state.portfolio-backup",
+        },
+    )
+
+    assert response.status_code == 200
+    assert await _business_table_hashes() == before
+    preview = response.json()
+    assert preview["source_application_version"] == "api-upload-test"
+    assert preview["source_format_version"] == 1
+    assert preview["current_format_version"] == 1
+    assert preview["record_counts"]["credentials.json"] == 1
+    assert preview["current_record_counts"]["data/asset_classes.json"] >= 1
+    assert preview["count_comparison"]["credentials.json"] == {
+        "backup": 1,
+        "current": 0,
+        "delta": 1,
+    }
+    assert preview["credential_categories"] == ["smtp"]
+    assert len(preview["restore_token"]) >= 32
+    serialized = response.text
+    assert secret not in serialized
+    assert "****leak" not in serialized
+    assert response.headers["cache-control"] == "no-store"
+    storage = app.state.backup_storage
+    retained = list(storage.uploads_dir.glob("*.portfolio-backup"))
+    assert len(retained) == 1
+    assert os.stat(retained[0]).st_mode & 0o777 == 0o600
+    assert not list(storage.tmp_dir.glob("*.partial"))
+    assert all(secret.encode() not in path.read_bytes() for path in storage.uploads_dir.glob("*.json"))
+
+
+async def test_upload_enforces_limit_while_streaming_and_removes_partial(
+    api_client, monkeypatch
+) -> None:
+    monkeypatch.setattr(backup_routes, "MAX_COMPRESSED_BYTES", 10)
+    response = await api_client.post(
+        "/api/backups/upload",
+        content=b"01234567890",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "BACKUP_RESOURCE_LIMIT"
+    assert not list(app.state.backup_storage.tmp_dir.glob("*.partial"))
+
+
+async def test_safety_preview_uses_identical_validator_without_consuming_token(
+    api_client,
+) -> None:
+    storage = app.state.backup_storage
+    backup_id = storage.new_safety_id()
+    partial = storage.safety_partial_path(backup_id)
+    _preview_archive(partial)
+    storage.publish_safety_backup(backup_id, partial)
+
+    response = await api_client.post(f"/api/backups/safety/{backup_id}/preview")
+
+    assert response.status_code == 200
+    assert response.json()["credential_categories"] == ["smtp"]
+    assert response.json()["restore_token"]
+    assert storage.safety_path(backup_id).exists()
+    assert len(list(storage.uploads_dir.glob("*.token.json"))) == 1
+
+
+async def test_safety_preview_missing_is_typed_and_sanitized(api_client) -> None:
+    response = await api_client.post(
+        "/api/backups/safety/00000000-0000-0000-0000-000000000999/preview"
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {
+            "code": "BACKUP_SAFETY_NOT_FOUND",
+            "message": "Safety backup was not found.",
+        }
+    }

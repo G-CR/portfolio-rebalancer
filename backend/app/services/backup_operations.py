@@ -12,6 +12,7 @@ from app.schemas.backup import (
     OperationKind,
 )
 from app.services.backup_storage import BackupStorage
+from app.services.backup_validation import RestoreTokenRegistry
 from app.services.errors import ServiceError
 
 
@@ -153,6 +154,14 @@ class BackupOperationManager:
                 )
             except Exception:
                 maintenance_failed = True
+        try:
+            if RestoreTokenRegistry(
+                self.storage,
+                clock=lambda: timestamp,
+            ).cleanup_expired():
+                maintenance_failed = True
+        except Exception:
+            maintenance_failed = True
         return maintenance_failed
 
     def consume_export(self, operation_id: UUID) -> None:
