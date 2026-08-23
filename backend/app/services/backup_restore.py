@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from app.core.config import get_settings
 from app.core.secrets import SecretStore
 from app.schemas.backup import BackupStage
 from app.services.backup_export import build_export_metadata, export_logical_backup
+from app.services.async_thread import run_in_thread
 from app.services.backup_storage import BackupStorage
 from app.services.backup_validation import ValidatedBackup, validate_backup
 
@@ -67,6 +67,7 @@ INSERT_MEMBERS = (
     "credentials.json",
 )
 INSERT_BATCH_SIZE = 1000
+INSERT_BATCH_MAX_BYTES = 4 * 1024 * 1024
 
 
 class RestoreProgress(Protocol):
@@ -85,12 +86,7 @@ class RestoreResult:
 
 
 async def _run_sync(callable_, *args, **kwargs):
-    task = asyncio.create_task(asyncio.to_thread(callable_, *args, **kwargs))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await task
-        raise
+    return await run_in_thread(callable_, *args, **kwargs)
 
 
 def _archive_sha256(path: Path) -> str:
@@ -175,6 +171,7 @@ class _ArchiveBatchReader:
         self.migrated = None
         self.rows = None
         self.member = ""
+        self.pending_database_row = None
 
     def open(self) -> None:
         inspected = open_verified_archive(self.validated.retained_archive_path)
@@ -191,22 +188,42 @@ class _ArchiveBatchReader:
         assert self.migrated is not None
         self.rows = iter_current_rows(self.migrated, member)
         self.member = member
+        self.pending_database_row = None
 
     def next_batch(self) -> list[dict[str, object]]:
         assert self.rows is not None
         batch: list[dict[str, object]] = []
+        batch_bytes = 0
         for _ in range(INSERT_BATCH_SIZE):
-            try:
-                row = next(self.rows)
-            except StopIteration:
+            if self.pending_database_row is not None:
+                database_row = self.pending_database_row
+                self.pending_database_row = None
+            else:
+                try:
+                    row = next(self.rows)
+                except StopIteration:
+                    break
+                database_row = _database_row(self.member, row, self.secret_store)
+            row_bytes = _database_parameter_bytes(database_row)
+            if batch and batch_bytes + row_bytes > INSERT_BATCH_MAX_BYTES:
+                self.pending_database_row = database_row
                 break
-            batch.append(_database_row(self.member, row, self.secret_store))
+            batch.append(database_row)
+            batch_bytes += row_bytes
         return batch
 
     def close(self) -> None:
         if self.inspected is not None:
             self.inspected.close()
             self.inspected = None
+
+
+def _database_parameter_bytes(row: dict[str, object]) -> int:
+    return sum(
+        len(column.encode("utf-8")) + len(str(value).encode("utf-8"))
+        for column, value in row.items()
+        if value is not None
+    )
 
 
 def _insert_statement(member: str):

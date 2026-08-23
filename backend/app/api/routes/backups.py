@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -28,7 +27,8 @@ from app.core.secrets import SecretStore
 from app.services.backup_restore import restore_validated_backup
 from app.services.backup_export import export_database_backup
 from app.services.backup_operations import BackupOperationManager
-from app.services.backup_storage import BackupStorage
+from app.services.async_thread import run_in_thread
+from app.services.backup_storage import BackupSourceInUseError, BackupStorage
 from app.services.backup_validation import (
     BackupValidationError,
     RestoreTokenRegistry,
@@ -77,12 +77,7 @@ def _utcnow() -> datetime:
 
 
 async def _run_blocking(callable_, *args, **kwargs):
-    task = asyncio.create_task(asyncio.to_thread(callable_, *args, **kwargs))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await task
-        raise
+    return await run_in_thread(callable_, *args, **kwargs)
 
 
 async def _current_record_counts() -> dict[str, int]:
@@ -137,7 +132,7 @@ async def _validated_preview(
     *,
     path_id: str,
 ) -> BackupPreviewResponse:
-    validated = await asyncio.to_thread(
+    validated = await _run_blocking(
         validate_backup,
         path,
         path_id=path_id,
@@ -145,7 +140,7 @@ async def _validated_preview(
     )
     current_counts = await _current_record_counts()
     validated = replace(validated, expires_at=_utcnow() + storage.upload_ttl)
-    token = await asyncio.to_thread(RestoreTokenRegistry(storage).issue, validated)
+    token = await _run_blocking(RestoreTokenRegistry(storage).issue, validated)
     return _preview(validated, current_counts, token)
 
 
@@ -181,7 +176,7 @@ async def post_upload(request: Request, response: Response) -> BackupPreviewResp
             output.flush()
             os.fsync(output.fileno())
 
-        validated = await asyncio.to_thread(
+        validated = await _run_blocking(
             validate_backup,
             partial,
             path_id=f"upload:{upload_id}",
@@ -189,10 +184,10 @@ async def post_upload(request: Request, response: Response) -> BackupPreviewResp
         )
         current_counts = await _current_record_counts()
         validated = replace(validated, expires_at=_utcnow() + storage.upload_ttl)
-        await asyncio.to_thread(_publish_upload, storage, partial, destination)
+        await _run_blocking(_publish_upload, storage, partial, destination)
         published = True
         validated = replace(validated, retained_archive_path=destination)
-        token = await asyncio.to_thread(RestoreTokenRegistry(storage).issue, validated)
+        token = await _run_blocking(RestoreTokenRegistry(storage).issue, validated)
         token_issued = True
         response.headers.update(NO_STORE_HEADERS)
         return _preview(validated, current_counts, token)
@@ -252,22 +247,11 @@ async def post_restore(
     lease_holder = []
 
     async def consume_token() -> None:
-        consume_task = asyncio.create_task(
-            asyncio.to_thread(
-                registry.consume_with_lease,
-                payload.restore_token,
-            )
+        binding, lease = await _run_blocking(
+            registry.consume_with_lease,
+            payload.restore_token,
+            cancelled_result_cleanup=lambda result: result[1].release(),
         )
-        try:
-            binding, lease = await asyncio.shield(consume_task)
-        except asyncio.CancelledError:
-            try:
-                _, lease = await consume_task
-            except Exception:
-                pass
-            else:
-                lease.release()
-            raise
         binding_holder.append(binding)
         lease_holder.append(lease)
 
@@ -298,8 +282,8 @@ async def post_restore(
                     await context.set_safety_backup_id(result.safety_backup_id)
         finally:
             lease_holder[0].release()
-            await asyncio.to_thread(storage.enforce_safety_retention)
-            await asyncio.to_thread(RestoreTokenRegistry(storage).cleanup_expired)
+            await _run_blocking(storage.enforce_safety_retention)
+            await _run_blocking(RestoreTokenRegistry(storage).cleanup_expired)
 
     try:
         operation = await manager.start("restore", run_restore, prepare=consume_token)
@@ -435,7 +419,17 @@ async def delete_safety_backup(
                 "message": "Safety backup is referenced by an active operation.",
             },
         )
-    if not _storage(request).delete_safety_backup(backup_id):
+    try:
+        deleted = _storage(request).delete_safety_backup(backup_id)
+    except BackupSourceInUseError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "BACKUP_SAFETY_IN_USE",
+                "message": "Safety backup is referenced by an active operation.",
+            },
+        ) from None
+    if not deleted:
         raise HTTPException(
             status_code=404,
             detail={

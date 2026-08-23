@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -473,6 +474,59 @@ def test_safety_retention_deletes_oldest_only_after_sixth_is_valid_and_durable(
     ]
     assert observed_sixth_durable == [True]
     assert _mode(sixth_destination) == 0o600
+
+
+@pytest.mark.parametrize("via_retention", [False, True])
+def test_safety_delete_and_retention_are_atomic_with_source_lease_acquisition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    via_retention: bool,
+) -> None:
+    storage = BackupStorage(tmp_path, safety_retention=1)
+    storage.initialize()
+    backup_id = uuid4()
+    partial = storage.safety_partial_path(backup_id)
+    _write_archive(partial, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    storage.publish_safety_backup(backup_id, partial)
+    target = storage.safety_path(backup_id)
+    unlink_entered = threading.Event()
+    allow_unlink = threading.Event()
+    lease_acquired = threading.Event()
+    real_unlink = Path.unlink
+
+    def blocked_unlink(path: Path, *args, **kwargs):
+        if path == target:
+            unlink_entered.set()
+            assert allow_unlink.wait(timeout=5)
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", blocked_unlink)
+    if via_retention:
+        storage.safety_retention = 0
+        delete = storage.enforce_safety_retention
+    else:
+        delete = lambda: storage.delete_safety_backup(backup_id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        delete_future = executor.submit(delete)
+        assert unlink_entered.wait(timeout=5)
+
+        def acquire():
+            lease = storage.acquire_source_lease(f"safety:{backup_id}")
+            lease_acquired.set()
+            return lease
+
+        lease_future = executor.submit(acquire)
+        try:
+            assert not lease_acquired.wait(timeout=0.2)
+        finally:
+            allow_unlink.set()
+        delete_future.result(timeout=5)
+        lease = lease_future.result(timeout=5)
+
+    assert lease_acquired.is_set()
+    assert not target.exists()
+    lease.release()
 
 
 def test_failed_sixth_safety_validation_preserves_existing_five(tmp_path: Path) -> None:

@@ -15,6 +15,10 @@ PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 
 
+class BackupSourceInUseError(Exception):
+    """A retained source cannot be deleted while a restore owns its lease."""
+
+
 class BackupSourceLease:
     def __init__(self, storage: BackupStorage, path_id: str) -> None:
         self._storage = storage
@@ -166,10 +170,14 @@ class BackupStorage:
 
     def delete_safety_backup(self, backup_id: UUID) -> bool:
         path = self.safety_path(backup_id)
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return False
+        path_id = f"safety:{backup_id}"
+        with self._source_lease_lock:
+            if self._source_leases.get(path_id, 0) > 0:
+                raise BackupSourceInUseError(path_id)
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                return False
         self._fsync_directory(self.safety_dir)
         return True
 
@@ -205,8 +213,6 @@ class BackupStorage:
         except Exception:
             return
         for expired in backups[self.safety_retention :]:
-            if self.is_safety_backup_leased(expired.id):
-                continue
             try:
                 self.delete_safety_backup(expired.id)
             except Exception:

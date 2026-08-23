@@ -712,3 +712,49 @@ async def test_restore_runner_cancellation_rolls_back_and_recovers_interrupted_j
             text("SELECT name FROM asset_classes WHERE id = :id"),
             {"id": sentinel_id},
         ) == "survives-interruption"
+
+
+async def test_restore_repeated_cancel_drains_failing_validator_and_releases_lease(
+    api_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = app.state.backup_storage
+    backup_id = storage.new_safety_id()
+    partial = storage.safety_partial_path(backup_id)
+    _preview_archive(partial)
+    storage.publish_safety_backup(backup_id, partial)
+    preview = await api_client.post(f"/api/backups/safety/{backup_id}/preview")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def failing_validation(*args, **kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        asyncio.run_coroutine_threadsafe(release.wait(), loop).result(timeout=10)
+        raise RuntimeError("validator failed while cancellation was draining")
+
+    monkeypatch.setattr(backup_routes, "validate_backup", failing_validation)
+    started = await api_client.post(
+        "/api/backups/restore",
+        json={"restore_token": preview.json()["restore_token"], "confirmation": "恢复"},
+    )
+    assert started.status_code == 202
+    operation_id = UUID(started.json()["id"])
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    manager = app.state.backup_operation_manager
+    task = manager._tasks[operation_id]
+    try:
+        task.cancel()
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        assert storage.is_safety_backup_leased(backup_id)
+    finally:
+        release.set()
+
+    await asyncio.gather(task, return_exceptions=True)
+    operation = manager.get(operation_id)
+    assert operation.status == "interrupted"
+    assert not storage.is_safety_backup_leased(backup_id)
+    assert storage.safety_path(backup_id).exists()

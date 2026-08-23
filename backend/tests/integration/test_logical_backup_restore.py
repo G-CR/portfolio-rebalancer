@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import threading
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -18,6 +20,7 @@ from app.db.models import AssetClass, EncryptedSecret, Setting
 from app.schemas.backup import BackupStage
 from app.services import backup_restore as restore_module
 from app.services import backup_export as export_module
+from app.api.routes import backups as backup_routes
 from app.services.backup_export import export_logical_backup
 from app.services.backup_restore import BackupRestoreError, restore_validated_backup
 from app.services.backup_storage import BackupStorage
@@ -423,6 +426,107 @@ async def test_sync_archive_work_does_not_block_event_loop(
         running = False
         await heartbeat_task
     assert ticks >= 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runner",
+    [restore_module._run_sync, backup_routes._run_blocking],
+)
+async def test_blocking_worker_is_drained_after_repeated_cancellation(
+    runner,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def failing_worker() -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        finished.set()
+        raise RuntimeError("worker failed during cancellation drain")
+
+    task = asyncio.create_task(runner(failing_worker))
+    assert await asyncio.to_thread(entered.wait, 5)
+    try:
+        task.cancel()
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+    finally:
+        release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_export_workspace_survives_repeated_cancel_until_worker_stops(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_store = SecretStore(tmp_path / "cancel-export.key")
+    entered = threading.Event()
+    release = threading.Event()
+    workspace_observed = threading.Event()
+
+    def blocked_writer(_destination, source, _metadata) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        list(source["data/asset_classes.json"])
+        workspace_observed.set()
+        raise RuntimeError("synthetic writer failure after cancellation")
+
+    monkeypatch.setattr(export_module, "write_archive", blocked_writer)
+    task = asyncio.create_task(
+        _export(db_session, tmp_path / "cancelled.portfolio-backup", secret_store)
+    )
+    assert await asyncio.to_thread(entered.wait, 5)
+    try:
+        task.cancel()
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+    finally:
+        release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert workspace_observed.wait(timeout=5)
+
+
+def test_restore_batches_are_bounded_by_encoded_bytes(tmp_path: Path) -> None:
+    max_batch_bytes = 4 * 1024 * 1024
+    template = _validated_source()["data/asset_classes.json"][0]
+    rows = []
+    for index in range(96):
+        row = copy.deepcopy(template)
+        row["id"] = UUID(int=index + 1)
+        row["notes"] = "x" * 100_000
+        rows.append(row)
+    reader = restore_module._ArchiveBatchReader(
+        None,
+        SecretStore(tmp_path / "batch-limit.key"),
+    )
+    reader.member = "data/asset_classes.json"
+    reader.rows = iter(rows)
+    batches = []
+    while batch := reader.next_batch():
+        batches.append(batch)
+
+    encoded_sizes = [
+        sum(restore_module._database_parameter_bytes(row) for row in batch)
+        for batch in batches
+    ]
+    assert restore_module.INSERT_BATCH_MAX_BYTES == max_batch_bytes
+    assert len(batches) >= 3
+    assert sum(encoded_sizes) > max_batch_bytes * 2
+    assert max(encoded_sizes) <= max_batch_bytes + 100_000
+    assert max(len(batch) for batch in batches) < len(rows)
 
 
 @pytest.mark.asyncio

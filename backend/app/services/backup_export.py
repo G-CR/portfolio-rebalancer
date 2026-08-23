@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
@@ -30,6 +29,7 @@ from app.core.config import Settings, get_settings
 from app.core.secrets import SecretStore
 from app.db.models import EncryptedSecret
 from app.db.session import SessionFactory
+from app.services.async_thread import run_in_thread
 
 
 DEFAULT_BATCH_SIZE = 1000
@@ -185,14 +185,7 @@ async def export_logical_backup(
     source_adapter = DatabaseLogicalSource(session, secret_store=secret_store)
     with tempfile.TemporaryDirectory(dir=destination.parent) as workspace_name:
         source = await source_adapter.stage(Path(workspace_name))
-        archive_task = asyncio.create_task(
-            asyncio.to_thread(write_archive, destination, source, metadata)
-        )
-        try:
-            return await asyncio.shield(archive_task)
-        except asyncio.CancelledError:
-            await archive_task
-            raise
+        return await run_in_thread(write_archive, destination, source, metadata)
 
 
 def build_export_metadata(settings: Settings) -> ArchiveMetadata:
