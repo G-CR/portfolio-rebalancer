@@ -33,6 +33,12 @@ from app.schemas.email_settings import EmailSettingsUpdate
 from pydantic import TypeAdapter, ValidationError
 from app.services.backup_storage import BackupStorage
 
+try:  # Linux production uses flock; the fallback keeps local Windows tests faithful.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised by Windows development only
+    fcntl = None
+    import msvcrt
+
 
 _PROVIDERS = {"yahoo", "sina", "akshare", "tushare", "alpha_vantage"}
 _ENUM_FIELDS: dict[tuple[str, str], set[str]] = {
@@ -183,13 +189,18 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
     summary = row["input_summary"]
     projected = row["projected_result"]
     actions = row["suggested_actions"]
-    expected_summary = {
+    required_summary = {
         "session_token", "request_token", "available_cny", "available_usd",
         "valuation_basis", "allow_sell", "allow_fx", "tolerance",
         "minimum_trade_cny", "acknowledge_stale_data", "holding_versions",
-        "market_data_record_ids", "asset_class_targets", "resolved_constraints",
+        "market_data_record_ids",
     }
-    if not isinstance(summary, dict) or set(summary) != expected_summary:
+    optional_summary = {"asset_class_targets", "resolved_constraints"}
+    if (
+        not isinstance(summary, dict)
+        or not required_summary.issubset(summary)
+        or set(summary) - required_summary - optional_summary
+    ):
         raise _Incompatible
     if not isinstance(summary["session_token"], str) or not isinstance(summary["request_token"], str):
         raise _Incompatible
@@ -198,11 +209,11 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
     for field in ("available_cny", "available_usd"):
         if _decimal(summary[field]) < 0:
             raise _Incompatible
-    for optional in ("allow_sell", "allow_fx"):
-        if summary[optional] is not None and not isinstance(summary[optional], bool):
+    for field in ("allow_sell", "allow_fx"):
+        if summary[field] is not None and not isinstance(summary[field], bool):
             raise _Incompatible
-    for optional in ("tolerance", "minimum_trade_cny"):
-        if summary[optional] is not None and _decimal(summary[optional]) < 0:
+    for field in ("tolerance", "minimum_trade_cny"):
+        if summary[field] is not None and _decimal(summary[field]) < 0:
             raise _Incompatible
     if summary["tolerance"] is not None and _decimal(summary["tolerance"]) > 1:
         raise _Incompatible
@@ -216,15 +227,56 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
             canonical = False
         if not canonical or isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise _Incompatible
-    _uuid_decimal_map(summary["asset_class_targets"], bounded=True)
-    resolved = summary["resolved_constraints"]
-    if not isinstance(resolved, dict) or set(resolved) != {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}:
+    _uuid_decimal_map(summary.get("asset_class_targets", {}), bounded=True)
+    resolved = summary.get("resolved_constraints", summary)
+    if (
+        not isinstance(resolved, dict)
+        or not {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}.issubset(resolved)
+        or (
+            "resolved_constraints" in summary
+            and set(resolved) != {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}
+        )
+    ):
         raise _Incompatible
     if not isinstance(resolved["allow_sell"], bool) or not isinstance(resolved["allow_fx"], bool):
         raise _Incompatible
     if _decimal(resolved["tolerance"]) < 0 or _decimal(resolved["tolerance"]) > 1 or _decimal(resolved["minimum_trade_cny"]) < 0:
         raise _Incompatible
-    if not isinstance(actions, list) or not isinstance(projected, dict) or set(projected) != {"valuation_basis", "result", "fx_comparison", "data_status"}:
+    result_keys = {
+        "feasible", "max_drift_before", "max_drift_after", "fx_required_cny",
+        "remaining_cny", "remaining_usd", "projected_weights", "trades",
+    }
+    weight_keys = {"asset_class_id", "before", "after", "target"}
+    action_keys = {
+        "symbol", "action", "quantity", "amount_cny", "amount_trade_currency",
+        "reason_code", "reason",
+    }
+    comparison_keys = {"valuation_basis", "result"}
+
+    def exact_result(value: JsonValue) -> bool:
+        return (
+            isinstance(value, dict)
+            and set(value) == result_keys
+            and isinstance(value["projected_weights"], list)
+            and all(isinstance(item, dict) and set(item) == weight_keys for item in value["projected_weights"])
+            and isinstance(value["trades"], list)
+            and all(isinstance(item, dict) and set(item) == action_keys for item in value["trades"])
+        )
+
+    if (
+        not isinstance(actions, list)
+        or not all(isinstance(item, dict) and set(item) == action_keys for item in actions)
+        or not isinstance(projected, dict)
+        or set(projected) != {"valuation_basis", "result", "fx_comparison", "data_status"}
+    ):
+        raise _Incompatible
+    comparison = projected["fx_comparison"]
+    if (
+        not exact_result(projected["result"])
+        or not isinstance(comparison, dict)
+        or set(comparison) != comparison_keys
+        or not exact_result(comparison["result"])
+    ):
         raise _Incompatible
     if projected["valuation_basis"] != row["strategy_mode"] or projected["data_status"] not in {"valid", "stale", "manual"}:
         raise _Incompatible
@@ -253,8 +305,7 @@ def _require_json_shape(member: str, row: dict[str, JsonValue]) -> None:
         if (
             not isinstance(providers, list)
             or any(not isinstance(provider, str) or provider not in _PROVIDERS for provider in providers)
-            or len(providers) != len(_PROVIDERS)
-            or set(providers) != _PROVIDERS
+            or len(set(providers)) != len(providers)
         ):
             raise _Incompatible
 
@@ -440,23 +491,13 @@ def _validate_rebalance(
     owner_id = str(row["id"])
     summary = row["input_summary"]
     assert isinstance(summary, dict)
-    version_payload = {
-        "market_data_record_ids": summary["market_data_record_ids"],
-        "holding_versions": summary["holding_versions"],
-        "asset_class_targets": summary["asset_class_targets"],
-    }
-    expected_version = hashlib.sha256(
-        json.dumps(version_payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    if row["data_version"] != expected_version:
-        raise _RelationshipInvalid
     _validate_reference_map(
         connection, "data/rebalance_plans.json", owner_id,
         summary["market_data_record_ids"], "input_market_data",
     )
     for holding_id in summary["holding_versions"]:
         _add_ref(connection, "data/rebalance_plans.json", owner_id, "data/holdings.json", holding_id, "input_holding")
-    for asset_id in summary["asset_class_targets"]:
+    for asset_id in summary.get("asset_class_targets", {}):
         _add_ref(connection, "data/rebalance_plans.json", owner_id, "data/asset_classes.json", asset_id, "input_asset")
     if has_start:
         if row["start_market_data_record_ids"] != summary["market_data_record_ids"]:
@@ -714,8 +755,8 @@ def validate_backup(
 
 
 class RestoreTokenRegistry:
-    # A consumer owns its atomic claim for this lease. Maintenance only recovers
-    # claims whose owner could not have remained live for the whole interval.
+    # An unlocked claim older than this interval is an abandoned-process artifact.
+    # A held OS lock always wins over age, so maintenance never steals live work.
     CLAIM_STALE_AFTER = timedelta(minutes=5)
     def __init__(
         self,
@@ -775,16 +816,51 @@ class RestoreTokenRegistry:
         """Remove expired token journals and uploaded archives; report retryable debt."""
         maintenance_failed = False
         now = self._clock()
+        protected_token_hashes: set[str] = set()
         for token_claim in self.storage.uploads_dir.glob("*.token.claimed"):
             token_hash = token_claim.name.removesuffix(".token.claimed")
+            descriptor: int | None = None
+            locked = False
+            remove_after_close = False
             try:
-                claimed_at = datetime.fromtimestamp(token_claim.stat().st_mtime, timezone.utc)
-                if now - claimed_at < self.CLAIM_STALE_AFTER:
+                descriptor = os.open(token_claim, os.O_RDWR)
+                locked = _lock_claim(descriptor, nonblocking=True)
+                if not locked:
+                    protected_token_hashes.add(token_hash)
                     continue
-                os.replace(token_claim, self._consumed_path(token_hash))
-                self.storage._fsync_directory(self.storage.uploads_dir)
+                stat_result = os.fstat(descriptor)
+                claimed_at = datetime.fromtimestamp(stat_result.st_mtime, timezone.utc)
+                try:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    document = json.loads(os.read(descriptor, 4096))
+                    metadata_time = datetime.fromisoformat(document["claimed_at"])
+                    if metadata_time.tzinfo is not None and metadata_time.utcoffset() is not None:
+                        claimed_at = metadata_time.astimezone(timezone.utc)
+                except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+                    pass
+                if now - claimed_at < self.CLAIM_STALE_AFTER:
+                    protected_token_hashes.add(token_hash)
+                    continue
+                if fcntl is None:  # Windows cannot unlink an open locked file.
+                    remove_after_close = True
+                else:
+                    token_claim.unlink()
+                    self.storage._fsync_directory(self.storage.uploads_dir)
             except OSError:
+                protected_token_hashes.add(token_hash)
                 maintenance_failed = True
+            finally:
+                if descriptor is not None:
+                    if locked:
+                        _unlock_claim(descriptor)
+                    os.close(descriptor)
+            if remove_after_close:
+                try:
+                    token_claim.unlink()
+                    self.storage._fsync_directory(self.storage.uploads_dir)
+                except OSError:
+                    protected_token_hashes.add(token_hash)
+                    maintenance_failed = True
         for abandoned_claim in self.storage.uploads_dir.glob("*.json.claimed"):
             journal_path = Path(str(abandoned_claim).removesuffix(".claimed"))
             try:
@@ -797,6 +873,11 @@ class RestoreTokenRegistry:
             *self.storage.uploads_dir.glob("*.consumed.json"),
         )
         for journal_path in expiry_records:
+            if (
+                journal_path.name.endswith(".token.json")
+                and journal_path.name.removesuffix(".token.json") in protected_token_hashes
+            ):
+                continue
             claim_path: Path | None = None
             completed = False
             try:
@@ -834,18 +915,42 @@ class RestoreTokenRegistry:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         journal_path = self._journal_path(token_hash)
         claim_path = self._claim_path(token_hash)
+        descriptor: int | None = None
+        locked = False
         try:
-            os.replace(journal_path, claim_path)
-            claimed_timestamp = self._clock().timestamp()
-            os.utime(claim_path, (claimed_timestamp, claimed_timestamp))
+            descriptor = os.open(
+                claim_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            os.write(descriptor, b"{}")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            locked = _lock_claim(descriptor, nonblocking=False)
+            _after_claim_file_created(claim_path)
+            claim_document = canonical_json_bytes({
+                "token_hash": token_hash,
+                "claimed_at": self._clock().astimezone(timezone.utc).isoformat(),
+            })
+            os.ftruncate(descriptor, 0)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, claim_document)
+            os.fsync(descriptor)
             self.storage._fsync_directory(self.storage.uploads_dir)
         except OSError:
+            if descriptor is not None:
+                if locked:
+                    _unlock_claim(descriptor)
+                os.close(descriptor)
             raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.") from None
         try:
             try:
-                _after_token_claim(claim_path)
-                with claim_path.open("rb") as source:
+                with journal_path.open("rb") as source:
                     document = json.load(source)
+            except FileNotFoundError:
+                raise BackupValidationError(
+                    "BACKUP_TOKEN_INVALID", "Restore token is invalid."
+                ) from None
+            try:
                 if set(document) != {"token_hash", "archive_sha256", "path_id", "expires_at"}:
                     raise ValueError
                 if not hmac.compare_digest(document["token_hash"], token_hash):
@@ -856,12 +961,24 @@ class RestoreTokenRegistry:
                 path_id = str(document["path_id"])
                 expected_hash = str(document["archive_sha256"])
             except (OSError, TypeError, ValueError, KeyError):
+                self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.") from None
             path = self._resolve_path(path_id)
             if self._clock() >= expires_at:
+                storage_failed = False
                 if path_id.startswith("upload:"):
-                    path.unlink(missing_ok=True)
-                    self.storage._fsync_directory(self.storage.uploads_dir)
+                    try:
+                        path.unlink(missing_ok=True)
+                        self.storage._fsync_directory(self.storage.uploads_dir)
+                    except OSError:
+                        storage_failed = True
+                if storage_failed:
+                    raise BackupValidationError(
+                        "BACKUP_RESOURCE_LIMIT",
+                        "Restore token storage could not be updated.",
+                        status_code=507,
+                    ) from None
+                self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_EXPIRED", "Restore token has expired.")
             digest = hashlib.sha256()
             try:
@@ -869,18 +986,63 @@ class RestoreTokenRegistry:
                     while chunk := source.read(STREAM_CHUNK_BYTES):
                         digest.update(chunk)
             except OSError:
+                self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.") from None
             if not hmac.compare_digest(digest.hexdigest(), expected_hash):
+                self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.")
+            self._mark_consumed(journal_path, token_hash)
             return RestoreTokenBinding(path, path_id, expected_hash, expires_at)
         finally:
+            assert descriptor is not None
+            if locked:
+                _unlock_claim(descriptor)
+            os.close(descriptor)
             try:
-                os.replace(claim_path, self._consumed_path(token_hash))
+                claim_path.unlink(missing_ok=True)
                 self.storage._fsync_directory(self.storage.uploads_dir)
             except OSError:
-                # The durable claim remains discoverable by periodic maintenance.
+                # The unlocked claim remains discoverable by periodic maintenance.
                 pass
 
+    def _mark_consumed(self, journal_path: Path, token_hash: str) -> None:
+        failed = False
+        try:
+            os.replace(journal_path, self._consumed_path(token_hash))
+            self.storage._fsync_directory(self.storage.uploads_dir)
+        except OSError:
+            failed = True
+        if failed:
+            raise BackupValidationError(
+                "BACKUP_RESOURCE_LIMIT",
+                "Restore token storage could not be updated.",
+                status_code=507,
+            ) from None
 
-def _after_token_claim(_claim_path: Path) -> None:
-    """Deterministic test seam after the durable atomic claim is established."""
+
+def _lock_claim(descriptor: int, *, nonblocking: bool) -> bool:
+    if fcntl is not None:
+        operation = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+        try:
+            fcntl.flock(descriptor, operation)
+        except BlockingIOError:
+            return False
+        return True
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    try:  # pragma: no cover - Windows-only development fallback
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK, 1)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock_claim(descriptor: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)  # pragma: no cover
+
+
+def _after_claim_file_created(_claim_path: Path) -> None:
+    """Deterministic seam after exclusive creation and locking, before metadata."""

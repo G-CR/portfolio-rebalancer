@@ -521,7 +521,6 @@ def _format_version(document: dict[str, Any]) -> int:
         raise InvalidBackupDocument("backup format version is invalid")
     if value > CURRENT_FORMAT_VERSION:
         raise UnsupportedBackupVersion("backup format is newer than this application")
-    require_migration_path(value)
     return value
 
 
@@ -679,6 +678,7 @@ def open_verified_archive(path: Path) -> InspectedArchive:
         manifest = _parse_manifest(raw_manifest, version)
         for member in DATA_MEMBERS:
             _verify_member_bytes(archive, by_name[member], manifest.members[member])
+        require_migration_path(version)
         inspected = InspectedArchive(
             path=path,
             manifest=manifest,

@@ -23,6 +23,7 @@ from app.backups.archive import (
     UnsupportedBackupVersion,
     inspect_archive,
     iter_current_rows,
+    open_verified_archive,
     write_archive,
 )
 from app.backups.canonical import canonical_json_bytes, encode_json_value, logical_checksum
@@ -591,6 +592,24 @@ def test_missing_migration_path_is_typed(tmp_path: Path) -> None:
     )
     with pytest.raises(MissingMigrationPath):
         inspect_archive(old)
+
+
+def test_member_corruption_precedes_missing_migration_path(tmp_path: Path) -> None:
+    valid = write_valid_archive(tmp_path)
+    with ZipFile(valid) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    manifest["format_version"] = 0
+    hostile = rewrite_archive(
+        valid,
+        tmp_path / "corrupt-old.portfolio-backup",
+        replace={
+            "manifest.json": canonical_json_bytes(manifest),
+            "credentials.json": b"[{}]",
+        },
+    )
+
+    with pytest.raises(InvalidBackupArchive):
+        open_verified_archive(hostile)
 
 
 def test_unknown_manifest_field_is_rejected(tmp_path: Path) -> None:

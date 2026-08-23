@@ -280,8 +280,24 @@ def test_persisted_domain_constraint_families_are_rejected(
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
 
 
-@pytest.mark.parametrize("priority", [["yahoo"], ["yahoo"] * 5])
-def test_provider_priority_requires_all_five_exactly_once(tmp_path: Path, priority: list[str]) -> None:
+@pytest.mark.parametrize("priority", [[], ["akshare", "yahoo", "tushare", "alpha_vantage"]])
+def test_provider_priority_accepts_and_preserves_seed_and_known_legacy_subsets(
+    tmp_path: Path, priority: list[str],
+) -> None:
+    source = _source()
+    source["data/settings.json"][0]["provider_priority"] = priority
+    archive = _archive(tmp_path, source)
+    validate_backup(archive, path_id="upload:test", workspace_root=tmp_path)
+    from app.backups.archive import inspect_archive, iter_current_rows
+    with inspect_archive(archive) as inspected:
+        [settings] = list(iter_current_rows(inspected, "data/settings.json"))
+    assert settings["provider_priority"] == priority
+
+
+@pytest.mark.parametrize("priority", [["yahoo", "yahoo"], ["unknown-provider"]])
+def test_provider_priority_rejects_duplicates_and_unknowns(
+    tmp_path: Path, priority: list[str],
+) -> None:
     source = _source()
     source["data/settings.json"][0]["provider_priority"] = priority
     with pytest.raises(BackupValidationError) as exc_info:
@@ -292,6 +308,71 @@ def test_provider_priority_requires_all_five_exactly_once(tmp_path: Path, priori
 def test_rebalance_response_shape_requires_every_plan_response_key(tmp_path: Path) -> None:
     source = _source()
     del source["data/rebalance_plans.json"][0]["input_summary"]["available_cny"]
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+def test_legacy_rebalance_fallback_and_missing_asset_targets_are_supported(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    plan["input_summary"].update(plan["input_summary"]["resolved_constraints"])
+    plan["input_summary"].pop("resolved_constraints")
+    plan["input_summary"].pop("asset_class_targets")
+    plan["data_version"] = "legacy-opaque-version"
+
+    _validate(tmp_path, source)
+
+
+def test_legacy_rebalance_fallback_still_requires_renderer_constraint_keys(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    summary = source["data/rebalance_plans.json"][0]["input_summary"]
+    summary.pop("resolved_constraints")
+    summary.pop("minimum_trade_cny")
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "result", "projected_weight", "suggested_action", "result_trade",
+        "fx_comparison", "fx_result", "fx_trade",
+    ],
+)
+def test_rebalance_nested_unknown_fields_are_rejected(
+    tmp_path: Path, target: str,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    projected = plan["projected_result"]
+    trade = {
+        "symbol": "SYNTH", "action": "buy", "quantity": "1",
+        "amount_cny": "1", "amount_trade_currency": "1",
+        "reason_code": "UNDERWEIGHT_WITH_CASH", "reason": "Synthetic trade.",
+    }
+    plan["suggested_actions"] = [dict(trade)]
+    projected["result"]["trades"] = [dict(trade)]
+    projected["fx_comparison"]["result"]["trades"] = [dict(trade)]
+    if target == "result":
+        projected["result"]["unknown"] = "secret"
+    elif target == "projected_weight":
+        projected["result"]["projected_weights"][0]["unknown"] = "secret"
+    elif target == "suggested_action":
+        plan["suggested_actions"][0]["unknown"] = "secret"
+    elif target == "result_trade":
+        projected["result"]["trades"][0]["unknown"] = "secret"
+    elif target == "fx_comparison":
+        projected["fx_comparison"]["unknown"] = "secret"
+    elif target == "fx_result":
+        projected["fx_comparison"]["result"]["unknown"] = "secret"
+    else:
+        projected["fx_comparison"]["result"]["trades"][0]["unknown"] = "secret"
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
@@ -523,30 +604,33 @@ def test_consumed_token_keeps_expiry_tombstone_until_upload_cleanup(tmp_path: Pa
     assert not list(storage.uploads_dir.glob("*.consumed.json"))
 
 
-def test_crashed_token_claim_still_carries_upload_expiry(tmp_path: Path) -> None:
+def test_stale_unlocked_claim_is_recovered_without_consuming_source_journal(
+    tmp_path: Path,
+) -> None:
     storage = BackupStorage(tmp_path / "backups")
     storage.initialize()
     archive = _archive(tmp_path)
     retained = storage.uploads_dir / "retained.portfolio-backup"
     retained.write_bytes(archive.read_bytes())
-    expires_at = NOW + timedelta(minutes=30)
     validated = validate_backup(
         retained,
         path_id="upload:retained",
-        expires_at=expires_at,
+        expires_at=NOW + timedelta(minutes=30),
         workspace_root=storage.tmp_dir,
     )
-    RestoreTokenRegistry(storage, clock=lambda: NOW).issue(validated)
+    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+    token = registry.issue(validated)
     [journal] = storage.uploads_dir.glob("*.token.json")
     claim = storage.uploads_dir / journal.name.replace(".token.json", ".token.claimed")
-    os.replace(journal, claim)
+    claim.write_text("{}")
     stale = (NOW - timedelta(minutes=6)).timestamp()
     os.utime(claim, (stale, stale))
 
-    manager = BackupOperationManager(storage, clock=lambda: expires_at)
-    assert manager.cleanup_expired(now=expires_at) is False
-    assert not retained.exists()
+    assert registry.cleanup_expired() is False
     assert not claim.exists()
+    assert journal.exists()
+    assert not list(storage.uploads_dir.glob("*.consumed.json"))
+    assert registry.consume(token).path_id == "upload:retained"
 
 
 def test_cleanup_does_not_steal_an_active_atomic_token_claim(
@@ -562,7 +646,8 @@ def test_cleanup_does_not_steal_an_active_atomic_token_claim(
         retained, path_id="upload:retained", expires_at=NOW + timedelta(minutes=30),
         workspace_root=storage.tmp_dir,
     )
-    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+    clock = [NOW]
+    registry = RestoreTokenRegistry(storage, clock=lambda: clock[0])
     token = registry.issue(validated)
     claimed = threading.Event()
     release = threading.Event()
@@ -571,12 +656,14 @@ def test_cleanup_does_not_steal_an_active_atomic_token_claim(
         claimed.set()
         assert release.wait(timeout=5)
 
-    monkeypatch.setattr(module, "_after_token_claim", pause)
+    monkeypatch.setattr(module, "_after_claim_file_created", pause, raising=False)
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(registry.consume, token)
         assert claimed.wait(timeout=5)
+        clock[0] = NOW + timedelta(minutes=10)
         assert registry.cleanup_expired() is False
         assert list(storage.uploads_dir.glob("*.token.claimed"))
+        assert list(storage.uploads_dir.glob("*.token.json"))
         release.set()
         assert future.result(timeout=5).path_id == "upload:retained"
 
@@ -600,6 +687,61 @@ def test_naive_token_expiry_is_sanitized_as_invalid(tmp_path: Path) -> None:
     with pytest.raises(BackupValidationError) as exc_info:
         registry.consume(token)
     assert exc_info.value.code == "BACKUP_TOKEN_INVALID"
+
+
+@pytest.mark.parametrize("failure", ["unlink", "fsync"])
+def test_expired_consume_storage_failures_are_typed_sanitized_and_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    storage = BackupStorage(tmp_path / "backups")
+    storage.initialize()
+    archive = _archive(tmp_path)
+    retained = storage.uploads_dir / "retained.portfolio-backup"
+    retained.write_bytes(archive.read_bytes())
+    validated = validate_backup(
+        retained, path_id="upload:retained", expires_at=NOW,
+        workspace_root=storage.tmp_dir,
+    )
+    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+    token = registry.issue(validated)
+    secret = f"private-{failure}-path SELECT credential-secret"
+    real_unlink = Path.unlink
+    real_fsync = storage._fsync_directory
+
+    if failure == "unlink":
+        def fail_unlink(path: Path, *args: object, **kwargs: object) -> None:
+            if path == retained:
+                raise OSError(secret)
+            real_unlink(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+    else:
+        def fail_fsync(directory: Path) -> None:
+            if directory == storage.uploads_dir and not retained.exists():
+                raise OSError(secret)
+            real_fsync(directory)
+        monkeypatch.setattr(storage, "_fsync_directory", fail_fsync)
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        registry.consume(token)
+    error = exc_info.value
+    assert error.code == "BACKUP_RESOURCE_LIMIT"
+    assert error.status_code == 507
+    assert secret not in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert secret not in caplog.text
+    assert list(storage.uploads_dir.glob("*.token.json"))
+    assert not list(storage.uploads_dir.glob("*.consumed.json"))
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    monkeypatch.setattr(storage, "_fsync_directory", real_fsync)
+    with pytest.raises(BackupValidationError) as retried:
+        registry.consume(token)
+    assert retried.value.code == "BACKUP_TOKEN_EXPIRED"
+    assert list(storage.uploads_dir.glob("*.consumed.json"))
 
 
 def test_open_index_closes_connection_when_schema_setup_fails(

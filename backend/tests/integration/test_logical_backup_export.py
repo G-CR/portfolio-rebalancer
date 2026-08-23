@@ -30,6 +30,7 @@ from app.db.models import (
     Setting,
     Snapshot,
     SnapshotItem,
+    DEFAULT_SETTINGS_ID,
 )
 from app.services import backup_export as backup_export_module
 from app.services.backup_export import (
@@ -38,6 +39,7 @@ from app.services.backup_export import (
     export_database_backup,
     export_logical_backup,
 )
+from app.services.backup_validation import validate_backup
 
 
 FIXED_TIME = datetime(2026, 8, 23, 9, 10, 11, 123456, tzinfo=timezone(timedelta(hours=8)))
@@ -454,6 +456,56 @@ async def test_export_contains_every_business_row_and_plaintext_secret(
     credential_rows = actual[CREDENTIAL_CONTRACT.member]
     assert {row["provider"]: row["value"] for row in credential_rows} == plaintext_by_provider
     assert all("encrypted_value" not in row for row in credential_rows)
+
+
+@pytest.mark.asyncio
+async def test_export_then_validate_preserves_seed_and_legacy_provider_priority(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    key_path = tmp_path / "synthetic-fernet.key"
+    SecretStore(key_path)
+    monkeypatch.setattr(
+        backup_export_module,
+        "SessionFactory",
+        async_sessionmaker(db_session.bind, expire_on_commit=False),
+    )
+    monkeypatch.setattr(
+        backup_export_module,
+        "get_settings",
+        lambda: SimpleNamespace(secret_key_path=str(key_path), timezone="Asia/Shanghai"),
+    )
+    db_session.add(AssetClass(
+        id=_id(901), name="Synthetic", target_weight=Decimal("1"),
+        display_order=0, is_active=True, created_at=now, updated_at=now,
+    ))
+    setting = Setting(
+        id=DEFAULT_SETTINGS_ID, refresh_hour=7, refresh_minute=30,
+        provider_priority=[], default_tolerance=Decimal("0.01"),
+        minimum_trade_amount_cny=Decimal("100"), allow_sell=True, allow_fx=True,
+        rebalance_available_cny=Decimal("0"), rebalance_available_usd=Decimal("0"),
+        rebalance_valuation_basis="actual", email_enabled=False,
+        email_recipient=None, email_smtp_host=None, email_smtp_port=465,
+        email_smtp_security="ssl", email_smtp_username=None, email_from=None,
+        created_at=now, updated_at=now,
+    )
+    db_session.add(setting)
+    await db_session.commit()
+    for index, priority in enumerate(
+        [[], ["akshare", "yahoo", "tushare", "alpha_vantage"]]
+    ):
+        setting.provider_priority = priority
+        await db_session.commit()
+        destination = tmp_path / f"priority-{index}.portfolio-backup"
+
+        await export_database_backup(destination)
+        validate_backup(destination, path_id="upload:test", workspace_root=tmp_path)
+
+        with inspect_archive(destination) as inspected:
+            [settings] = list(iter_current_rows(inspected, "data/settings.json"))
+        assert settings["provider_priority"] == priority
 
 
 @pytest.mark.asyncio

@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
+from app.backups.archive import inspect_archive, iter_current_rows
 from app.db.models import AssetClass, Holding, MarketData, RebalancePlan
 from app.db.session import SessionFactory
 from app.main import app
 from app.services import rebalancing as rebalancing_service
+from app.services.backup_export import export_database_backup
+from app.services.backup_validation import validate_backup
 
 NOW = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
 
@@ -306,6 +310,7 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     api_client,
     db_session,
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
     configured = await _configure_two_class_portfolio(api_client, db_session)
 
@@ -386,8 +391,19 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
 
     legacy_input_summary = dict(plan.input_summary)
     legacy_input_summary.pop("resolved_constraints")
+    legacy_input_summary.pop("asset_class_targets")
     plan.input_summary = legacy_input_summary
+    plan.data_version = "legacy-opaque-version"
     await db_session.commit()
+
+    archive = tmp_path / "legacy-rebalance.portfolio-backup"
+    await export_database_backup(archive)
+    validate_backup(archive, path_id="upload:test", workspace_root=tmp_path)
+    with inspect_archive(archive) as inspected:
+        [archived_plan] = list(iter_current_rows(inspected, "data/rebalance_plans.json"))
+    assert "resolved_constraints" not in archived_plan["input_summary"]
+    assert "asset_class_targets" not in archived_plan["input_summary"]
+    assert archived_plan["data_version"] == "legacy-opaque-version"
 
     legacy_listed = await api_client.get("/api/rebalance/plans")
     legacy_detail = await api_client.get(f"/api/rebalance/plans/{created['id']}")
@@ -399,6 +415,8 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     assert legacy_detail.json()["allow_fx"] is True
     assert legacy_detail.json()["tolerance"] == "0.05"
     assert legacy_detail.json()["minimum_trade_cny"] == "0"
+    assert legacy_detail.json()["asset_class_targets"] == {}
+    assert legacy_detail.json()["data_version"] == "legacy-opaque-version"
 
 
 async def test_create_plan_uses_one_capture_when_newer_price_is_appended_before_insert(
