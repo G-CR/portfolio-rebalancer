@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -12,6 +13,19 @@ from app.schemas.backup import BackupOperation, SafetyBackupResponse
 
 PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
+
+
+class BackupSourceLease:
+    def __init__(self, storage: BackupStorage, path_id: str) -> None:
+        self._storage = storage
+        self.path_id = path_id
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._storage._release_source_lease(self.path_id)
 
 
 class BackupStorage:
@@ -32,6 +46,28 @@ class BackupStorage:
         self.uploads_dir = self.root / "uploads"
         self.safety_dir = self.root / "safety"
         self.tmp_dir = self.root / "tmp"
+        self._source_lease_lock = threading.Lock()
+        self._source_leases: dict[str, int] = {}
+
+    def acquire_source_lease(self, path_id: str) -> BackupSourceLease:
+        with self._source_lease_lock:
+            self._source_leases[path_id] = self._source_leases.get(path_id, 0) + 1
+        return BackupSourceLease(self, path_id)
+
+    def _release_source_lease(self, path_id: str) -> None:
+        with self._source_lease_lock:
+            count = self._source_leases.get(path_id, 0)
+            if count <= 1:
+                self._source_leases.pop(path_id, None)
+            else:
+                self._source_leases[path_id] = count - 1
+
+    def is_source_leased(self, path_id: str) -> bool:
+        with self._source_lease_lock:
+            return self._source_leases.get(path_id, 0) > 0
+
+    def is_safety_backup_leased(self, backup_id: UUID) -> bool:
+        return self.is_source_leased(f"safety:{backup_id}")
 
     def initialize(self) -> None:
         for directory in (
@@ -169,6 +205,8 @@ class BackupStorage:
         except Exception:
             return
         for expired in backups[self.safety_retention :]:
+            if self.is_safety_backup_leased(expired.id):
+                continue
             try:
                 self.delete_safety_backup(expired.id)
             except Exception:

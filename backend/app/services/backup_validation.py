@@ -31,7 +31,7 @@ from app.db.models import DEFAULT_SETTINGS_ID
 from app.schemas.rebalance import RebalanceComparisonResponse, RebalanceResultResponse, TradeSuggestionResponse
 from app.schemas.email_settings import EmailSettingsUpdate
 from pydantic import TypeAdapter, ValidationError
-from app.services.backup_storage import BackupStorage
+from app.services.backup_storage import BackupSourceLease, BackupStorage
 from app.services.rebalance_version import rebalance_data_version
 
 try:  # Linux production uses flock; the fallback keeps local Windows tests faithful.
@@ -903,10 +903,12 @@ class RestoreTokenRegistry:
                     raise ValueError
                 if now < expires_at:
                     continue
+                path_id = str(document["path_id"])
+                if self.storage.is_source_leased(path_id):
+                    continue
                 claim_path = Path(f"{journal_path}.claimed")
                 os.replace(journal_path, claim_path)
                 self.storage._fsync_directory(self.storage.uploads_dir)
-                path_id = str(document["path_id"])
                 if path_id.startswith("upload:"):
                     self._resolve_path(path_id).unlink(missing_ok=True)
                     self.storage._fsync_directory(self.storage.uploads_dir)
@@ -928,11 +930,30 @@ class RestoreTokenRegistry:
         return maintenance_failed
 
     def consume(self, token: str) -> RestoreTokenBinding:
+        binding, lease = self._consume(token, acquire_lease=False)
+        assert lease is None
+        return binding
+
+    def consume_with_lease(
+        self,
+        token: str,
+    ) -> tuple[RestoreTokenBinding, BackupSourceLease]:
+        binding, lease = self._consume(token, acquire_lease=True)
+        assert lease is not None
+        return binding, lease
+
+    def _consume(
+        self,
+        token: str,
+        *,
+        acquire_lease: bool,
+    ) -> tuple[RestoreTokenBinding, BackupSourceLease | None]:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         journal_path = self._journal_path(token_hash)
         claim_path = self._claim_path(token_hash)
         descriptor: int | None = None
         locked = False
+        source_lease: BackupSourceLease | None = None
         try:
             descriptor = os.open(
                 claim_path,
@@ -979,8 +1000,17 @@ class RestoreTokenRegistry:
             except (OSError, TypeError, ValueError, KeyError):
                 self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.") from None
-            path = self._resolve_path(path_id)
+            if acquire_lease:
+                source_lease = self.storage.acquire_source_lease(path_id)
+            try:
+                path = self._resolve_path(path_id)
+            except BaseException:
+                if source_lease is not None:
+                    source_lease.release()
+                raise
             if self._clock() >= expires_at:
+                if source_lease is not None:
+                    source_lease.release()
                 storage_failed = False
                 if path_id.startswith("upload:"):
                     try:
@@ -996,19 +1026,32 @@ class RestoreTokenRegistry:
                     ) from None
                 self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_EXPIRED", "Restore token has expired.")
-            digest = hashlib.sha256()
             try:
-                with path.open("rb") as source:
-                    while chunk := source.read(STREAM_CHUNK_BYTES):
-                        digest.update(chunk)
+                observed_hash = _retained_archive_sha256(path)
             except OSError:
+                if source_lease is not None:
+                    source_lease.release()
                 self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.") from None
-            if not hmac.compare_digest(digest.hexdigest(), expected_hash):
+            except BaseException:
+                if source_lease is not None:
+                    source_lease.release()
+                raise
+            if not hmac.compare_digest(observed_hash, expected_hash):
+                if source_lease is not None:
+                    source_lease.release()
                 self._mark_consumed(journal_path, token_hash)
                 raise BackupValidationError("BACKUP_TOKEN_INVALID", "Restore token is invalid.")
-            self._mark_consumed(journal_path, token_hash)
-            return RestoreTokenBinding(path, path_id, expected_hash, expires_at)
+            try:
+                self._mark_consumed(journal_path, token_hash)
+            except BaseException:
+                if source_lease is not None:
+                    source_lease.release()
+                raise
+            return (
+                RestoreTokenBinding(path, path_id, expected_hash, expires_at),
+                source_lease,
+            )
         finally:
             assert descriptor is not None
             if locked:
@@ -1034,6 +1077,14 @@ class RestoreTokenRegistry:
                 "Restore token storage could not be updated.",
                 status_code=507,
             ) from None
+
+
+def _retained_archive_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(STREAM_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _lock_claim(descriptor: int, *, nonblocking: bool) -> bool:

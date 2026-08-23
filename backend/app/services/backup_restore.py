@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from sqlalchemy import delete, insert, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backups.archive import ArchiveMetadata, iter_current_rows, open_verified_archive
+from app.backups.canonical import canonical_parsed_json_bytes
 from app.backups.constants import DATA_MEMBERS, STREAM_CHUNK_BYTES
 from app.backups.contracts import CREDENTIAL_CONTRACT, CONTRACTS_BY_MEMBER, Codec
 from app.backups.migrations import migrate_to_current
@@ -82,6 +84,15 @@ class RestoreResult:
     logical_checksum: str
 
 
+async def _run_sync(callable_, *args, **kwargs):
+    task = asyncio.create_task(asyncio.to_thread(callable_, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 def _archive_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -101,6 +112,8 @@ def _decode_value(codec: Codec, value: object) -> object:
         return date.fromisoformat(str(value))
     if codec is Codec.DATETIME:
         return datetime.fromisoformat(str(value))
+    if codec is Codec.JSON:
+        return canonical_parsed_json_bytes(value).decode("utf-8")
     return value
 
 
@@ -133,20 +146,85 @@ async def _insert_archive(
     *,
     secret_store: SecretStore,
 ) -> None:
-    with open_verified_archive(validated.retained_archive_path) as inspected:
-        if not hmac.compare_digest(inspected.archive_sha256, validated.archive_sha256):
-            raise BackupRestoreError("validated archive binding changed")
-        migrated = migrate_to_current(inspected)
+    reader = _ArchiveBatchReader(validated, secret_store)
+    await _run_sync(reader.open)
+    inserted_batch = False
+    try:
         for member in INSERT_MEMBERS:
             contract = CONTRACTS_BY_MEMBER[member]
-            batch: list[dict[str, object]] = []
-            for row in iter_current_rows(migrated, member):
-                batch.append(_database_row(member, row, secret_store))
-                if len(batch) == INSERT_BATCH_SIZE:
-                    await session.execute(insert(contract.model), batch)
-                    batch.clear()
-            if batch:
-                await session.execute(insert(contract.model), batch)
+            await _run_sync(reader.begin_member, member)
+            while batch := await _run_sync(reader.next_batch):
+                statement = _insert_statement(member)
+                await session.execute(statement, batch)
+                if not inserted_batch:
+                    inserted_batch = True
+                    _restore_checkpoint("insert")
+    finally:
+        await _run_sync(reader.close)
+
+
+class _ArchiveBatchReader:
+    def __init__(
+        self,
+        validated: ValidatedBackup,
+        secret_store: SecretStore,
+    ) -> None:
+        self.validated = validated
+        self.secret_store = secret_store
+        self.inspected = None
+        self.migrated = None
+        self.rows = None
+        self.member = ""
+
+    def open(self) -> None:
+        inspected = open_verified_archive(self.validated.retained_archive_path)
+        if not hmac.compare_digest(
+            inspected.archive_sha256,
+            self.validated.archive_sha256,
+        ):
+            inspected.close()
+            raise BackupRestoreError("validated archive binding changed")
+        self.inspected = inspected
+        self.migrated = migrate_to_current(inspected)
+
+    def begin_member(self, member: str) -> None:
+        assert self.migrated is not None
+        self.rows = iter_current_rows(self.migrated, member)
+        self.member = member
+
+    def next_batch(self) -> list[dict[str, object]]:
+        assert self.rows is not None
+        batch: list[dict[str, object]] = []
+        for _ in range(INSERT_BATCH_SIZE):
+            try:
+                row = next(self.rows)
+            except StopIteration:
+                break
+            batch.append(_database_row(self.member, row, self.secret_store))
+        return batch
+
+    def close(self) -> None:
+        if self.inspected is not None:
+            self.inspected.close()
+            self.inspected = None
+
+
+def _insert_statement(member: str):
+    contract = CONTRACTS_BY_MEMBER[member]
+    if not any(codec.codec is Codec.JSON for codec in contract.codecs):
+        return insert(contract.model)
+    values = [
+        (
+            f"CAST(:{column} AS JSON)"
+            if field_codec.codec is Codec.JSON
+            else f":{column}"
+        )
+        for column, field_codec in contract.field_codecs.items()
+    ]
+    return text(
+        f"INSERT INTO {contract.model.__tablename__} "
+        f"({', '.join(contract.columns)}) VALUES ({', '.join(values)})"
+    )
 
 
 async def restore_validated_backup(
@@ -164,7 +242,8 @@ async def restore_validated_backup(
     published_safety = False
     try:
         if not hmac.compare_digest(
-            _archive_sha256(validated.retained_archive_path), validated.archive_sha256
+            await _run_sync(_archive_sha256, validated.retained_archive_path),
+            validated.archive_sha256,
         ):
             raise BackupRestoreError("validated archive binding changed")
 
@@ -189,14 +268,16 @@ async def restore_validated_backup(
                 secret_store=secret_store,
                 metadata=build_export_metadata_from_storage(),
             )
-            validate_backup(
+            await _run_sync(
+                validate_backup,
                 safety_partial,
                 path_id=f"safety:{safety_id}",
                 workspace_root=storage.tmp_dir,
             )
             # Retention waits until the source archive has been fully consumed. If the
             # source is the oldest safety file, deleting it here would break restore.
-            storage.publish_safety_backup(
+            await _run_sync(
+                storage.publish_safety_backup,
                 safety_id,
                 safety_partial,
                 enforce_retention=False,
@@ -208,10 +289,10 @@ async def restore_validated_backup(
                 safety_partial.unlink(missing_ok=True)
 
         await progress.set_stage(BackupStage.WRITING_DATA)
-        _restore_checkpoint("delete")
-        for member in DELETE_MEMBERS:
+        for index, member in enumerate(DELETE_MEMBERS):
             await session.execute(delete(CONTRACTS_BY_MEMBER[member].model))
-        _restore_checkpoint("insert")
+            if index == 0:
+                _restore_checkpoint("delete")
         await _insert_archive(session, validated, secret_store=secret_store)
 
         await progress.set_stage(BackupStage.VERIFYING_INTEGRITY)
@@ -240,7 +321,7 @@ async def restore_validated_backup(
         raise BackupRestoreError("logical backup restore failed") from None
     finally:
         if published_safety:
-            storage.enforce_safety_retention()
+            await _run_sync(storage.enforce_safety_retention)
 
 
 def build_export_metadata_from_storage() -> ArchiveMetadata:

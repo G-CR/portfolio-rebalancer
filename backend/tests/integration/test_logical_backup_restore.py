@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.core.secrets import SecretStore
 from app.db.models import AssetClass, EncryptedSecret, Setting
 from app.schemas.backup import BackupStage
 from app.services import backup_restore as restore_module
+from app.services import backup_export as export_module
 from app.services.backup_export import export_logical_backup
 from app.services.backup_restore import BackupRestoreError, restore_validated_backup
 from app.services.backup_storage import BackupStorage
@@ -156,9 +158,24 @@ async def test_restore_failure_preserves_original_state(db_session: AsyncSession
     asset.name = "current-before-restore"; await db_session.commit()
     before = await _export(db_session, tmp_path / "before.portfolio-backup", secret_store)
     monkeypatch.setattr(restore_module, "build_export_metadata_from_storage", lambda: _metadata())
+    executed = {"delete": 0, "insert": 0}
+    real_execute = db_session.execute
+
+    async def tracked_execute(statement, *args, **kwargs):
+        result = await real_execute(statement, *args, **kwargs)
+        sql = str(statement).lstrip().upper()
+        if sql.startswith("DELETE"):
+            executed["delete"] += 1
+        if sql.startswith("INSERT"):
+            executed["insert"] += 1
+        return result
+
+    monkeypatch.setattr(db_session, "execute", tracked_execute)
 
     def fail_at(stage: str) -> None:
         if stage == failure_stage:
+            if stage in executed:
+                assert executed[stage] >= 1
             raise RuntimeError("injected restore failure")
 
     monkeypatch.setattr(restore_module, "_restore_checkpoint", fail_at)
@@ -329,3 +346,151 @@ async def test_restoring_oldest_safety_file_delays_retention_until_source_is_con
     assert restored is not None and restored.name == "old-safety"
     assert result.safety_backup_id != source_id
     assert len(storage.list_safety_backups()) == 1
+
+
+@pytest.mark.asyncio
+async def test_nested_json_decimal_round_trip_is_lossless_and_checksum_stable(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    precise = Decimal("0.1234567890123456789012345678")
+    source = _validated_source()
+    source["data/cost_adjustments.json"][0]["input_summary"] = {
+        "precise": precise,
+        "nested": [precise],
+    }
+    archive = tmp_path / "decimal-json.portfolio-backup"
+    expected = write_archive(archive, source, _metadata())
+    storage = _storage(tmp_path)
+    validated = validate_backup(archive, path_id="upload:decimal", workspace_root=storage.tmp_dir)
+    secret_store = SecretStore(tmp_path / "current-fernet.key")
+    await _seed_state(db_session, secret_store, name="temporary", secret="temporary")
+    monkeypatch.setattr(
+        restore_module,
+        "build_export_metadata_from_storage",
+        lambda: _metadata(),
+    )
+
+    async with db_session.begin():
+        await restore_validated_backup(
+            db_session,
+            validated,
+            storage=storage,
+            secret_store=secret_store,
+            progress=_Progress(),
+        )
+
+    stored = await db_session.scalar(
+        text("SELECT input_summary::text FROM cost_adjustments LIMIT 1")
+    )
+    assert stored is not None
+    assert format(precise, "f") in stored
+    assert f'"precise": "{precise}"' not in stored
+    await db_session.rollback()
+    actual = await _export(db_session, tmp_path / "decimal-json-after.portfolio-backup", secret_store)
+    assert actual.logical_checksum == expected.logical_checksum
+
+
+@pytest.mark.asyncio
+async def test_sync_archive_work_does_not_block_event_loop(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_store = SecretStore(tmp_path / "current-fernet.key")
+    await _seed_state(db_session, secret_store, name="heartbeat", secret="heartbeat")
+    real_write = export_module.write_archive
+
+    def slow_write(*args, **kwargs):
+        time.sleep(0.2)
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(export_module, "write_archive", slow_write)
+    ticks = 0
+    running = True
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        await _export(db_session, tmp_path / "heartbeat.portfolio-backup", secret_store)
+    finally:
+        running = False
+        await heartbeat_task
+    assert ticks >= 10
+
+
+@pytest.mark.asyncio
+async def test_restore_hash_validation_publication_and_retention_keep_loop_responsive(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_store = SecretStore(tmp_path / "current-fernet.key")
+    storage = _storage(tmp_path)
+    await _seed_state(db_session, secret_store, name="responsive", secret="responsive")
+    archive = tmp_path / "responsive.portfolio-backup"
+    await _export(db_session, archive, secret_store)
+    validated = validate_backup(archive, path_id="upload:responsive", workspace_root=storage.tmp_dir)
+    real_hash = restore_module._archive_sha256
+    real_validate = restore_module.validate_backup
+    real_publish = storage.publish_safety_backup
+    real_retention = storage.enforce_safety_retention
+
+    def delayed(callable_, *args, **kwargs):
+        time.sleep(0.1)
+        return callable_(*args, **kwargs)
+
+    monkeypatch.setattr(
+        restore_module,
+        "_archive_sha256",
+        lambda *args, **kwargs: delayed(real_hash, *args, **kwargs),
+    )
+    monkeypatch.setattr(
+        restore_module,
+        "validate_backup",
+        lambda *args, **kwargs: delayed(real_validate, *args, **kwargs),
+    )
+    monkeypatch.setattr(
+        storage,
+        "publish_safety_backup",
+        lambda *args, **kwargs: delayed(real_publish, *args, **kwargs),
+    )
+    monkeypatch.setattr(
+        storage,
+        "enforce_safety_retention",
+        lambda *args, **kwargs: delayed(real_retention, *args, **kwargs),
+    )
+    monkeypatch.setattr(
+        restore_module,
+        "build_export_metadata_from_storage",
+        lambda: _metadata(),
+    )
+    ticks = 0
+    running = True
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        async with db_session.begin():
+            await restore_validated_backup(
+                db_session,
+                validated,
+                storage=storage,
+                secret_store=secret_store,
+                progress=_Progress(),
+            )
+    finally:
+        running = False
+        await heartbeat_task
+    assert ticks >= 40

@@ -76,6 +76,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _run_blocking(callable_, *args, **kwargs):
+    task = asyncio.create_task(asyncio.to_thread(callable_, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
+
+
 async def _current_record_counts() -> dict[str, int]:
     counts: dict[str, int] = {}
     async with SessionFactory() as session:
@@ -240,19 +249,32 @@ async def post_restore(
     manager = _manager(request)
     registry = RestoreTokenRegistry(storage)
     binding_holder = []
+    lease_holder = []
 
     async def consume_token() -> None:
-        binding_holder.append(
-            await asyncio.to_thread(registry.consume, payload.restore_token)
+        consume_task = asyncio.create_task(
+            asyncio.to_thread(
+                registry.consume_with_lease,
+                payload.restore_token,
+            )
         )
+        try:
+            binding, lease = await asyncio.shield(consume_task)
+        except asyncio.CancelledError:
+            try:
+                _, lease = await consume_task
+            except Exception:
+                pass
+            else:
+                lease.release()
+            raise
+        binding_holder.append(binding)
+        lease_holder.append(lease)
 
     async def run_restore(context) -> None:
         binding = binding_holder[0]
-        referenced_safety_id: UUID | None = None
-        if binding.path_id.startswith("safety:"):
-            referenced_safety_id = UUID(binding.path_id.partition(":")[2])
         try:
-            validated = await asyncio.to_thread(
+            validated = await _run_blocking(
                 validate_backup,
                 binding.retained_archive_path,
                 path_id=binding.path_id,
@@ -275,18 +297,24 @@ async def post_restore(
                     )
                     await context.set_safety_backup_id(result.safety_backup_id)
         finally:
-            if referenced_safety_id is not None:
-                manager.release_safety_backup(referenced_safety_id)
+            lease_holder[0].release()
+            await asyncio.to_thread(storage.enforce_safety_retention)
+            await asyncio.to_thread(RestoreTokenRegistry(storage).cleanup_expired)
 
     try:
         operation = await manager.start("restore", run_restore, prepare=consume_token)
     except BackupValidationError as exc:
+        if lease_holder:
+            lease_holder[0].release()
         raise _validation_error(exc) from exc
     except ServiceError as exc:
+        if lease_holder:
+            lease_holder[0].release()
         raise _service_error(exc) from exc
-    binding = binding_holder[0]
-    if binding.path_id.startswith("safety:"):
-        manager.reference_safety_backup(UUID(binding.path_id.partition(":")[2]))
+    except BaseException:
+        if lease_holder:
+            lease_holder[0].release()
+        raise
     return BackupOperationResponse.model_validate(operation)
 
 

@@ -1,23 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
+from decimal import Decimal
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from cryptography.fernet import InvalidToken
-from sqlalchemy import Select, select, text
+from sqlalchemy import Select, Text, cast, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backups.archive import (
     ArchiveMetadata,
     ArchiveSummary,
     BackupArchiveError,
+    canonical_source_row_bytes,
     write_archive,
 )
 from app.backups.canonical import canonical_json_bytes
@@ -43,7 +46,7 @@ class _JsonLineRows:
     def __iter__(self) -> Iterator[Mapping[str, object]]:
         with self.path.open("rb") as source:
             for payload in source:
-                row = json.loads(payload)
+                row = json.loads(payload, parse_float=Decimal)
                 if not isinstance(row, dict):
                     raise BackupExportError("logical backup staging data is invalid")
                 yield row
@@ -85,7 +88,7 @@ class DatabaseLogicalSource:
                     if not batch:
                         break
                     for row in batch:
-                        staged_rows.write(canonical_json_bytes(row))
+                        staged_rows.write(canonical_source_row_bytes(contract, row))
                         staged_rows.write(b"\n")
                     last_id = batch[-1][contract.order_key]
                     if not isinstance(last_id, UUID):
@@ -120,6 +123,16 @@ class DatabaseLogicalSource:
         statement = self._batch_statement(contract, last_id)
         result = await self.session.execute(statement)
         rows = [dict(row) for row in result.mappings()]
+        for row in rows:
+            for column, field_codec in contract.field_codecs.items():
+                if field_codec.codec.value == "json" and row[column] is not None:
+                    raw_json = row[column]
+                    if not isinstance(raw_json, str):
+                        raise BackupExportError("logical JSON data is invalid")
+                    try:
+                        row[column] = json.loads(raw_json, parse_float=Decimal)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        raise BackupExportError("logical JSON data is invalid") from None
         if contract is CREDENTIAL_CONTRACT:
             for row in rows:
                 encrypted_value = row["value"]
@@ -141,14 +154,16 @@ class DatabaseLogicalSource:
         last_id: UUID | None,
     ) -> Select[Any]:
         model = contract.model
-        selected_columns = [
-            (
+        selected_columns = []
+        for column, field_codec in contract.field_codecs.items():
+            selected = (
                 EncryptedSecret.encrypted_value.label("value")
                 if contract is CREDENTIAL_CONTRACT and column == "value"
                 else getattr(model, column)
             )
-            for column in contract.columns
-        ]
+            if field_codec.codec.value == "json":
+                selected = cast(selected, Text).label(column)
+            selected_columns.append(selected)
         order_column = getattr(model, contract.order_key)
         statement = select(*selected_columns)
         if last_id is not None:
@@ -170,7 +185,14 @@ async def export_logical_backup(
     source_adapter = DatabaseLogicalSource(session, secret_store=secret_store)
     with tempfile.TemporaryDirectory(dir=destination.parent) as workspace_name:
         source = await source_adapter.stage(Path(workspace_name))
-        return write_archive(destination, source, metadata)
+        archive_task = asyncio.create_task(
+            asyncio.to_thread(write_archive, destination, source, metadata)
+        )
+        try:
+            return await asyncio.shield(archive_task)
+        except asyncio.CancelledError:
+            await archive_task
+            raise
 
 
 def build_export_metadata(settings: Settings) -> ArchiveMetadata:

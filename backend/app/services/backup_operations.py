@@ -207,7 +207,10 @@ class BackupOperationManager:
         self._referenced_safety_ids.discard(backup_id)
 
     def is_safety_backup_referenced(self, backup_id: UUID) -> bool:
-        return backup_id in self._referenced_safety_ids
+        return (
+            backup_id in self._referenced_safety_ids
+            or self.storage.is_safety_backup_leased(backup_id)
+        )
 
     def start_cleanup(self) -> None:
         if self._cleanup_task is None and not self._stopping and not self._stopped:

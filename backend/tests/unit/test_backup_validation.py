@@ -15,6 +15,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+import app.services.backup_validation as module
 from app.backups.archive import ArchiveMetadata, write_archive
 from app.backups.canonical import canonical_json_bytes, logical_checksum
 from app.backups import migrations
@@ -632,6 +633,34 @@ def test_token_can_be_consumed_by_only_one_concurrent_caller(
     assert sorted(results) == ["BACKUP_TOKEN_INVALID", "success"]
 
 
+def test_consume_releases_source_lease_when_hashing_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = BackupStorage(tmp_path / "backups")
+    storage.initialize()
+    archive = _archive(tmp_path)
+    retained = storage.uploads_dir / "retained.portfolio-backup"
+    retained.write_bytes(archive.read_bytes())
+    validated = validate_backup(
+        retained,
+        path_id="upload:retained",
+        expires_at=NOW + timedelta(minutes=30),
+        workspace_root=storage.tmp_dir,
+    )
+    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+    token = registry.issue(validated)
+    monkeypatch.setattr(
+        module,
+        "_retained_archive_sha256",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("hash worker crashed")),
+    )
+
+    with pytest.raises(RuntimeError, match="hash worker crashed"):
+        registry.consume_with_lease(token)
+
+    assert not storage.is_source_leased("upload:retained")
+
+
 def test_consumed_token_keeps_expiry_tombstone_until_upload_cleanup(tmp_path: Path) -> None:
     storage = BackupStorage(tmp_path / "backups")
     storage.initialize()
@@ -914,3 +943,34 @@ def test_periodic_backup_maintenance_cleans_expired_uploads(tmp_path: Path) -> N
 
     assert BackupOperationManager(storage, clock=lambda: NOW).cleanup_expired(now=NOW) is False
     assert not retained.exists()
+
+
+def test_upload_ttl_cleanup_waits_for_restore_source_lease(tmp_path: Path) -> None:
+    storage = BackupStorage(tmp_path / "backup-data")
+    storage.initialize()
+    upload_id = UUID("00000000-0000-0000-0000-000000000777")
+    path_id = f"upload:{upload_id}"
+    upload = storage.uploads_dir / f"{upload_id}.portfolio-backup"
+    upload.write_bytes(b"leased upload")
+    token_hash = "7" * 64
+    journal = storage.uploads_dir / f"{token_hash}.consumed.json"
+    storage._atomic_write(
+        journal,
+        canonical_json_bytes({
+            "token_hash": token_hash,
+            "archive_sha256": "8" * 64,
+            "path_id": path_id,
+            "expires_at": (NOW - timedelta(seconds=1)).isoformat(),
+        }),
+    )
+    lease = storage.acquire_source_lease(path_id)
+    registry = RestoreTokenRegistry(storage, clock=lambda: NOW)
+
+    registry.cleanup_expired()
+    assert upload.exists()
+    assert journal.exists()
+
+    lease.release()
+    registry.cleanup_expired()
+    assert not upload.exists()
+    assert not journal.exists()

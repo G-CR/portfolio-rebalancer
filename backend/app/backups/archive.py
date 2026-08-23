@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import stat
@@ -339,12 +340,44 @@ def _validate_row(member: str, row: object) -> dict[str, JsonValue]:
     return row
 
 
+def _parsed_json_value(value: object) -> JsonValue:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("JSON floats must be finite")
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("JSON decimals must be finite")
+        return value
+    if isinstance(value, list):
+        return [_parsed_json_value(item) for item in value]
+    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
+        return {key: _parsed_json_value(item) for key, item in value.items()}
+    raise TypeError("unsupported logical JSON value")
+
+
 def _encoded_source_row(contract: TableContract, row: Mapping[str, object]) -> dict[str, JsonValue]:
     try:
-        encoded = encode_json_value(dict(row))
+        encoded = {
+            field: (
+                _parsed_json_value(row[field])
+                if field_codec.codec is Codec.JSON and row[field] is not None
+                else encode_json_value(row[field])
+            )
+            for field, field_codec in contract.field_codecs.items()
+        }
     except (TypeError, ValueError) as exc:
         raise InvalidBackupDocument("source row contains an unsupported value") from exc
     return _validate_row(contract.member, encoded)
+
+
+def canonical_source_row_bytes(
+    contract: TableContract,
+    row: Mapping[str, object],
+) -> bytes:
+    return canonical_parsed_json_bytes(_encoded_source_row(contract, row))
 
 
 def _insert_row(
