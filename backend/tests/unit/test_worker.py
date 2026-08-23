@@ -17,6 +17,8 @@ class _FakeScheduler:
         self.shutdown_calls: list[bool] = []
 
     def add_job(self, func, **kwargs) -> None:
+        if kwargs.get("replace_existing"):
+            self.jobs = [job for job in self.jobs if job.get("id") != kwargs.get("id")]
         self.jobs.append({"func": func, **kwargs})
 
     def start(self) -> None:
@@ -56,6 +58,30 @@ def test_build_scheduler_uses_configured_timezone_and_single_instance(monkeypatc
     ]
 
 
+def test_build_scheduler_uses_shared_refresh_job_configuration(monkeypatch) -> None:
+    fake_scheduler = _FakeScheduler(timezone="unused")
+    configure = Mock()
+    monkeypatch.setattr(
+        worker_module,
+        "AsyncIOScheduler",
+        lambda *, timezone: fake_scheduler,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "get_settings",
+        lambda: SimpleNamespace(timezone="Asia/Shanghai", refresh_hour=9, refresh_minute=15),
+    )
+    monkeypatch.setattr(worker_module, "configure_refresh_job", configure)
+
+    scheduler = worker_module.build_scheduler()
+
+    assert scheduler is fake_scheduler
+    configure.assert_called_once_with(
+        fake_scheduler,
+        worker_module.RefreshSchedule(hour=9, minute=15),
+    )
+
+
 @pytest.mark.parametrize(
     ("hour", "minute"),
     [(-1, 0), (24, 0), (8, -1), (8, 60)],
@@ -81,6 +107,128 @@ def test_build_scheduler_rejects_invalid_timezone(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconcile_unchanged_schedule_does_not_replace_job() -> None:
+    scheduler = _FakeScheduler(timezone="Asia/Shanghai")
+    active = worker_module.RefreshSchedule(hour=8, minute=0)
+    worker_module.configure_refresh_job(scheduler, active)
+    existing_job = scheduler.jobs[0]
+
+    result = await worker_module.reconcile_refresh_schedule(
+        scheduler,
+        active,
+        loader=AsyncMock(return_value=active),
+    )
+
+    assert result == active
+    assert len(scheduler.jobs) == 1
+    assert scheduler.jobs[0] is existing_job
+
+
+@pytest.mark.asyncio
+async def test_reconcile_changed_schedule_replaces_only_daily_refresh_job() -> None:
+    scheduler = _FakeScheduler(timezone="Asia/Shanghai")
+    active = worker_module.RefreshSchedule(hour=8, minute=0)
+    worker_module.configure_refresh_job(scheduler, active)
+    scheduler.add_job(Mock(name="other_job"), id="other-job")
+
+    changed = worker_module.RefreshSchedule(hour=9, minute=30)
+    result = await worker_module.reconcile_refresh_schedule(
+        scheduler,
+        active,
+        loader=AsyncMock(return_value=changed),
+    )
+
+    assert result == changed
+    assert [job["id"] for job in scheduler.jobs] == ["other-job", "daily-market-refresh"]
+    assert scheduler.jobs[-1]["hour"] == 9
+    assert scheduler.jobs[-1]["minute"] == 30
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("Worker refresh schedule must contain a valid hour and minute."),
+        RuntimeError("database temporarily unavailable"),
+    ],
+)
+async def test_reconcile_contains_load_errors_and_keeps_current_job(
+    failure: Exception,
+    monkeypatch,
+) -> None:
+    scheduler = _FakeScheduler(timezone="Asia/Shanghai")
+    active = worker_module.RefreshSchedule(hour=8, minute=0)
+    worker_module.configure_refresh_job(scheduler, active)
+    existing_job = scheduler.jobs[0]
+    log_exception = Mock()
+    monkeypatch.setattr(worker_module.logger, "exception", log_exception)
+
+    result = await worker_module.reconcile_refresh_schedule(
+        scheduler,
+        active,
+        loader=AsyncMock(side_effect=failure),
+    )
+
+    assert result == active
+    assert len(scheduler.jobs) == 1
+    assert scheduler.jobs[0] is existing_job
+    log_exception.assert_called_once_with("Worker schedule reconciliation failed")
+
+
+@pytest.mark.asyncio
+async def test_watch_refresh_schedule_polls_repeatedly_every_30_seconds() -> None:
+    scheduler = _FakeScheduler(timezone="Asia/Shanghai")
+    active = worker_module.RefreshSchedule(hour=8, minute=0)
+    delays: list[float] = []
+
+    async def recording_sleep(delay: float) -> None:
+        delays.append(delay)
+        if len(delays) == 3:
+            raise asyncio.CancelledError
+
+    loader = AsyncMock(return_value=active)
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker_module.watch_refresh_schedule(
+            scheduler,
+            active,
+            loader=loader,
+            sleep=recording_sleep,
+        )
+
+    assert delays == [30, 30, 30]
+    assert loader.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_watch_refresh_schedule_cancellation_is_clean() -> None:
+    scheduler = _FakeScheduler(timezone="Asia/Shanghai")
+    active = worker_module.RefreshSchedule(hour=8, minute=0)
+    sleeping = asyncio.Event()
+
+    async def blocked_sleep(delay: float) -> None:
+        assert delay == 30
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    watcher = asyncio.create_task(
+        worker_module.watch_refresh_schedule(
+            scheduler,
+            active,
+            loader=AsyncMock(),
+            sleep=blocked_sleep,
+        )
+    )
+    await sleeping.wait()
+    watcher.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await watcher
+
+    assert watcher.done()
+
+
+@pytest.mark.asyncio
 async def test_run_shuts_down_scheduler_when_cancelled(monkeypatch) -> None:
     scheduler = _FakeScheduler(timezone="Asia/Shanghai")
 
@@ -101,6 +249,51 @@ async def test_run_shuts_down_scheduler_when_cancelled(monkeypatch) -> None:
 
     assert scheduler.started is True
     assert scheduler.shutdown_calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_run_cancels_and_awaits_watcher_before_scheduler_shutdown(monkeypatch) -> None:
+    lifecycle: list[str] = []
+
+    class _OrderedScheduler(_FakeScheduler):
+        def shutdown(self, *, wait: bool = True) -> None:
+            lifecycle.append("shutdown")
+            super().shutdown(wait=wait)
+
+    class _CancelledEvent:
+        async def wait(self) -> None:
+            raise asyncio.CancelledError
+
+    class _WatcherTask:
+        def cancel(self) -> None:
+            lifecycle.append("cancel")
+
+        def __await__(self):
+            async def mark_awaited() -> None:
+                lifecycle.append("await")
+                raise asyncio.CancelledError
+
+            return mark_awaited().__await__()
+
+    scheduler = _OrderedScheduler(timezone="Asia/Shanghai")
+
+    def create_task(coroutine):
+        coroutine.close()
+        return _WatcherTask()
+
+    monkeypatch.setattr(
+        worker_module,
+        "load_refresh_schedule",
+        AsyncMock(return_value=worker_module.RefreshSchedule(hour=9, minute=15)),
+    )
+    monkeypatch.setattr(worker_module, "build_scheduler", lambda **kwargs: scheduler)
+    monkeypatch.setattr(worker_module.asyncio, "Event", _CancelledEvent)
+    monkeypatch.setattr(worker_module.asyncio, "create_task", create_task)
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker_module._run()
+
+    assert lifecycle == ["cancel", "await", "shutdown"]
 
 
 def test_compose_worker_has_restart_policy() -> None:
