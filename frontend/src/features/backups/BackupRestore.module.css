@@ -1,0 +1,82 @@
+.panel { border-bottom: 1px solid var(--color-rule); background: color-mix(in srgb, var(--color-ground) 46%, var(--color-surface)); }
+.summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) var(--space-7) var(--space-3); }
+.heading { display: flex; min-width: 0; align-items: center; gap: var(--space-3); }
+.heading > svg { flex: 0 0 auto; color: var(--color-actual); }
+.heading h3, .heading p { margin: 0; }
+.heading h3 { font-size: 14px; text-wrap: balance; }
+.heading p { margin-top: 2px; color: var(--color-muted); font-size: 11px; }
+.actions, .drawerActions, .rowActions { display: flex; align-items: center; gap: var(--space-2); }
+.primaryButton, .secondaryButton, .dangerButton, .safetyToggle, .rowActions button, .error button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--color-rule); border-radius: var(--radius); background: var(--color-surface); color: var(--color-ink); font: inherit; cursor: pointer; transition: border-color 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out; }
+.primaryButton { border-color: var(--color-actual); background: var(--color-actual); color: #fff; }
+.secondaryButton { border-color: var(--color-actual); color: var(--color-actual); }
+.dangerButton { border-color: var(--color-fx); background: var(--color-fx); color: #fff; }
+.primaryButton:hover:not(:disabled) { background: color-mix(in srgb, var(--color-actual) 88%, black); }
+.secondaryButton:hover:not(:disabled), .safetyToggle:hover:not(:disabled), .rowActions button:hover:not(:disabled), .error button:hover:not(:disabled) { border-color: var(--color-actual); background: color-mix(in srgb, var(--color-actual) 7%, var(--color-surface)); }
+.dangerButton:hover:not(:disabled) { background: color-mix(in srgb, var(--color-fx) 88%, black); }
+.primaryButton:focus-visible, .secondaryButton:focus-visible, .dangerButton:focus-visible, .safetyToggle:focus-visible, .rowActions button:focus-visible, .error button:focus-visible, .confirmField input:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
+.primaryButton:disabled, .secondaryButton:disabled, .dangerButton:disabled, .safetyToggle:disabled, .rowActions button:disabled { cursor: not-allowed; opacity: .5; }
+.permanentWarning { display: flex; max-width: 75ch; align-items: flex-start; gap: var(--space-2); margin: 0; padding: 0 var(--space-7) var(--space-3); color: color-mix(in srgb, var(--color-target) 78%, var(--color-ink)); font-size: 11px; line-height: 1.55; text-wrap: pretty; }
+.permanentWarning svg, .secretNotice svg { flex: 0 0 auto; margin-top: 1px; }
+.statusArea { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-7); border-top: 1px solid var(--color-rule); background: var(--color-surface); }
+.statusArea p { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-size: 11px; }
+.success { color: var(--color-planned); }
+.stages { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: 0; list-style: none; }
+.stages li { display: flex; align-items: center; gap: var(--space-2); color: var(--color-muted); font-size: 10px; }
+.stages i { width: 8px; height: 8px; border: 1px solid var(--color-rule); border-radius: 50%; background: var(--color-surface); }
+.stages li[data-state="done"] { color: var(--color-planned); }
+.stages li[data-state="done"] i { border-color: var(--color-planned); background: var(--color-planned); }
+.stages li[data-state="current"] { color: var(--color-ink); font-weight: 650; }
+.stages li[data-state="current"] i { border-color: var(--color-actual); background: var(--color-actual); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-actual) 18%, transparent); }
+.error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--color-fx); font-size: 11px; }
+.error button { min-height: 30px; flex: 0 0 auto; color: var(--color-fx); }
+.safetyToggle { min-height: 34px; margin: 0 var(--space-7) var(--space-3); border-color: transparent; background: transparent; color: var(--color-muted); }
+.safetyToggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.safetySection { padding: 0 var(--space-7) var(--space-4); }
+.tableWrap { overflow-x: auto; border: 1px solid var(--color-rule); background: var(--color-surface); }
+.safetyTable, .comparison { width: 100%; border-collapse: collapse; }
+.safetyTable { min-width: 760px; }
+.safetyTable th, .safetyTable td, .comparison th, .comparison td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-rule); text-align: left; }
+.safetyTable th, .comparison th { color: var(--color-muted); font-size: 10px; font-weight: 550; }
+.safetyTable td, .comparison td { font-family: var(--font-data); font-size: 10px; }
+.safetyTable tbody tr:last-child td, .comparison tbody tr:last-child td, .comparison tbody tr:last-child th { border-bottom: 0; }
+.rowActions { justify-content: flex-end; }
+.rowActions button { min-height: 30px; padding-inline: var(--space-2); font-family: var(--font-ui); font-size: 10px; }
+.rowActions .dangerText { color: var(--color-fx); }
+.empty { margin: 0; padding: var(--space-3); border: 1px dashed var(--color-rule); color: var(--color-muted); font-size: 11px; }
+.skeletons { display: grid; gap: var(--space-2); }
+.skeletons i { display: block; height: 38px; background: var(--color-subtle); animation: backupPulse 1.4s ease-in-out infinite; }
+.preview { display: grid; gap: var(--space-4); }
+.previewMeta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.previewMeta div { min-width: 0; padding-bottom: var(--space-2); border-bottom: 1px solid var(--color-rule); }
+.previewMeta span, .previewMeta strong { display: block; }
+.previewMeta span { color: var(--color-muted); font-size: 10px; }
+.previewMeta strong { overflow-wrap: anywhere; margin-top: var(--space-1); font-family: var(--font-data); font-size: 11px; }
+.secretNotice { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--color-target) 42%, var(--color-rule)); background: color-mix(in srgb, var(--color-target) 9%, var(--color-surface)); color: color-mix(in srgb, var(--color-target) 75%, var(--color-ink)); font-size: 11px; line-height: 1.55; }
+.comparisonWrap { overflow-x: auto; }
+.comparison { min-width: 480px; }
+.comparison td:not(:first-child) { text-align: right; }
+.warningLine { margin: 0; color: var(--color-muted); font-size: 11px; }
+.confirmField { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--color-rule); font-size: 12px; font-weight: 650; }
+.confirmField input { min-height: 40px; padding: 0 var(--space-3); border: 1px solid var(--color-rule); border-radius: var(--radius); background: var(--color-surface); color: var(--color-ink); font: inherit; font-weight: 400; }
+.confirmField input::placeholder { color: color-mix(in srgb, var(--color-muted) 88%, var(--color-ink)); }
+.drawerActions { justify-content: flex-end; }
+.deleteCopy { max-width: 65ch; }
+.deleteCopy p { color: var(--color-muted); line-height: 1.6; text-wrap: pretty; }
+.deleteCopy p:first-child { color: var(--color-ink); }
+.spin { animation: backupSpin .85s linear infinite; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+@keyframes backupSpin { to { transform: rotate(360deg); } }
+@keyframes backupPulse { 50% { opacity: .46; } }
+@media (prefers-reduced-motion: reduce) { .spin, .skeletons i { animation: none; } .primaryButton, .secondaryButton, .dangerButton, .safetyToggle, .rowActions button, .error button { transition: none; } }
+@media (max-width: 760px) {
+  .summary { align-items: stretch; flex-direction: column; padding: var(--space-4); }
+  .actions { align-items: stretch; flex-direction: column; }
+  .actions button { width: 100%; }
+  .permanentWarning { padding: 0 var(--space-4) var(--space-3); }
+  .statusArea { padding-inline: var(--space-4); }
+  .safetyToggle { margin-inline: var(--space-4); }
+  .safetySection { padding-inline: var(--space-4); }
+  .stages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .previewMeta { grid-template-columns: 1fr; }
+  .drawerActions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+}

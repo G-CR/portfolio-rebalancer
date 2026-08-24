@@ -1,5 +1,47 @@
 export type DecimalString = string;
 
+export type BackupOperationStatus = "pending" | "running" | "succeeded" | "failed" | "interrupted";
+export type BackupStage = "validated" | "locking_data" | "creating_safety_backup" | "writing_data" | "verifying_integrity" | "completed";
+
+export interface BackupOperation {
+  id: string;
+  kind: "export" | "restore";
+  status: BackupOperationStatus;
+  stage: BackupStage;
+  error: { code: string; message: string } | null;
+  download_ready: boolean;
+  safety_backup_id: string | null;
+}
+
+export interface BackupCountComparison {
+  backup: number;
+  current: number;
+  delta: number;
+}
+
+export interface BackupPreview {
+  exported_at: string;
+  source_application_version: string;
+  source_format_version: number;
+  current_format_version: number;
+  record_counts: Record<string, number>;
+  current_record_counts: Record<string, number>;
+  count_comparison: Record<string, BackupCountComparison>;
+  warnings: string[];
+  credential_categories: string[];
+  restore_token: string;
+  expires_at: string;
+}
+
+export interface SafetyBackup {
+  id: string;
+  exported_at: string;
+  source_application_version: string;
+  format_version: number;
+  size_bytes: number;
+  record_counts: Record<string, number>;
+}
+
 export type ApiErrorDetail = {
   code: string;
   message: string;

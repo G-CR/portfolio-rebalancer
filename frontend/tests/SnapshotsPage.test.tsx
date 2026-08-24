@@ -169,6 +169,8 @@ describe("SnapshotsPage", () => {
     expect(screen.getByRole("button", { name: "浮动盈亏" })).toBeInTheDocument();
     expect(screen.queryByText("组合收益率")).not.toBeInTheDocument();
     expect(screen.getByText("快照时点状态，不代表精确组合回报")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "完整备份与恢复" })).toBeVisible();
+    expect(screen.getByLabelText("快照类型")).toBeEnabled();
   });
 
   it("pairs before and after rebalance events in chart and table", async () => {

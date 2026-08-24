@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import type { SnapshotType } from "../api/types";
 import { WorkDrawer } from "../components/WorkDrawer/WorkDrawer";
+import { BackupRestorePanel } from "../features/backups/BackupRestorePanel";
 import { useAssetClasses } from "../features/assetClasses/api";
 import { useCreateManualSnapshot, useSnapshotDetail, useSnapshots } from "../features/snapshots/api";
 import { formatDecimal } from "../features/analytics/format";
@@ -89,6 +90,7 @@ export function SnapshotsPage() {
         <div><p>HISTORY LEDGER</p><h2 id="snapshots-title">历史快照</h2><span>复核日终、手动与再平衡时点的核心池状态</span></div>
         <button className={styles.primaryButton} type="button" onClick={() => setManualOpen(true)}><Camera size={16} aria-hidden="true" />保存当前快照</button>
       </header>
+      <BackupRestorePanel />
       <div className={styles.filters}>
         <div className={styles.filterGroup}>
           <span>时间范围</span>

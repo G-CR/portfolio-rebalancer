@@ -57,6 +57,13 @@ async function errorDetail(response: Response): Promise<ApiErrorDetail> {
   };
 }
 
+async function requestResponse<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -71,6 +78,38 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+export async function apiUpload<T>(path: string, file: File): Promise<T> {
+  return requestResponse<T>(path, {
+    method: "POST",
+    body: file,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/octet-stream",
+      "X-Backup-Filename": file.name,
+    },
+  });
+}
+
+function downloadFilename(disposition: string | null) {
+  if (!disposition) return "portfolio-backup.portfolio-backup";
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (utf8) {
+    try { return decodeURIComponent(utf8); } catch { return utf8; }
+  }
+  return disposition.match(/filename="([^"]+)"/i)?.[1]
+    ?? disposition.match(/filename=([^;]+)/i)?.[1]?.trim()
+    ?? "portfolio-backup.portfolio-backup";
+}
+
+export async function apiDownload(path: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(path, { headers: { Accept: "application/octet-stream" } });
+  if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(response.headers.get("Content-Disposition")),
+  };
 }
 
 export function jsonBody(value: unknown) {
