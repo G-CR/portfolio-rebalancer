@@ -281,6 +281,32 @@ describe("BackupRestorePanel", () => {
     expect(previewAttempts).toBe(2);
   });
 
+  it("clears an old safety download error when the row download succeeds on the next click", async () => {
+    const user = userEvent.setup();
+    let downloads = 0;
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: vi.fn(() => "blob:safety-retry"), revokeObjectURL: vi.fn() }));
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderWithProviders(<BackupRestorePanel />, { handlers: [
+      http.get("/api/backups/safety", () => HttpResponse.json([safety])),
+      http.get(`/api/backups/safety/${safety.id}/download`, () => {
+        downloads += 1;
+        return downloads === 1
+          ? HttpResponse.json({ detail: { code: "BACKUP_RESOURCE_LIMIT", message: "disk" } }, { status: 507 })
+          : new HttpResponse(new Blob(["safe"]));
+      }),
+    ] });
+
+    await user.click(screen.getByRole("button", { name: "管理恢复前安全备份" }));
+    const row = await screen.findByRole("row", { name: /1\.5 KB/ });
+    const download = within(row).getByRole("button", { name: "下载" });
+    await user.click(download);
+    expect(await screen.findByRole("alert")).toHaveTextContent("备份超出资源限制");
+    await user.click(download);
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(downloads).toBe(2);
+  });
+
   it("submits a safety restore and refreshes the safety list when the restore terminates", async () => {
     const user = userEvent.setup();
     let listRequests = 0;

@@ -112,12 +112,12 @@ function PreviewContent({ preview, confirmation, onConfirmation }: {
   </div>;
 }
 
-function SafetyRow({ item, disabled, onPreview, onDelete, onError }: {
+function SafetyRow({ item, disabled, onDownload, onPreview, onDelete }: {
   item: SafetyBackup;
   disabled: boolean;
+  onDownload: (item: SafetyBackup) => void;
   onPreview: (item: SafetyBackup) => void;
   onDelete: (item: SafetyBackup) => void;
-  onError: (item: SafetyBackup, error: unknown) => void;
 }) {
   return <tr>
     <td><time dateTime={item.exported_at}>{formatDate(item.exported_at)}</time></td>
@@ -125,7 +125,7 @@ function SafetyRow({ item, disabled, onPreview, onDelete, onError }: {
     <td>{formatBytes(item.size_bytes)}</td>
     <td>{totalRecords(item.record_counts)}</td>
     <td><div className={styles.rowActions}>
-      <button type="button" disabled={disabled} onClick={() => void saveBackupDownload(`/api/backups/safety/${item.id}/download`).catch((error) => onError(item, error))}><Download size={14} aria-hidden="true" />下载</button>
+      <button type="button" disabled={disabled} onClick={() => onDownload(item)}><Download size={14} aria-hidden="true" />下载</button>
       <button type="button" disabled={disabled} onClick={() => onPreview(item)}>恢复</button>
       <button className={styles.dangerText} type="button" disabled={disabled} onClick={() => onDelete(item)}><Trash2 size={14} aria-hidden="true" />删除</button>
     </div></td>
@@ -245,13 +245,11 @@ export function BackupRestorePanel() {
     });
   };
 
-  const handleSafetyDownloadError = (item: SafetyBackup, error: unknown) => {
-    setFailure({
-      error,
-      retry: () => void saveBackupDownload(`/api/backups/safety/${item.id}/download`)
-        .then(() => setFailure(null))
-        .catch((nextError) => handleSafetyDownloadError(item, nextError)),
-    });
+  const downloadSafety = (item: SafetyBackup) => {
+    setFailure(null);
+    void saveBackupDownload(`/api/backups/safety/${item.id}/download`)
+      .then(() => setFailure(null))
+      .catch((error) => setFailure({ error, retry: () => downloadSafety(item) }));
   };
 
   const restoreActive = Boolean(visibleOperation?.kind === "restore" && (visibleOperation.status === "pending" || visibleOperation.status === "running" || visibleOperation.status === "succeeded"));
@@ -280,7 +278,7 @@ export function BackupRestorePanel() {
       {safetyBackups.isPending ? <div className={styles.skeletons} role="status" aria-label="正在载入安全备份"><i /><i /></div> : null}
       {safetyBackups.isError ? <div className={styles.error} role="alert"><span>安全备份列表暂时无法载入。</span><button type="button" onClick={() => void safetyBackups.refetch()}>重试</button></div> : null}
       {safetyBackups.data?.length === 0 ? <p className={styles.empty}>还没有恢复前安全备份。每次确认恢复前，系统会自动保留一份当前状态。</p> : null}
-      {safetyBackups.data?.length ? <div className={styles.tableWrap}><table className={styles.safetyTable} aria-label="恢复前安全备份"><thead><tr><th>导出时间</th><th>应用 / 格式</th><th>文件大小</th><th>记录数</th><th>操作</th></tr></thead><tbody>{safetyBackups.data.map((item) => <SafetyRow key={item.id} item={item} disabled={active} onPreview={openSafetyPreview} onDelete={setDeleteTarget} onError={handleSafetyDownloadError} />)}</tbody></table></div> : null}
+      {safetyBackups.data?.length ? <div className={styles.tableWrap}><table className={styles.safetyTable} aria-label="恢复前安全备份"><thead><tr><th>导出时间</th><th>应用 / 格式</th><th>文件大小</th><th>记录数</th><th>操作</th></tr></thead><tbody>{safetyBackups.data.map((item) => <SafetyRow key={item.id} item={item} disabled={active} onDownload={downloadSafety} onPreview={openSafetyPreview} onDelete={setDeleteTarget} />)}</tbody></table></div> : null}
     </div> : null}
 
     <WorkDrawer open={Boolean(preview)} title="恢复备份预览" closeDisabled={restoreMutation.isPending} onClose={() => { setPreview(null); setRestoreFailure(null); setConfirmation(""); }} footer={<div className={styles.drawerActions}><button className={styles.secondaryButton} type="button" disabled={restoreMutation.isPending} onClick={() => { setPreview(null); setRestoreFailure(null); setConfirmation(""); }}>取消</button><button className={styles.dangerButton} type="button" disabled={confirmation !== "恢复" || restoreMutation.isPending} onClick={beginRestore}>{restoreMutation.isPending ? "正在启动" : "开始恢复"}</button></div>}>
