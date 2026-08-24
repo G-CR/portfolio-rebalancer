@@ -1,8 +1,27 @@
+from collections.abc import Mapping
+
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 
 EXPECTED_TEST_DATABASE = "portfolio_test"
+EXPECTED_TEST_COMPOSE_IDENTITIES = {
+    "COMPOSE_PROJECT_NAME": "portfolio-rebalancer-test",
+    "PYTEST_POSTGRES_VOLUME": "portfolio-rebalancer-test_postgres_data",
+    "PYTEST_SECRET_VOLUME": "portfolio-rebalancer-test_secret_data",
+    "PYTEST_BACKUP_VOLUME": "portfolio-rebalancer-test_backup_data",
+}
+
+
+def require_safe_test_environment(environment: Mapping[str, str]) -> None:
+    if any(
+        environment.get(key) != expected
+        for key, expected in EXPECTED_TEST_COMPOSE_IDENTITIES.items()
+    ):
+        raise RuntimeError(
+            "Refusing pytest database reset: test Compose isolation identity mismatch. "
+            "Run `make test-backend`."
+        )
 
 
 def require_safe_test_database(

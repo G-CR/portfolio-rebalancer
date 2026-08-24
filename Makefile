@@ -17,6 +17,9 @@ test-backend:
 		export POSTGRES_DB=portfolio_test; \
 		export DATABASE_URL=postgresql+asyncpg://portfolio:portfolio@db:5432/portfolio_test; \
 		export PYTEST_DATABASE_RESET_TOKEN=portfolio_test; \
+		export PYTEST_POSTGRES_VOLUME=$${COMPOSE_PROJECT_NAME}_postgres_data; \
+		export PYTEST_SECRET_VOLUME=$${COMPOSE_PROJECT_NAME}_secret_data; \
+		export PYTEST_BACKUP_VOLUME=$${COMPOSE_PROJECT_NAME}_backup_data; \
 		export PORTFOLIO_PORT=0; \
 		cleanup() { docker compose down -v --remove-orphans >/dev/null 2>&1 || true; }; \
 		trap cleanup EXIT; \
@@ -24,7 +27,14 @@ test-backend:
 		docker compose up -d db; \
 		docker compose build api; \
 		docker compose run --rm -e DATABASE_URL api uv run alembic upgrade head; \
-		docker compose run --rm -e DATABASE_URL -e PYTEST_DATABASE_RESET_TOKEN api uv run pytest $(PYTEST_ARGS)
+		docker compose run --rm \
+			-e DATABASE_URL \
+			-e PYTEST_DATABASE_RESET_TOKEN \
+			-e COMPOSE_PROJECT_NAME \
+			-e PYTEST_POSTGRES_VOLUME \
+			-e PYTEST_SECRET_VOLUME \
+			-e PYTEST_BACKUP_VOLUME \
+			api uv run pytest $(PYTEST_ARGS)
 
 test-frontend:
 	cd frontend && npm test -- --run --passWithNoTests

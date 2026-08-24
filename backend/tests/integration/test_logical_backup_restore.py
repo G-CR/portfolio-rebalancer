@@ -209,6 +209,16 @@ async def test_committed_v1_golden_replaces_different_state_exactly(
 def test_backend_acceptance_environment_uses_only_disposable_test_state() -> None:
     settings = get_settings()
 
+    assert os.environ["COMPOSE_PROJECT_NAME"] == "portfolio-rebalancer-test"
+    assert os.environ["PYTEST_POSTGRES_VOLUME"] == (
+        "portfolio-rebalancer-test_postgres_data"
+    )
+    assert os.environ["PYTEST_SECRET_VOLUME"] == (
+        "portfolio-rebalancer-test_secret_data"
+    )
+    assert os.environ["PYTEST_BACKUP_VOLUME"] == (
+        "portfolio-rebalancer-test_backup_data"
+    )
     assert settings.database_url.endswith("/portfolio_test")
     assert os.environ["PYTEST_DATABASE_RESET_TOKEN"] == "portfolio_test"
     assert settings.backup_root == TEST_BACKUP_ROOT

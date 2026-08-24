@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from tests.database_safety import require_safe_test_database
+from tests.database_safety import require_safe_test_database, require_safe_test_environment
 
 BUSINESS_TABLES = (
     "snapshot_items",
@@ -26,6 +26,7 @@ BUSINESS_TABLES = (
     "asset_classes",
 )
 
+require_safe_test_environment(os.environ)
 DATABASE_URL = require_safe_test_database(
     os.getenv("DATABASE_URL"),
     os.getenv("PYTEST_DATABASE_RESET_TOKEN"),
