@@ -249,7 +249,6 @@ async def restore_validated_backup(
 
     if not session.in_transaction():
         raise RuntimeError("restore requires a caller-owned transaction")
-    published_safety = False
     try:
         if not hmac.compare_digest(
             await _run_sync(_archive_sha256, validated.retained_archive_path),
@@ -293,7 +292,6 @@ async def restore_validated_backup(
                 enforce_retention=False,
             )
             safety_published = True
-            published_safety = True
         finally:
             if not safety_published:
                 safety_partial.unlink(missing_ok=True)
@@ -329,9 +327,6 @@ async def restore_validated_backup(
         raise
     except Exception:
         raise BackupRestoreError("logical backup restore failed") from None
-    finally:
-        if published_safety:
-            await _run_sync(storage.enforce_safety_retention)
 
 
 def build_export_metadata_from_storage() -> ArchiveMetadata:

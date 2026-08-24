@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from uuid import UUID
@@ -12,8 +13,20 @@ from app.schemas.backup import (
     OperationKind,
 )
 from app.services.backup_storage import BackupStorage
-from app.services.backup_validation import RestoreTokenRegistry
+from app.services.backup_validation import BackupValidationError, RestoreTokenRegistry
 from app.services.errors import ServiceError
+
+
+_PUBLIC_BACKUP_FAILURE_MESSAGES = {
+    "BACKUP_FUTURE_VERSION": "Backup format is newer than this application.",
+    "BACKUP_INCOMPATIBLE": "Backup data does not match the supported format.",
+    "BACKUP_RELATIONSHIP_INVALID": "Backup relationships are inconsistent.",
+    "BACKUP_RESOURCE_LIMIT": "Backup could not be retained within available resources.",
+    "BACKUP_TOKEN_INVALID": "Restore token is invalid.",
+    "BACKUP_TOKEN_EXPIRED": "Restore token has expired.",
+    "BACKUP_PREVIEW_FAILED": "Backup preview could not be prepared.",
+    "BACKUP_OPERATION_CONFLICT": "Another backup operation is already active.",
+}
 
 
 class BackupOperationConflict(ServiceError):
@@ -301,12 +314,12 @@ class BackupOperationManager:
         except asyncio.CancelledError:
             self._mark_interrupted(operation.id)
             raise
-        except BaseException:
+        except BaseException as exc:
             self.storage.delete_export(operation.id)
             failed = self.get(operation.id).model_copy(
                 update={
                     "status": "failed",
-                    "error": self._failure_for(operation.kind),
+                    "error": self._failure_for(operation.kind, exc),
                     "download_ready": False,
                     "updated_at": self._clock(),
                 }
@@ -336,7 +349,16 @@ class BackupOperationManager:
         self.storage.write_operation(operation)
 
     @staticmethod
-    def _failure_for(kind: OperationKind) -> BackupError:
+    def _failure_for(kind: OperationKind, exc: BaseException) -> BackupError:
+        if isinstance(exc, (BackupValidationError, ServiceError)):
+            public_message = _PUBLIC_BACKUP_FAILURE_MESSAGES.get(exc.code)
+            if public_message is not None:
+                return BackupError(code=exc.code, message=public_message)
+        if isinstance(exc, OSError) and exc.errno in {errno.ENOSPC, errno.EDQUOT}:
+            return BackupError(
+                code="BACKUP_RESOURCE_LIMIT",
+                message="Backup could not be retained because storage space is insufficient.",
+            )
         if kind == "restore":
             return BackupError(code="BACKUP_ROLLBACK", message="Backup restore was rolled back.")
         return BackupError(code="BACKUP_EXPORT_FAILED", message="Backup export failed.")

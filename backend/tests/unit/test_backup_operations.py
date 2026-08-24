@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import stat
@@ -21,6 +22,8 @@ from app.services.backup_operations import (
     BackupOperationManager,
 )
 from app.services.backup_storage import BackupStorage
+from app.services.backup_validation import BackupValidationError
+from app.services.errors import ServiceError
 
 
 def _empty_source() -> dict[str, list[dict[str, object]]]:
@@ -179,6 +182,61 @@ async def test_manager_sanitizes_runner_failure_in_persisted_journal(tmp_path: P
     assert secret not in persisted
     assert "/private/path" not in persisted
     assert "SELECT" not in persisted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_code", "expected_message"),
+    [
+        (
+            BackupValidationError(
+                "BACKUP_FUTURE_VERSION",
+                "newer archive /private/backup contains synthetic-super-secret",
+            ),
+            "BACKUP_FUTURE_VERSION",
+            "Backup format is newer than this application.",
+        ),
+        (
+            ServiceError(
+                status_code=507,
+                code="BACKUP_RESOURCE_LIMIT",
+                message="disk /private/backup contains synthetic-super-secret",
+            ),
+            "BACKUP_RESOURCE_LIMIT",
+            "Backup could not be retained within available resources.",
+        ),
+        (
+            OSError(errno.ENOSPC, "No space left on device", "/private/backup"),
+            "BACKUP_RESOURCE_LIMIT",
+            "Backup could not be retained because storage space is insufficient.",
+        ),
+    ],
+)
+async def test_manager_preserves_sanitized_actionable_backup_failures(
+    tmp_path: Path,
+    failure: BaseException,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    storage = BackupStorage(tmp_path)
+    storage.initialize()
+    manager = BackupOperationManager(storage)
+
+    async def failed_runner(_):
+        raise failure
+
+    operation = await manager.start("restore", failed_runner)
+    await manager.wait(operation.id)
+
+    persisted = storage.operation_journal_path(operation.id).read_text()
+    result = manager.get(operation.id)
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == expected_code
+    assert result.error.message == expected_message
+    assert "/private/backup" not in persisted
+    assert "No space left on device" not in persisted
+    assert "synthetic-super-secret" not in persisted
 
 
 def test_recovery_interrupts_unfinished_operations_and_removes_orphan_files(tmp_path: Path) -> None:

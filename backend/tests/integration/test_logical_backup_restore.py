@@ -386,7 +386,7 @@ async def test_cancellation_before_commit_rolls_back_database_and_keeps_safety(
 
 
 @pytest.mark.asyncio
-async def test_restoring_oldest_safety_file_delays_retention_until_source_is_consumed(
+async def test_restore_transaction_never_runs_full_safety_retention(
     db_session: AsyncSession,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -413,6 +413,13 @@ async def test_restoring_oldest_safety_file_delays_retention_until_source_is_con
         "build_export_metadata_from_storage",
         lambda: _metadata(),
     )
+    retention_calls = 0
+
+    def unexpected_retention() -> None:
+        nonlocal retention_calls
+        retention_calls += 1
+
+    monkeypatch.setattr(storage, "enforce_safety_retention", unexpected_retention)
 
     async with db_session.begin():
         result = await restore_validated_backup(
@@ -426,7 +433,8 @@ async def test_restoring_oldest_safety_file_delays_retention_until_source_is_con
     restored = await db_session.get(AssetClass, ASSET_ID)
     assert restored is not None and restored.name == "old-safety"
     assert result.safety_backup_id != source_id
-    assert len(storage.list_safety_backups()) == 1
+    assert retention_calls == 0
+    assert len(storage.list_safety_backups()) == 2
 
 
 @pytest.mark.asyncio

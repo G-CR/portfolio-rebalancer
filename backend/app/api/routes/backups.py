@@ -338,15 +338,16 @@ async def download_operation(operation_id: UUID, request: Request) -> FileRespon
 
 @router.get("/safety", response_model=list[SafetyBackupResponse])
 async def get_safety_backups(request: Request) -> list[SafetyBackupResponse]:
-    return _storage(request).list_safety_backups()
+    return await _run_blocking(_storage(request).list_safety_backups)
 
 
 @router.get("/safety/{backup_id}/download", response_class=FileResponse)
 async def download_safety_backup(backup_id: UUID, request: Request) -> FileResponse:
     storage = _storage(request)
     path = storage.safety_path(backup_id)
+    backups = await _run_blocking(storage.list_safety_backups)
     metadata = next(
-        (item for item in storage.list_safety_backups() if item.id == backup_id),
+        (item for item in backups if item.id == backup_id),
         None,
     )
     if metadata is None or not path.is_file():

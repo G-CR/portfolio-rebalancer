@@ -247,6 +247,41 @@ async def test_safety_list_download_and_explicit_delete_confirmation(api_client)
     assert not storage.safety_path(backup_id).exists()
 
 
+@pytest.mark.parametrize("endpoint", ["/api/backups/safety", "download"])
+async def test_safety_metadata_inspection_keeps_event_loop_responsive(
+    api_client,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+) -> None:
+    storage = app.state.backup_storage
+    backup_id = storage.new_safety_id()
+    partial = storage.safety_partial_path(backup_id)
+    _preview_archive(partial)
+    storage.publish_safety_backup(backup_id, partial)
+    real_list = storage.list_safety_backups
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_list():
+        entered.set()
+        assert release.wait(timeout=10)
+        return real_list()
+
+    monkeypatch.setattr(storage, "list_safety_backups", blocked_list)
+    path = (
+        endpoint
+        if endpoint != "download"
+        else f"/api/backups/safety/{backup_id}/download"
+    )
+    request_task = asyncio.create_task(api_client.get(path))
+    await asyncio.wait_for(asyncio.to_thread(entered.wait, 5), timeout=6)
+    heartbeat = asyncio.create_task(asyncio.sleep(0))
+    await asyncio.wait_for(heartbeat, timeout=0.2)
+    release.set()
+    response = await asyncio.wait_for(request_task, timeout=10)
+    assert response.status_code == 200
+
+
 async def test_safety_delete_rejects_item_referenced_by_active_operation(api_client) -> None:
     storage = app.state.backup_storage
     manager = app.state.backup_operation_manager
@@ -650,6 +685,12 @@ async def test_restore_source_lease_spans_hash_admission_and_runner(
     release_runner = asyncio.Event()
     real_hash = backup_validation_module._retained_archive_sha256
     loop = asyncio.get_running_loop()
+    retention_observations: list[bool] = []
+    real_retention = storage.enforce_safety_retention
+
+    def observed_retention() -> None:
+        retention_observations.append(storage.is_safety_backup_leased(backup_id))
+        real_retention()
 
     def blocked_hash(path: Path) -> str:
         loop.call_soon_threadsafe(hash_entered.set)
@@ -684,6 +725,7 @@ async def test_restore_source_lease_spans_hash_admission_and_runner(
     RestoreTokenRegistry(storage, clock=lambda: datetime.now(timezone.utc) + timedelta(hours=1)).cleanup_expired()
     assert storage.safety_path(backup_id).exists()
     storage.safety_retention = original_retention
+    monkeypatch.setattr(storage, "enforce_safety_retention", observed_retention)
     release_hash.set()
     started = await asyncio.wait_for(started_task, timeout=10)
     assert started.status_code == 202
@@ -693,6 +735,7 @@ async def test_restore_source_lease_spans_hash_admission_and_runner(
     completed = await _poll_terminal(api_client, started.json()["id"])
     assert completed["status"] == "succeeded"
     assert not storage.is_safety_backup_leased(backup_id)
+    assert retention_observations == [False]
     deleted = await api_client.delete(
         f"/api/backups/safety/{backup_id}", params={"confirm": "true"}
     )
