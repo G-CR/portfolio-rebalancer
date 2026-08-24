@@ -56,6 +56,7 @@
 .comparison { min-width: 480px; }
 .comparison td:not(:first-child) { text-align: right; }
 .warningLine { margin: 0; color: var(--color-muted); font-size: 11px; }
+.previewError { margin: var(--space-3) 0 0; color: var(--color-fx); font-size: 11px; }
 .confirmField { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--color-rule); font-size: 12px; font-weight: 650; }
 .confirmField input { min-height: 40px; padding: 0 var(--space-3); border: 1px solid var(--color-rule); border-radius: var(--radius); background: var(--color-surface); color: var(--color-ink); font: inherit; font-weight: 400; }
 .confirmField input::placeholder { color: color-mix(in srgb, var(--color-muted) 88%, var(--color-ink)); }
@@ -63,6 +64,10 @@
 .deleteCopy { max-width: 65ch; }
 .deleteCopy p { color: var(--color-muted); line-height: 1.6; text-wrap: pretty; }
 .deleteCopy p:first-child { color: var(--color-ink); }
+.deleteCopy dl { display: grid; gap: var(--space-2); margin: var(--space-4) 0; }
+.deleteCopy dl div { min-width: 0; padding-bottom: var(--space-2); border-bottom: 1px solid var(--color-rule); }
+.deleteCopy dt { color: var(--color-muted); font-size: 10px; }
+.deleteCopy dd { overflow-wrap: anywhere; margin: var(--space-1) 0 0; font-family: var(--font-data); font-size: 11px; }
 .spin { animation: backupSpin .85s linear infinite; }
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 @keyframes backupSpin { to { transform: rotate(360deg); } }

@@ -124,12 +124,15 @@ describe("BackupRestorePanel", () => {
     expect(start).toBeEnabled();
     await user.click(start);
 
-    for (const label of ["校验完成", "锁定数据", "创建安全备份", "写入数据", "完整性复核", "完成"]) {
-      expect(await screen.findByText(label, {}, { timeout: 7000 })).toBeVisible();
+    for (const label of ["校验完成", "锁定数据", "创建安全备份", "写入数据", "完整性复核"]) {
+      const stage = await screen.findByText(label, {}, { timeout: 7000 });
+      await waitFor(() => expect(stage.closest("li")).toHaveAttribute("aria-current", "step"), { timeout: 7000 });
     }
+    await waitFor(() => expect(screen.getByText("完成").closest("li")).toHaveAttribute("data-state", "done"), { timeout: 7000 });
     expect(await screen.findByText(/安全备份.*c0000000/, {}, { timeout: 8000 })).toBeVisible();
-    await waitFor(() => expect(queryClient.getQueryData(["sentinel"])).toBeUndefined());
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+    await waitFor(() => expect(queryClient.getQueryData(["sentinel"])).toBeUndefined(), { timeout: 2000 });
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1), { timeout: 2000 });
   }, 15000);
 
   it.each([
@@ -149,6 +152,23 @@ describe("BackupRestorePanel", () => {
     await user.click(screen.getByRole("button", { name: "导出完整备份" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(expected);
     expect(screen.getByRole("alert")).not.toHaveTextContent("secret");
+  });
+
+  it("keeps a rejected restore preview open and shows its sanitized error inside the drawer", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<BackupRestorePanel />, { handlers: [
+      http.post("/api/backups/upload", () => HttpResponse.json(preview)),
+      http.post("/api/backups/restore", () => HttpResponse.json({ detail: { code: "BACKUP_OPERATION_CONFLICT", message: "C:\\private\\token" } }, { status: 409 })),
+    ] });
+
+    await user.upload(screen.getByLabelText("选择备份文件"), new File(["x"], "restore.portfolio-backup"));
+    const dialog = await screen.findByRole("dialog", { name: "恢复备份预览" });
+    await user.type(within(dialog).getByLabelText("输入“恢复”以确认"), "恢复");
+    await user.click(within(dialog).getByRole("button", { name: "开始恢复" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("已有备份任务正在运行");
+    expect(dialog).not.toHaveTextContent("private");
+    expect(dialog).toBeVisible();
   });
 
   it("disables backup actions only while active and supports retry", async () => {
@@ -190,6 +210,9 @@ describe("BackupRestorePanel", () => {
 
     await user.click(screen.getByRole("button", { name: "导出完整备份" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("任务状态暂时无法更新");
+    expect(screen.getByRole("button", { name: "导出完整备份" })).toBeDisabled();
+    expect(screen.getByLabelText("选择备份文件")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "管理恢复前安全备份" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "重试查询状态" }));
     expect(await screen.findByText("完整备份已下载")).toBeVisible();
     expect(polls).toBe(2);
@@ -221,7 +244,73 @@ describe("BackupRestorePanel", () => {
     await user.click(within(row).getByRole("button", { name: "删除" }));
     const deletion = await screen.findByRole("dialog", { name: "删除安全备份" });
     expect(within(deletion).getByText(/不会使用恢复令牌/)).toBeVisible();
+    expect(deletion).toHaveTextContent(safety.id);
+    expect(deletion).toHaveTextContent("2026");
     await user.click(within(deletion).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByRole("row", { name: /1\.5 KB/ })).not.toBeInTheDocument());
+  });
+
+  it("binds retry to the safety preview that failed instead of an older export action", async () => {
+    const user = userEvent.setup();
+    let exportAttempts = 0;
+    let previewAttempts = 0;
+    renderWithProviders(<BackupRestorePanel />, { handlers: [
+      http.post("/api/backups/export", () => {
+        exportAttempts += 1;
+        return HttpResponse.json({ detail: { code: "BACKUP_RESOURCE_LIMIT", message: "full" } }, { status: 507 });
+      }),
+      http.get("/api/backups/safety", () => HttpResponse.json([safety])),
+      http.post(`/api/backups/safety/${safety.id}/preview`, () => {
+        previewAttempts += 1;
+        return previewAttempts === 1
+          ? HttpResponse.json({ detail: { code: "BACKUP_CORRUPT", message: "bad archive" } }, { status: 422 })
+          : HttpResponse.json(preview);
+      }),
+    ] });
+
+    await user.click(screen.getByRole("button", { name: "导出完整备份" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("备份超出资源限制");
+    await user.click(screen.getByRole("button", { name: "管理恢复前安全备份" }));
+    const row = await screen.findByRole("row", { name: /1\.5 KB/ });
+    await user.click(within(row).getByRole("button", { name: "恢复" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("备份文件已损坏");
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("dialog", { name: "恢复备份预览" })).toBeVisible();
+    expect(exportAttempts).toBe(1);
+    expect(previewAttempts).toBe(2);
+  });
+
+  it("submits a safety restore and refreshes the safety list when the restore terminates", async () => {
+    const user = userEvent.setup();
+    let listRequests = 0;
+    let restoreRequests = 0;
+    renderWithProviders(<BackupRestorePanel />, { handlers: [
+      http.get("/api/backups/safety", () => {
+        listRequests += 1;
+        return HttpResponse.json([safety]);
+      }),
+      http.post(`/api/backups/safety/${safety.id}/preview`, () => HttpResponse.json(preview)),
+      http.post("/api/backups/restore", async ({ request }) => {
+        restoreRequests += 1;
+        expect(await request.json()).toEqual({ restore_token: preview.restore_token, confirmation: "恢复" });
+        return HttpResponse.json({ id: "restore-safety", kind: "restore", status: "pending", stage: "validated", download_ready: false, error: null, safety_backup_id: null }, { status: 202 });
+      }),
+      http.get("/api/backups/operations/restore-safety", () => HttpResponse.json({
+        id: "restore-safety", kind: "restore", status: "failed", stage: "writing_data", download_ready: false,
+        error: { code: "BACKUP_RESTORE_FAILED", message: "private backend detail" }, safety_backup_id: null,
+      })),
+    ] });
+
+    await user.click(screen.getByRole("button", { name: "管理恢复前安全备份" }));
+    const row = await screen.findByRole("row", { name: /1\.5 KB/ });
+    await user.click(within(row).getByRole("button", { name: "恢复" }));
+    const dialog = await screen.findByRole("dialog", { name: "恢复备份预览" });
+    await user.type(within(dialog).getByLabelText("输入“恢复”以确认"), "恢复");
+    await user.click(within(dialog).getByRole("button", { name: "开始恢复" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("恢复失败，当前数据已保持不变");
+    await waitFor(() => expect(listRequests).toBeGreaterThanOrEqual(2));
+    expect(restoreRequests).toBe(1);
   });
 });

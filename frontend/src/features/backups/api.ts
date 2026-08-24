@@ -22,13 +22,11 @@ export function useSafetyPreview() {
 }
 
 export function useStartBackupRestore() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ token, confirmation }: { token: string; confirmation: string }) => apiRequest<BackupOperation>("/api/backups/restore", {
       method: "POST",
       body: jsonBody({ restore_token: token, confirmation }),
     }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: backupKeys.safety }),
   });
 }
 

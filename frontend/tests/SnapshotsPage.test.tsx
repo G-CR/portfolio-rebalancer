@@ -163,8 +163,7 @@ describe("SnapshotsPage", () => {
   it("presents snapshot metrics accurately and never calls them portfolio return", async () => {
     renderWithProviders(<SnapshotsPage />, { handlers: handlers() });
 
-    expect(await screen.findByRole("heading", { name: "历史快照" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "核心池市值" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: "核心池市值" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "人民币成本" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "浮动盈亏" })).toBeInTheDocument();
     expect(screen.queryByText("组合收益率")).not.toBeInTheDocument();
@@ -186,7 +185,7 @@ describe("SnapshotsPage", () => {
     const user = userEvent.setup();
     const requests: URL[] = [];
     renderWithProviders(<SnapshotsPage />, { handlers: handlers((url) => requests.push(url)) });
-    await screen.findByRole("heading", { name: "历史快照" });
+    await screen.findByRole("button", { name: "全部时间" });
 
     await user.click(screen.getByRole("button", { name: "全部时间" }));
     await user.selectOptions(screen.getByLabelText("快照类型"), "manual");
@@ -228,6 +227,8 @@ describe("SnapshotsPage", () => {
     ] });
     expect(await screen.findByRole("alert")).toHaveTextContent("历史快照无法载入");
     expect(screen.getByRole("button", { name: "重试载入历史" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "完整备份与恢复" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "导出完整备份" })).toBeEnabled();
   });
 
   it("fetches the complete filtered series sequentially and pages only the event table", async () => {
@@ -389,7 +390,7 @@ describe("SnapshotsPage", () => {
 
   it("has no serious accessibility violations", async () => {
     renderWithProviders(<SnapshotsPage />, { handlers: handlers() });
-    await screen.findByRole("heading", { name: "历史快照" });
+    await screen.findByRole("button", { name: "核心池市值" });
     const result = await axe.run(document.body, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations.filter((item) => item.impact === "serious" || item.impact === "critical"))
       .toEqual([]);

@@ -6,6 +6,7 @@ import { ApiError } from "../../api/client";
 import type { BackupOperation, BackupPreview, BackupStage, SafetyBackup } from "../../api/types";
 import { WorkDrawer } from "../../components/WorkDrawer/WorkDrawer";
 import {
+  backupKeys,
   saveBackupDownload,
   useBackupOperation,
   useBackupUpload,
@@ -57,6 +58,11 @@ const errorLabels: Record<string, string> = {
   BACKUP_SAFETY_NOT_FOUND: "安全备份已不存在，请刷新列表。",
   BACKUP_SAFETY_IN_USE: "该安全备份正在被恢复任务使用，暂时无法删除。",
   BACKUP_STATUS_UNAVAILABLE: "任务状态暂时无法更新，请重试查询。",
+};
+
+type FailureState = {
+  error: unknown;
+  retry?: () => void;
 };
 
 function localizedError(error: unknown) {
@@ -111,7 +117,7 @@ function SafetyRow({ item, disabled, onPreview, onDelete, onError }: {
   disabled: boolean;
   onPreview: (item: SafetyBackup) => void;
   onDelete: (item: SafetyBackup) => void;
-  onError: (error: unknown) => void;
+  onError: (item: SafetyBackup, error: unknown) => void;
 }) {
   return <tr>
     <td><time dateTime={item.exported_at}>{formatDate(item.exported_at)}</time></td>
@@ -119,7 +125,7 @@ function SafetyRow({ item, disabled, onPreview, onDelete, onError }: {
     <td>{formatBytes(item.size_bytes)}</td>
     <td>{totalRecords(item.record_counts)}</td>
     <td><div className={styles.rowActions}>
-      <button type="button" disabled={disabled} onClick={() => void saveBackupDownload(`/api/backups/safety/${item.id}/download`).catch(onError)}><Download size={14} aria-hidden="true" />下载</button>
+      <button type="button" disabled={disabled} onClick={() => void saveBackupDownload(`/api/backups/safety/${item.id}/download`).catch((error) => onError(item, error))}><Download size={14} aria-hidden="true" />下载</button>
       <button type="button" disabled={disabled} onClick={() => onPreview(item)}>恢复</button>
       <button className={styles.dangerText} type="button" disabled={disabled} onClick={() => onDelete(item)}><Trash2 size={14} aria-hidden="true" />删除</button>
     </div></td>
@@ -131,14 +137,16 @@ export function BackupRestorePanel() {
   const fileInput = useRef<HTMLInputElement>(null);
   const downloadedOperation = useRef<string | null>(null);
   const completedRestore = useRef<string | null>(null);
+  const invalidatedSafetyOperation = useRef<string | null>(null);
   const [operationId, setOperationId] = useState<string | null>(null);
+  const [acceptedOperation, setAcceptedOperation] = useState<BackupOperation | null>(null);
   const [preview, setPreview] = useState<BackupPreview | null>(null);
+  const [restoreFailure, setRestoreFailure] = useState<unknown>(null);
   const [confirmation, setConfirmation] = useState("");
   const [safetyOpen, setSafetyOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<SafetyBackup | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [lastAction, setLastAction] = useState<(() => void) | null>(null);
+  const [failure, setFailure] = useState<FailureState | null>(null);
 
   const exportMutation = useStartBackupExport();
   const uploadMutation = useBackupUpload();
@@ -148,79 +156,106 @@ export function BackupRestorePanel() {
   const operation = useBackupOperation(operationId);
   const safetyBackups = useSafetyBackups(safetyOpen);
   const operationData = operation.data;
+  const visibleOperation = operationData ?? acceptedOperation;
   const active = exportMutation.isPending || uploadMutation.isPending || restoreMutation.isPending
     || safetyPreview.isPending || deleteSafety.isPending
-    || (!operation.isError && (operationData?.status === "pending" || operationData?.status === "running"));
-  const displayedError = error ?? (operation.isError ? { code: "BACKUP_STATUS_UNAVAILABLE" } : null);
+    || visibleOperation?.status === "pending" || visibleOperation?.status === "running";
+  const displayedError = operation.isError ? { code: "BACKUP_STATUS_UNAVAILABLE" } : failure?.error ?? null;
 
   const beginExport = () => {
-    setError(null); setMessage(null);
-    setLastAction(() => beginExport);
+    setFailure(null); setMessage(null); setOperationId(null); setAcceptedOperation(null);
     exportMutation.mutate(undefined, {
-      onSuccess: (result) => setOperationId(result.id),
-      onError: setError,
+      onSuccess: (result) => { setAcceptedOperation(result); setOperationId(result.id); },
+      onError: (error) => setFailure({ error, retry: beginExport }),
     });
   };
 
   const uploadFile = (file: File) => {
-    setError(null); setMessage(null);
-    setLastAction(() => () => uploadFile(file));
+    setFailure(null); setMessage(null); setOperationId(null); setAcceptedOperation(null);
     uploadMutation.mutate(file, {
       onSuccess: (result) => { setPreview(result); setConfirmation(""); },
-      onError: setError,
+      onError: (error) => setFailure({ error, retry: () => uploadFile(file) }),
     });
+  };
+
+  const downloadExport = (result: BackupOperation) => {
+    downloadedOperation.current = result.id;
+    void saveBackupDownload(`/api/backups/operations/${result.id}/download`)
+      .then(() => { setFailure(null); setMessage("完整备份已下载"); })
+      .catch((error) => {
+        downloadedOperation.current = null;
+        setFailure({ error, retry: () => downloadExport(result) });
+      });
   };
 
   useEffect(() => {
     if (!operationData || operationData.kind !== "export" || operationData.status !== "succeeded" || !operationData.download_ready) return;
     if (downloadedOperation.current === operationData.id) return;
-    downloadedOperation.current = operationData.id;
-    void saveBackupDownload(`/api/backups/operations/${operationData.id}/download`)
-      .then(() => setMessage("完整备份已下载"))
-      .catch(setError);
+    downloadExport(operationData);
   }, [operationData]);
 
   useEffect(() => {
     if (!operationData || operationData.status === "pending" || operationData.status === "running" || operationData.status === "succeeded") return;
-    setError(operationData.error ?? { code: operationData.status === "interrupted" ? "BACKUP_OPERATION_INTERRUPTED" : "BACKUP_RESTORE_FAILED" });
+    setFailure({ error: operationData.error ?? { code: operationData.status === "interrupted" ? "BACKUP_OPERATION_INTERRUPTED" : "BACKUP_RESTORE_FAILED" } });
   }, [operationData]);
+
+  useEffect(() => {
+    if (!operationData || operationData.kind !== "restore") return;
+    const terminal = operationData.status === "succeeded" || operationData.status === "failed" || operationData.status === "interrupted";
+    if (!terminal || invalidatedSafetyOperation.current === operationData.id) return;
+    invalidatedSafetyOperation.current = operationData.id;
+    void queryClient.invalidateQueries({ queryKey: backupKeys.safety });
+  }, [operationData, queryClient]);
 
   useEffect(() => {
     if (!operationData || operationData.kind !== "restore" || operationData.status !== "succeeded") return;
     if (completedRestore.current === operationData.id) return;
     completedRestore.current = operationData.id;
     setMessage(`恢复完成；恢复前安全备份：${operationData.safety_backup_id ?? "已创建"}`);
-    void queryClient.clear();
-    window.location.reload();
+    const reloadTimer = window.setTimeout(() => {
+      queryClient.clear();
+      window.location.reload();
+    }, 800);
+    return () => window.clearTimeout(reloadTimer);
   }, [operationData, queryClient]);
 
   const beginRestore = () => {
     if (!preview || confirmation !== "恢复") return;
-    setError(null); setPreview(null);
+    setFailure(null); setRestoreFailure(null);
     restoreMutation.mutate({ token: preview.restore_token, confirmation }, {
-      onSuccess: (result) => { setOperationId(result.id); setConfirmation(""); },
-      onError: (restoreError) => { setError(restoreError); setPreview(preview); },
+      onSuccess: (result) => { setPreview(null); setAcceptedOperation(result); setOperationId(result.id); setConfirmation(""); },
+      onError: (restoreError) => setRestoreFailure(restoreError),
     });
   };
 
   const openSafetyPreview = (item: SafetyBackup) => {
-    setError(null);
+    setFailure(null); setMessage(null); setOperationId(null); setAcceptedOperation(null);
     safetyPreview.mutate(item.id, {
-      onSuccess: (result) => { setPreview(result); setConfirmation(""); },
-      onError: setError,
+      onSuccess: (result) => { setRestoreFailure(null); setPreview(result); setConfirmation(""); },
+      onError: (error) => setFailure({ error, retry: () => openSafetyPreview(item) }),
     });
   };
 
   const confirmDelete = () => {
     if (!deleteTarget) return;
-    deleteSafety.mutate(deleteTarget.id, {
-      onSuccess: () => setDeleteTarget(null),
-      onError: (deleteError) => { setDeleteTarget(null); setError(deleteError); },
+    const target = deleteTarget;
+    deleteSafety.mutate(target.id, {
+      onSuccess: () => { setFailure(null); setDeleteTarget(null); },
+      onError: (error) => { setDeleteTarget(null); setFailure({ error, retry: () => setDeleteTarget(target) }); },
     });
   };
 
-  const restoreActive = Boolean(operationData?.kind === "restore" && (operationData.status === "pending" || operationData.status === "running" || operationData.status === "succeeded"));
-  const stageIndex = operationData ? stages.findIndex((stage) => stage.id === operationData.stage) : -1;
+  const handleSafetyDownloadError = (item: SafetyBackup, error: unknown) => {
+    setFailure({
+      error,
+      retry: () => void saveBackupDownload(`/api/backups/safety/${item.id}/download`)
+        .then(() => setFailure(null))
+        .catch((nextError) => handleSafetyDownloadError(item, nextError)),
+    });
+  };
+
+  const restoreActive = Boolean(visibleOperation?.kind === "restore" && (visibleOperation.status === "pending" || visibleOperation.status === "running" || visibleOperation.status === "succeeded"));
+  const stageIndex = visibleOperation ? stages.findIndex((stage) => stage.id === visibleOperation.stage) : -1;
 
   return <section className={styles.panel} aria-labelledby="backup-restore-title" aria-busy={active}>
     <div className={styles.summary}>
@@ -234,10 +269,10 @@ export function BackupRestorePanel() {
     <p className={styles.permanentWarning}><AlertTriangle size={16} aria-hidden="true" /><span><strong>敏感文件：</strong>备份文件包含明文 API 密钥和邮箱密码。下载后请妥善保管，勿上传到网盘或代码仓库。</span></p>
 
     {active || operationData || message || displayedError ? <div className={styles.statusArea} aria-live="polite">
-      {active ? <p role="status"><RefreshCw className={styles.spin} size={15} aria-hidden="true" />{operationData?.kind === "restore" ? "正在恢复完整数据" : operationData?.kind === "export" ? "正在生成备份文件" : "正在校验备份文件"}</p> : null}
-      {restoreActive ? <ol className={styles.stages}>{stages.map((stage, index) => <li key={stage.id} aria-current={index === stageIndex && operationData?.status !== "succeeded" ? "step" : undefined} data-state={index < stageIndex || operationData?.status === "succeeded" ? "done" : index === stageIndex ? "current" : "pending"}><i aria-hidden="true" />{stage.label}</li>)}</ol> : null}
+      {active ? <p role="status"><RefreshCw className={styles.spin} size={15} aria-hidden="true" />{visibleOperation?.kind === "restore" ? "正在恢复完整数据" : visibleOperation?.kind === "export" ? "正在生成备份文件" : "正在校验备份文件"}</p> : null}
+      {restoreActive ? <ol className={styles.stages}>{stages.map((stage, index) => <li key={stage.id} aria-current={index === stageIndex && visibleOperation?.status !== "succeeded" ? "step" : undefined} data-state={index < stageIndex || visibleOperation?.status === "succeeded" ? "done" : index === stageIndex ? "current" : "pending"}><i aria-hidden="true" />{stage.label}</li>)}</ol> : null}
       {message ? <p className={styles.success}><ShieldCheck size={15} aria-hidden="true" />{message}</p> : null}
-      {displayedError ? <div className={styles.error} role="alert"><span>{localizedError(displayedError)}</span>{operation.isError ? <button type="button" onClick={() => void operation.refetch()}>重试查询状态</button> : lastAction && !active ? <button type="button" onClick={lastAction}>重试</button> : null}</div> : null}
+      {displayedError ? <div className={styles.error} role="alert"><span>{localizedError(displayedError)}</span>{operation.isError ? <button type="button" onClick={() => void operation.refetch()}>重试查询状态</button> : failure?.retry && !active ? <button type="button" onClick={failure.retry}>重试</button> : null}</div> : null}
     </div> : null}
 
     <button className={styles.safetyToggle} type="button" aria-expanded={safetyOpen} disabled={active} onClick={() => setSafetyOpen((open) => !open)}><ChevronDown size={15} aria-hidden="true" />管理恢复前安全备份</button>
@@ -245,15 +280,15 @@ export function BackupRestorePanel() {
       {safetyBackups.isPending ? <div className={styles.skeletons} role="status" aria-label="正在载入安全备份"><i /><i /></div> : null}
       {safetyBackups.isError ? <div className={styles.error} role="alert"><span>安全备份列表暂时无法载入。</span><button type="button" onClick={() => void safetyBackups.refetch()}>重试</button></div> : null}
       {safetyBackups.data?.length === 0 ? <p className={styles.empty}>还没有恢复前安全备份。每次确认恢复前，系统会自动保留一份当前状态。</p> : null}
-      {safetyBackups.data?.length ? <div className={styles.tableWrap}><table className={styles.safetyTable} aria-label="恢复前安全备份"><thead><tr><th>导出时间</th><th>应用 / 格式</th><th>文件大小</th><th>记录数</th><th>操作</th></tr></thead><tbody>{safetyBackups.data.map((item) => <SafetyRow key={item.id} item={item} disabled={active} onPreview={openSafetyPreview} onDelete={setDeleteTarget} onError={setError} />)}</tbody></table></div> : null}
+      {safetyBackups.data?.length ? <div className={styles.tableWrap}><table className={styles.safetyTable} aria-label="恢复前安全备份"><thead><tr><th>导出时间</th><th>应用 / 格式</th><th>文件大小</th><th>记录数</th><th>操作</th></tr></thead><tbody>{safetyBackups.data.map((item) => <SafetyRow key={item.id} item={item} disabled={active} onPreview={openSafetyPreview} onDelete={setDeleteTarget} onError={handleSafetyDownloadError} />)}</tbody></table></div> : null}
     </div> : null}
 
-    <WorkDrawer open={Boolean(preview)} title="恢复备份预览" closeDisabled={restoreMutation.isPending} onClose={() => { setPreview(null); setConfirmation(""); }} footer={<div className={styles.drawerActions}><button className={styles.secondaryButton} type="button" disabled={restoreMutation.isPending} onClick={() => { setPreview(null); setConfirmation(""); }}>取消</button><button className={styles.dangerButton} type="button" disabled={confirmation !== "恢复" || restoreMutation.isPending} onClick={beginRestore}>{restoreMutation.isPending ? "正在启动" : "开始恢复"}</button></div>}>
-      {preview ? <PreviewContent preview={preview} confirmation={confirmation} onConfirmation={setConfirmation} /> : null}
+    <WorkDrawer open={Boolean(preview)} title="恢复备份预览" closeDisabled={restoreMutation.isPending} onClose={() => { setPreview(null); setRestoreFailure(null); setConfirmation(""); }} footer={<div className={styles.drawerActions}><button className={styles.secondaryButton} type="button" disabled={restoreMutation.isPending} onClick={() => { setPreview(null); setRestoreFailure(null); setConfirmation(""); }}>取消</button><button className={styles.dangerButton} type="button" disabled={confirmation !== "恢复" || restoreMutation.isPending} onClick={beginRestore}>{restoreMutation.isPending ? "正在启动" : "开始恢复"}</button></div>}>
+      {preview ? <><PreviewContent preview={preview} confirmation={confirmation} onConfirmation={setConfirmation} />{restoreFailure ? <p className={styles.previewError} role="alert">{localizedError(restoreFailure)}</p> : null}</> : null}
     </WorkDrawer>
 
     <WorkDrawer open={Boolean(deleteTarget)} title="删除安全备份" closeDisabled={deleteSafety.isPending} onClose={() => setDeleteTarget(null)} footer={<div className={styles.drawerActions}><button className={styles.secondaryButton} type="button" disabled={deleteSafety.isPending} onClick={() => setDeleteTarget(null)}>取消</button><button className={styles.dangerButton} type="button" disabled={deleteSafety.isPending} onClick={confirmDelete}>{deleteSafety.isPending ? "正在删除" : "确认删除"}</button></div>}>
-      <div className={styles.deleteCopy}><p>删除后无法从服务器找回此安全备份，但不会影响当前业务数据。</p><p>此操作单独确认，不会使用恢复令牌。</p></div>
+      <div className={styles.deleteCopy}><p>删除后无法从服务器找回此安全备份，但不会影响当前业务数据。</p>{deleteTarget ? <dl><div><dt>导出时间</dt><dd>{formatDate(deleteTarget.exported_at)}</dd></div><div><dt>备份 ID</dt><dd>{deleteTarget.id}</dd></div></dl> : null}<p>此操作单独确认，不会使用恢复令牌。</p></div>
     </WorkDrawer>
   </section>;
 }

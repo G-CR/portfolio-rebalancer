@@ -78,12 +78,6 @@ export function SnapshotsPage() {
     }
   }
 
-  if (snapshots.isPending) return <SnapshotLoading />;
-  if (snapshots.isError) {
-    const message = snapshots.error instanceof ApiError ? snapshots.error.message : "历史快照载入失败。";
-    return <PageError title="历史快照无法载入" message={message} retryLabel="重试载入历史" onRetry={() => void snapshots.refetch()} />;
-  }
-
   return (
     <section className={styles.page} aria-labelledby="snapshots-title">
       <header className={styles.header}>
@@ -91,6 +85,7 @@ export function SnapshotsPage() {
         <button className={styles.primaryButton} type="button" onClick={() => setManualOpen(true)}><Camera size={16} aria-hidden="true" />保存当前快照</button>
       </header>
       <BackupRestorePanel />
+      {snapshots.isPending ? <SnapshotLoading /> : snapshots.isError ? <PageError title="历史快照无法载入" message={snapshots.error instanceof ApiError ? snapshots.error.message : "历史快照载入失败。"} retryLabel="重试载入历史" onRetry={() => void snapshots.refetch()} /> : <>
       <div className={styles.filters}>
         <div className={styles.filterGroup}>
           <span>时间范围</span>
@@ -105,6 +100,7 @@ export function SnapshotsPage() {
       </div>
       <div className={styles.metrics} role="group" aria-label="主要分析口径">{metrics.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => setMetric(item.id)}>{item.label}</button>)}</div>
       {snapshots.data.items.length === 0 ? <section className={styles.empty}><strong>还没有历史快照</strong><p>完成一次有效数据刷新，或保存当前手动快照后，这里会出现可复核的时点记录。</p></section> : <><SnapshotChart items={snapshots.data.items} metric={metric} /><SnapshotTable items={snapshots.data.items} page={tablePage} pageSize={EVENT_PAGE_SIZE} onPageChange={setTablePage} onSelect={setSelectedId} /></>}
+      </>}
 
       <WorkDrawer open={Boolean(selectedId)} title="快照详情" onClose={() => setSelectedId(null)}>
         {detail.isPending ? <p role="status">正在载入快照详情...</p> : null}
