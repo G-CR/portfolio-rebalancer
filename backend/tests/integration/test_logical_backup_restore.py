@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backups.archive import ArchiveMetadata, write_archive
 from app.backups.constants import DATA_MEMBERS
+from app.core.config import get_settings
 from app.core.secrets import SecretStore
 from app.db.models import AssetClass, EncryptedSecret, Setting
 from app.schemas.backup import BackupStage
@@ -26,7 +28,7 @@ from app.services.backup_restore import BackupRestoreError, restore_validated_ba
 from app.services.backup_storage import BackupStorage
 from app.services.backup_validation import validate_backup
 from tests.conftest import BUSINESS_TABLES
-from tests.conftest import SessionFactory
+from tests.conftest import SessionFactory, TEST_BACKUP_ROOT
 from tests.unit.test_backup_validation import _source as _validated_source
 
 
@@ -34,6 +36,7 @@ NOW = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
 ASSET_ID = UUID("10000000-0000-0000-0000-000000000001")
 SETTING_ID = UUID("00000000-0000-0000-0000-000000000001")
 SECRET_ID = UUID("20000000-0000-0000-0000-000000000001")
+GOLDEN_V1 = Path(__file__).resolve().parents[1] / "fixtures" / "backups" / "v1-minimal.portfolio-backup"
 
 
 class _Progress:
@@ -146,6 +149,71 @@ async def test_complete_logical_state_round_trip_preserves_every_collection(
         for row in restored_credentials
     }
     assert plaintext == {"yahoo": "synthetic-secret-never-leak"}
+
+
+@pytest.mark.asyncio
+async def test_committed_v1_golden_replaces_different_state_exactly(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_key_path = tmp_path / "golden-restore-fernet.key"
+    secret_store = SecretStore(test_key_path)
+    storage = _storage(tmp_path)
+    await _seed_state(
+        db_session,
+        secret_store,
+        name="must-be-replaced",
+        secret="synthetic-test-secret-must-disappear",
+    )
+    validated = validate_backup(
+        GOLDEN_V1,
+        path_id="fixture:v1-minimal",
+        workspace_root=storage.tmp_dir,
+    )
+    monkeypatch.setattr(
+        restore_module, "build_export_metadata_from_storage", lambda: _metadata()
+    )
+
+    async with db_session.begin():
+        result = await restore_validated_backup(
+            db_session,
+            validated,
+            storage=storage,
+            secret_store=secret_store,
+            progress=_Progress(),
+        )
+
+    exported = await _export(
+        db_session, tmp_path / "golden-restored.portfolio-backup", secret_store
+    )
+    restored_assets = list((await db_session.scalars(select(AssetClass))).all())
+    assert (
+        result.logical_checksum
+        == exported.logical_checksum
+        == validated.canonical_logical_checksum
+    )
+    assert result.record_counts == exported.record_counts == validated.record_counts
+    assert [(row.id, row.name, row.notes) for row in restored_assets] == [
+        (UUID("00000000-0000-0000-0000-000000000001"), "黄金夹具", None)
+    ]
+    restored_settings = list((await db_session.scalars(select(Setting))).all())
+    assert [
+        (row.id, row.refresh_hour, row.refresh_minute, row.provider_priority)
+        for row in restored_settings
+    ] == [(SETTING_ID, 8, 0, [])]
+    assert list((await db_session.scalars(select(EncryptedSecret))).all()) == []
+    assert test_key_path.is_relative_to(tmp_path)
+
+
+def test_backend_acceptance_environment_uses_only_disposable_test_state() -> None:
+    settings = get_settings()
+
+    assert settings.database_url.endswith("/portfolio_test")
+    assert os.environ["PYTEST_DATABASE_RESET_TOKEN"] == "portfolio_test"
+    assert settings.backup_root == TEST_BACKUP_ROOT
+    assert settings.backup_root != Path("/var/lib/portfolio-backups")
+    assert TEST_BACKUP_ROOT.name.startswith("portfolio-test-backups-")
 
 
 @pytest.mark.asyncio

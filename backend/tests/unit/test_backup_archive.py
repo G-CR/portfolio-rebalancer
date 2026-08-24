@@ -709,10 +709,15 @@ def test_committed_v1_golden_fixture_opens_through_production_reader() -> None:
     inspected = inspect_archive(FIXTURE)
     assert inspected.manifest.format_version == 1
     assert inspected.manifest.contains_plaintext_credentials is True
+    assert inspected.manifest.record_counts["credentials.json"] == 0
+    assert inspected.manifest.record_counts["data/settings.json"] == 1
     assert list(iter_current_rows(inspected, "credentials.json")) == []
     rows = list(iter_current_rows(inspected, "data/asset_classes.json"))
     assert rows[0]["name"] == "黄金夹具"
     assert rows[0]["notes"] is None
+    settings = list(iter_current_rows(inspected, "data/settings.json"))
+    assert settings[0]["id"] == "00000000-0000-0000-0000-000000000001"
+    assert settings[0]["provider_priority"] == []
 
 
 def test_single_logical_row_is_rejected_incrementally_before_materialization(
