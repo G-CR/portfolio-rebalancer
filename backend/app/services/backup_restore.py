@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 from dataclasses import dataclass
@@ -23,7 +24,11 @@ from app.schemas.backup import BackupStage
 from app.services.backup_export import build_export_metadata, export_logical_backup
 from app.services.async_thread import run_in_thread
 from app.services.backup_storage import BackupStorage
-from app.services.backup_validation import ValidatedBackup, validate_backup
+from app.services.backup_validation import (
+    BackupValidationError,
+    ValidatedBackup,
+    validate_backup,
+)
 
 
 RESTORE_ADVISORY_LOCK_KEY = 0x504F5254464F4C49
@@ -325,6 +330,12 @@ async def restore_validated_backup(
         return RestoreResult(safety_id, summary.record_counts, summary.logical_checksum)
     except BackupRestoreError:
         raise
+    except BackupValidationError:
+        raise
+    except OSError as exc:
+        if exc.errno in {errno.ENOSPC, errno.EDQUOT}:
+            raise
+        raise BackupRestoreError("logical backup restore failed") from None
     except Exception:
         raise BackupRestoreError("logical backup restore failed") from None
 

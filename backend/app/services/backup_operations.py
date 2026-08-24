@@ -18,6 +18,7 @@ from app.services.errors import ServiceError
 
 
 _PUBLIC_BACKUP_FAILURE_MESSAGES = {
+    "BACKUP_CORRUPT": "Backup archive is corrupt or unsafe.",
     "BACKUP_FUTURE_VERSION": "Backup format is newer than this application.",
     "BACKUP_INCOMPATIBLE": "Backup data does not match the supported format.",
     "BACKUP_RELATIONSHIP_INVALID": "Backup relationships are inconsistent.",

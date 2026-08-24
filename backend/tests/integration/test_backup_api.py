@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -18,8 +19,9 @@ from app.db.models import AssetClass, DEFAULT_SETTINGS_ID
 from app.db.session import SessionFactory
 from app.main import app
 from app.schemas.backup import BackupOperation, BackupStage
+from app.services import backup_restore as backup_restore_module
 from app.services import backup_validation as backup_validation_module
-from app.services.backup_validation import RestoreTokenRegistry
+from app.services.backup_validation import BackupValidationError, RestoreTokenRegistry
 from tests.conftest import BUSINESS_TABLES
 
 
@@ -666,6 +668,88 @@ async def test_confirmed_restore_consumes_token_and_reports_safety_backup(
     )
     assert replay.status_code == 422
     assert replay.json()["detail"]["code"] == "BACKUP_TOKEN_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_code", "expected_message"),
+    [
+        (
+            "publish_enospc",
+            "BACKUP_RESOURCE_LIMIT",
+            "Backup could not be retained because storage space is insufficient.",
+        ),
+        (
+            "validate_corrupt",
+            "BACKUP_CORRUPT",
+            "Backup archive is corrupt or unsafe.",
+        ),
+    ],
+)
+async def test_restore_safety_failure_preserves_typed_sanitized_operation_error(
+    api_client,
+    db_session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    db_session.add(
+        AssetClass(
+            name="safety-failure-sentinel",
+            target_weight="0",
+            display_order=998,
+        )
+    )
+    await db_session.commit()
+    before = await _business_table_hashes()
+    archive, secret = _preview_archive(tmp_path / f"{failure_stage}.portfolio-backup")
+    uploaded = await api_client.post(
+        "/api/backups/upload",
+        content=archive.read_bytes(),
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert uploaded.status_code == 200
+    storage = app.state.backup_storage
+
+    if failure_stage == "publish_enospc":
+        def fail_publish(*args, **kwargs):
+            raise OSError(
+                errno.ENOSPC,
+                f"No space for {secret}",
+                "/private/backup",
+            )
+
+        monkeypatch.setattr(storage, "publish_safety_backup", fail_publish)
+    else:
+        def fail_validation(*args, **kwargs):
+            raise BackupValidationError(
+                "BACKUP_CORRUPT",
+                f"corrupt /private/backup contains {secret}",
+            )
+
+        monkeypatch.setattr(backup_restore_module, "validate_backup", fail_validation)
+
+    started = await api_client.post(
+        "/api/backups/restore",
+        json={
+            "restore_token": uploaded.json()["restore_token"],
+            "confirmation": "恢复",
+        },
+    )
+    assert started.status_code == 202
+    completed = await _poll_terminal(api_client, started.json()["id"])
+
+    assert completed["status"] == "failed"
+    assert completed["error"] == {
+        "code": expected_code,
+        "message": expected_message,
+    }
+    assert await _business_table_hashes() == before
+    journal = storage.operation_journal_path(UUID(started.json()["id"])).read_text()
+    assert secret not in journal
+    assert "/private/backup" not in journal
+    assert not list(storage.tmp_dir.glob("*.partial"))
 
 
 async def test_restore_source_lease_spans_hash_admission_and_runner(
