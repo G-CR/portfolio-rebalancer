@@ -1,51 +1,45 @@
-# Task 2 report: Clarify the history-page manual-capture workflow
+# Task 2 report: Progressive holding creation
 
-## Implementation
+## Scope delivered
 
-- Added the requested history-local workflow test for opening `记录当前时点`, submitting a note, observing the disabled `正在记录` state, and closing after a successful `201` response.
-- Replaced the legacy deep-link test with coverage for opening `记录当前时点` from `/history?capture=manual`, preserving and asserting query-parameter consumption.
-- Updated only the history action, drawer title, and submit labels in `SnapshotsPage.tsx`; mutation logic, note handling, error rendering, query consumption, and API hooks are unchanged.
+- Replaced the free-text market entry with exactly three market choices:
+  - `美股` (`US`)
+  - `上海 A 股` (`SH`)
+  - `深圳 A 股` (`SZ`)
+- The drawer derives trade currency from the selected market: `US` uses `USD`; `SH` and `SZ` use `CNY`.
+- Cost and baseline FX inputs render only for US holdings. Selecting either A-share market resets both submitted FX values to `"1"`.
+- Moved preferred data source, minimum trade unit, quantity precision, and rebalance preference into the native labelled `高级设置` `<details>` section.
+- Preserved all existing defaults and create-payload field names/types. No backend files were changed.
 
-## Files changed
+## TDD evidence
 
-- `frontend/tests/SnapshotsPage.test.tsx`
-- `frontend/src/pages/SnapshotsPage.tsx`
+1. Added tests for Shanghai A-share submission, US FX visibility/editability, and advanced-settings payload handling before production changes.
+2. Ran `npm test -- HoldingsPage.test.tsx` before implementation: 3 failures, all because `上市市场` was still a text field rather than the required selector.
+3. Implemented the minimal drawer and CSS changes, then updated existing drawer tests from text entry to the required market selector.
+4. Added an exact-market-options assertion. Its focused test run failed because an extra placeholder option was present; removed that option and defaulted the selector to `US`.
+5. Re-ran focused tests successfully.
 
 ## Verification
 
-RED command:
+- Focused: `npm test -- HoldingsPage.test.tsx` — 1 file, 10 tests passed.
+- Full frontend: `npm test` — 25 files, 145 tests passed.
+- `git diff --check` — no whitespace errors.
 
-```powershell
-Set-Location frontend
-npm test -- SnapshotsPage.test.tsx -t "records the current point|opens manual capture from the legacy deep link"
-```
+## Files changed
 
-RED result: FAIL, 2 tests failed and 11 skipped. The expected copy-only failures were inability to find `记录当前时点` and `记录当前时点` dialog because the implementation still rendered `保存当前快照` / `保存手动快照` (and old submit labels). The rendered page showed the legacy labels; the query path was still being consumed.
-
-GREEN focused command:
-
-```powershell
-Set-Location frontend
-npm test -- SnapshotsPage.test.tsx -t "records the current point|opens manual capture from the legacy deep link"
-```
-
-GREEN result: PASS, 2 tests passed, 11 skipped.
-
-GREEN complete-file command:
-
-```powershell
-Set-Location frontend
-npm test -- SnapshotsPage.test.tsx
-```
-
-GREEN result: PASS, 13 tests passed, 0 failed.
-
-## Self-review
-
-- `git diff --check` passed with no whitespace errors.
-- The patch is limited to the two requested source/test files and the required report.
-- Existing manual snapshot behavior and compatibility hooks remain intact.
+- `frontend/src/features/holdings/AddHoldingDrawer.tsx`
+- `frontend/src/features/holdings/Holdings.module.css`
+- `frontend/tests/HoldingsPage.test.tsx`
 
 ## Concerns
 
 None.
+
+## Reviewer follow-up: required market selection
+
+- Restored the prior empty market default and added a disabled `请选择市场` prompt option. The three valid market options remain `美股` (`US`), `上海 A 股` (`SH`), and `深圳 A 股` (`SZ`).
+- Added a regression test that fills every other required identity field, leaves market unselected, and verifies that creation is blocked without making a request.
+- TDD evidence: the new test failed with the previous `US` default, reporting received value `US` where an empty value was required.
+- Verification after the fix:
+  - Focused: `npm test -- HoldingsPage.test.tsx` — 1 file, 11 tests passed.
+  - Full frontend: `npm test` — 25 files, 146 tests passed.
