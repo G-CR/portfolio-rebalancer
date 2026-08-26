@@ -143,19 +143,34 @@ def build_digest_html(
             )
         )
 
+    names_by_symbol: dict[str, set[str]] = {}
+    for holding in analytics.holdings:
+        names_by_symbol.setdefault(holding.symbol, set()).add(holding.name)
+    holding_names = {
+        symbol: next(iter(names))
+        for symbol, names in names_by_symbol.items()
+        if len(names) == 1
+    }
+
     if rebalance is not None and rebalance.result.trades:
-        trade_rows = [
-            [
-                _esc(trade.symbol),
-                "买入" if trade.action == "buy" else "卖出",
-                _one_decimal(trade.quantity),
-                _money(trade.amount_cny),
-                _esc(trade.reason),
-            ]
-            for trade in rebalance.result.trades
-        ]
+        trade_rows = []
+        for trade in rebalance.result.trades:
+            holding_name = holding_names.get(trade.symbol)
+            trade_label = (
+                f"{holding_name}（{trade.symbol}）"
+                if holding_name and holding_name != trade.symbol
+                else trade.symbol
+            )
+            trade_rows.append(
+                [
+                    _esc(trade_label),
+                    "买入" if trade.action == "buy" else "卖出",
+                    _one_decimal(trade.quantity),
+                    _money(trade.amount_cny),
+                ]
+            )
         rebalance_html = _table(
-            ["标的", "方向", "数量", "金额 (CNY)", "原因"],
+            ["标的", "方向", "数量", "金额 (CNY)"],
             trade_rows,
         )
     elif rebalance is not None:

@@ -150,6 +150,9 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "总市值" in html
     assert "美股" in html
     assert "SPY" in html
+    assert "标普 500（SPY）" in html
+    assert ">原因</th>" not in html
+    assert "当前低配，可直接使用同币种现金补足目标仓位。" not in html
     assert "建议再平衡" in html
     assert "买入" in html
     assert "72.00" in html
@@ -187,6 +190,89 @@ def test_digest_html_no_trades_shows_hold_copy() -> None:
     )
 
     assert "当前配置在容差内，无需调整" in html
+
+
+def _render_trade_label(
+    *, holding_symbol: str, holding_name: str, trade_symbol: str
+) -> str:
+    holding = _holding().model_copy(
+        update={"symbol": holding_symbol, "name": holding_name}
+    )
+    analytics = _analytics().model_copy(update={"holdings": [holding]})
+    trade = _result().trades[0].model_copy(update={"symbol": trade_symbol})
+    result = _result().model_copy(update={"trades": (trade,)})
+    rebalance = _rebalance().model_copy(
+        update={
+            "result": result,
+            "fx_comparison": RebalanceComparisonResponse(
+                valuation_basis="fx_neutral",
+                result=result,
+            ),
+        }
+    )
+    return build_digest_html(
+        analytics=analytics,
+        rebalance=rebalance,
+        local_date=date(2026, 8, 26),
+    )
+
+
+def test_digest_html_shows_symbol_once_when_holding_name_matches() -> None:
+    html = _render_trade_label(
+        holding_symbol="QQQ",
+        holding_name="QQQ",
+        trade_symbol="QQQ",
+    )
+
+    assert "QQQ" in html
+    assert "QQQ（QQQ）" not in html
+
+
+def test_digest_html_falls_back_to_symbol_when_trade_has_no_holding() -> None:
+    html = _render_trade_label(
+        holding_symbol="SPY",
+        holding_name="标普 500",
+        trade_symbol="159209",
+    )
+
+    assert "159209" in html
+    assert "标普 500（159209）" not in html
+
+
+def test_digest_html_falls_back_when_one_symbol_has_different_names() -> None:
+    first = _holding().model_copy(update={"symbol": "159209", "name": "名称 A"})
+    second = _holding().model_copy(
+        update={
+            "holding_id": "00000000-0000-0000-0000-000000000002",
+            "symbol": "159209",
+            "name": "名称 B",
+        }
+    )
+    analytics = _analytics().model_copy(update={"holdings": [first, second]})
+    trade = _result().trades[0].model_copy(update={"symbol": "159209"})
+    result = _result().model_copy(update={"trades": (trade,)})
+    rebalance = _rebalance().model_copy(update={"result": result})
+
+    html = build_digest_html(
+        analytics=analytics,
+        rebalance=rebalance,
+        local_date=date(2026, 8, 26),
+    )
+
+    assert "159209" in html
+    assert "名称 A（159209）" not in html
+    assert "名称 B（159209）" not in html
+
+
+def test_digest_html_escapes_the_complete_trade_label() -> None:
+    html = _render_trade_label(
+        holding_symbol="159209",
+        holding_name="成长<&",
+        trade_symbol="159209",
+    )
+
+    assert "成长&lt;&amp;（159209）" in html
+    assert "成长<&（159209）" not in html
 
 
 def test_digest_html_escapes_asset_class_names() -> None:
