@@ -243,8 +243,7 @@
   white-space: nowrap;
 }
 
-.commandButton,
-.primaryCommand {
+.commandButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -255,12 +254,6 @@
   border-radius: 2px;
   background: var(--color-surface);
   cursor: pointer;
-}
-
-.primaryCommand {
-  border-color: var(--color-actual);
-  background: var(--color-actual);
-  color: white;
 }
 
 .main {
@@ -352,8 +345,7 @@
 
   .context,
   .dataTime,
-  .commandButton span,
-  .primaryCommand span {
+  .commandButton span {
     display: none;
   }
 
@@ -365,8 +357,7 @@
     white-space: nowrap;
   }
 
-  .commandButton,
-  .primaryCommand {
+  .commandButton {
     width: 36px;
     padding: 0;
   }

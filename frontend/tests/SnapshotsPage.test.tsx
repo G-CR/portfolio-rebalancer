@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 
 import { createQueryClient } from "../src/app/providers";
 import {
@@ -159,6 +160,11 @@ function handlers(onList?: (url: URL) => void) {
   ];
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
+}
+
 describe("SnapshotsPage", () => {
   it("presents snapshot metrics accurately and never calls them portfolio return", async () => {
     renderWithProviders(<SnapshotsPage />, { handlers: handlers() });
@@ -219,6 +225,7 @@ describe("SnapshotsPage", () => {
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
     ] });
     expect(await screen.findByText("还没有历史快照")).toBeInTheDocument();
+    expect(screen.getByText("完成一次有效数据刷新，或记录当前时点后，这里会出现可复核的时点记录。")).toBeInTheDocument();
     empty.unmount();
 
     renderWithProviders(<SnapshotsPage />, { handlers: [
@@ -407,12 +414,12 @@ describe("SnapshotsPage", () => {
   });
 
   it("opens manual capture from the legacy deep link and consumes the query parameter", async () => {
-    renderWithProviders(<SnapshotsPage />, { route: "/history?capture=manual", handlers: handlers() });
+    renderWithProviders(<><SnapshotsPage /><LocationProbe /></>, { route: "/history?capture=manual&keep=1", handlers: handlers() });
 
     expect(await screen.findByRole("dialog", { name: "记录当前时点" })).toBeInTheDocument();
     expect(screen.getByLabelText("快照备注")).toBeInTheDocument();
     await waitFor(() => {
-      expect(window.location.search).toBe("");
+      expect(screen.getByTestId("location-search")).toHaveTextContent("?keep=1");
     });
   });
 
