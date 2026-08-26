@@ -381,11 +381,39 @@ describe("SnapshotsPage", () => {
     expect(await screen.findByRole("dialog", { name: "快照详情" })).toHaveTextContent("含过期与手动值");
   });
 
-  it("opens the manual capture workflow from the shell command URL", async () => {
+  it("records the current point from the history-local workflow", async () => {
+    const user = userEvent.setup();
+    let resolveCapture!: (response: Response) => void;
+    const captureResponse = new Promise<Response>((resolve) => {
+      resolveCapture = resolve;
+    });
+    renderWithProviders(<SnapshotsPage />, { handlers: [
+      ...handlers(),
+      http.post("/api/snapshots/manual", () => captureResponse),
+    ] });
+
+    await user.click(await screen.findByRole("button", { name: "记录当前时点" }));
+    const dialog = await screen.findByRole("dialog", { name: "记录当前时点" });
+    expect(within(dialog).getByRole("button", { name: "确认记录" })).toBeEnabled();
+
+    await user.type(within(dialog).getByLabelText("快照备注"), "临时复核");
+    await user.click(within(dialog).getByRole("button", { name: "确认记录" }));
+    expect(await within(dialog).findByRole("button", { name: "正在记录" })).toBeDisabled();
+
+    resolveCapture(HttpResponse.json(detail, { status: 201 }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "记录当前时点" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens manual capture from the legacy deep link and consumes the query parameter", async () => {
     renderWithProviders(<SnapshotsPage />, { route: "/history?capture=manual", handlers: handlers() });
 
-    expect(await screen.findByRole("dialog", { name: "保存手动快照" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "记录当前时点" })).toBeInTheDocument();
     expect(screen.getByLabelText("快照备注")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(window.location.search).toBe("");
+    });
   });
 
   it("has no serious accessibility violations", async () => {
