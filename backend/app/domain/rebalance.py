@@ -65,6 +65,7 @@ class AssetInput:
     target_weight: Decimal
     unit_price_cny: Decimal
     lot_size: Decimal
+    max_sell_quantity: Decimal
 
     def __post_init__(self) -> None:
         if not self.asset_class_id:
@@ -79,6 +80,7 @@ class AssetInput:
             raise ValueError("target_weight must not exceed 1")
         _require_positive("unit_price_cny", self.unit_price_cny)
         _require_positive("lot_size", self.lot_size)
+        _require_nonnegative("max_sell_quantity", self.max_sell_quantity)
 
 
 @dataclass(frozen=True)
@@ -96,7 +98,6 @@ class CashInput:
 @dataclass(frozen=True)
 class RebalanceOptions:
     tolerance: Decimal
-    minimum_trade_cny: Decimal
     allow_sell: bool
     allow_fx: bool
 
@@ -104,7 +105,6 @@ class RebalanceOptions:
         _require_nonnegative("tolerance", self.tolerance)
         if self.tolerance > 1:
             raise ValueError("tolerance must not exceed 1")
-        _require_nonnegative("minimum_trade_cny", self.minimum_trade_cny)
 
 
 @dataclass(frozen=True)
@@ -130,6 +130,13 @@ class RebalanceResult:
     feasible: bool
     max_drift_before: Decimal
     max_drift_after: Decimal
+    buy_only_max_drift: Decimal
+    optimization_precision: Decimal
+    optimization_certified: bool
+    optimality_gap: Decimal
+    sell_phase_used: bool
+    net_fx_direction: Literal["cny_to_usd", "usd_to_cny", "none"]
+    net_fx_amount_cny: Decimal
     fx_required_cny: Decimal
     remaining_cny: Decimal
     remaining_usd: Decimal

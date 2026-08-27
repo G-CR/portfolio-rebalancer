@@ -4,7 +4,13 @@ from decimal import Decimal, localcontext
 import pytest
 from pydantic import ValidationError
 
-from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, rebalance
+from app.domain.rebalance import (
+    AssetInput,
+    CashInput,
+    RebalanceOptions,
+    RebalanceResult,
+    rebalance,
+)
 from app.schemas.rebalance import RebalancePreviewRequest, RebalanceResultResponse
 
 
@@ -16,6 +22,7 @@ def _asset(
     target_weight: str,
     unit_price_cny: str,
     lot_size: str = "1",
+    max_sell_quantity: str | None = None,
 ) -> AssetInput:
     return AssetInput(
         asset_class_id=asset_class_id,
@@ -25,6 +32,11 @@ def _asset(
         target_weight=Decimal(target_weight),
         unit_price_cny=Decimal(unit_price_cny),
         lot_size=Decimal(lot_size),
+        max_sell_quantity=(
+            Decimal(current_value_cny) / Decimal(unit_price_cny)
+            if max_sell_quantity is None
+            else Decimal(max_sell_quantity)
+        ),
     )
 
 
@@ -494,6 +506,8 @@ def test_result_is_independent_of_ambient_decimal_precision() -> None:
         ("unit_price_cny", Decimal("-1")),
         ("lot_size", Decimal("0")),
         ("lot_size", Decimal("NaN")),
+        ("max_sell_quantity", Decimal("-1")),
+        ("max_sell_quantity", Decimal("Infinity")),
     ],
 )
 def test_asset_input_rejects_invalid_decimals(field: str, value: Decimal) -> None:
@@ -505,11 +519,53 @@ def test_asset_input_rejects_invalid_decimals(field: str, value: Decimal) -> Non
         "target_weight": Decimal("1"),
         "unit_price_cny": Decimal("10"),
         "lot_size": Decimal("1"),
+        "max_sell_quantity": Decimal("10"),
     }
     values[field] = value
 
     with pytest.raises(ValueError, match=field):
         AssetInput(**values)
+
+
+def test_asset_input_accepts_fractional_inventory_and_floors_sell_lots() -> None:
+    asset = _asset(
+        "a",
+        "AAA",
+        "CNY",
+        "100",
+        "1",
+        "10",
+        lot_size="2",
+        max_sell_quantity="3.5",
+    )
+
+    assert asset.max_sell_quantity == Decimal("3.5")
+    assert int(asset.max_sell_quantity / asset.lot_size) == 1
+
+
+def test_rebalance_options_and_result_expose_the_minimax_contract() -> None:
+    assert set(RebalanceOptions.__dataclass_fields__) == {
+        "tolerance",
+        "allow_sell",
+        "allow_fx",
+    }
+    assert set(RebalanceResult.__dataclass_fields__) == {
+        "feasible",
+        "max_drift_before",
+        "max_drift_after",
+        "buy_only_max_drift",
+        "optimization_precision",
+        "optimization_certified",
+        "optimality_gap",
+        "sell_phase_used",
+        "net_fx_direction",
+        "net_fx_amount_cny",
+        "fx_required_cny",
+        "remaining_cny",
+        "remaining_usd",
+        "projected_weights",
+        "trades",
+    }
 
 
 @pytest.mark.parametrize(

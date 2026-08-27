@@ -41,10 +41,24 @@ def portfolios(draw: st.DrawFn) -> tuple[tuple[AssetInput, ...], CashInput]:
     )
     assets = (
         AssetInput(
-            "a", "AAA", "CNY", first_value, Decimal("0.5"), first_price, Decimal("1")
+            "a",
+            "AAA",
+            "CNY",
+            first_value,
+            Decimal("0.5"),
+            first_price,
+            Decimal("1"),
+            first_value / first_price,
         ),
         AssetInput(
-            "b", "BBB", "USD", second_value, Decimal("0.5"), second_price, Decimal("1")
+            "b",
+            "BBB",
+            "USD",
+            second_value,
+            Decimal("0.5"),
+            second_price,
+            Decimal("1"),
+            second_value / second_price,
         ),
     )
     return assets, cash
@@ -158,6 +172,7 @@ def test_pnl_fields_cannot_influence_the_engine_contract() -> None:
         "target_weight",
         "unit_price_cny",
         "lot_size",
+        "max_sell_quantity",
     }
 
 
@@ -185,6 +200,7 @@ def test_fx_pass_never_buys_a_class_overweight_after_same_currency_pass(
             Decimal("0.5"),
             Decimal(usd_lot_value),
             Decimal("1"),
+            Decimal(usd_value) / Decimal(usd_lot_value),
         ),
         AssetInput(
             "cny",
@@ -194,6 +210,7 @@ def test_fx_pass_never_buys_a_class_overweight_after_same_currency_pass(
             Decimal("0.5"),
             Decimal(cny_lot_value),
             Decimal("1"),
+            Decimal(cny_value) / Decimal(cny_lot_value),
         ),
     )
     cash = CashInput(Decimal(cny_cash), Decimal("0"), Decimal("1"))
@@ -249,6 +266,7 @@ def test_before_metrics_match_original_weights_independent_of_cash_and_options(
             Decimal("0.5"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(first_value) / Decimal("10"),
         ),
         AssetInput(
             "second",
@@ -258,6 +276,7 @@ def test_before_metrics_match_original_weights_independent_of_cash_and_options(
             Decimal("0.5"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(second_value) / Decimal("10"),
         ),
     )
     expected_weights = (
@@ -324,6 +343,7 @@ def test_zero_and_full_targets_never_crash_and_respect_constraints(
             Decimal("1"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(all_value) / Decimal("10"),
         ),
         AssetInput(
             "zero",
@@ -333,6 +353,7 @@ def test_zero_and_full_targets_never_crash_and_respect_constraints(
             Decimal("0"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(zero_value) / Decimal("10"),
         ),
     )
 
@@ -375,6 +396,7 @@ def test_net_trades_have_one_direction_and_conserve_final_state(
             Decimal("0.5"),
             Decimal(first_price),
             Decimal("1"),
+            Decimal(first_value) / Decimal(first_price),
         ),
         AssetInput(
             "b",
@@ -384,6 +406,7 @@ def test_net_trades_have_one_direction_and_conserve_final_state(
             Decimal("0.5"),
             Decimal(second_price),
             Decimal("1"),
+            Decimal(second_value) / Decimal(second_price),
         ),
     )
     result = rebalance(
@@ -444,6 +467,7 @@ def test_full_result_is_invariant_under_input_permutations(
             Decimal("0.2"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(first_value) / Decimal("10"),
         ),
         AssetInput(
             "a",
@@ -453,6 +477,7 @@ def test_full_result_is_invariant_under_input_permutations(
             Decimal("0.3"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(second_value) / Decimal("10"),
         ),
         AssetInput(
             "b",
@@ -462,6 +487,7 @@ def test_full_result_is_invariant_under_input_permutations(
             Decimal("0.5"),
             Decimal("10"),
             Decimal("1"),
+            Decimal(third_value) / Decimal("10"),
         ),
     )
     cash = CashInput(Decimal(cny_cash), Decimal(usd_cash), Decimal("1"))
