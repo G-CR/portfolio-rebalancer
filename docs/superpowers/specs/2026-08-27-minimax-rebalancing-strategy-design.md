@@ -30,7 +30,7 @@ The approved behavior is:
 - If allocation quality is still equal, minimize sale amount, then FX amount, then total traded amount, then trade count.
 - There is no portfolio-wide minimum trade amount. Each holding's lot size is the hard quantity increment: commonly 100 shares for domestic ETFs and 0.01 shares for fractionally tradable US holdings.
 - Improvements below 1 bp are not operationally meaningful.
-- Results must be certified to within 1 bp of the continuous theoretical lower bound.
+- Results must be certified to within 1 bp of the best executable discrete plan. The continuous relaxation is a search lower bound, not the definition of executable optimality.
 - Fees are excluded from this redesign.
 
 ## Objective and Deterministic Ordering
@@ -69,7 +69,7 @@ Candidate plans are compared by the following lexicographic score:
 )
 ```
 
-Using buckets for the first two objectives means an allocation improvement smaller than 1 bp is treated as equivalent. The later objectives then remove negligible fragmented trades. The chosen `Dmax` is less than 1 bp worse than the unbucketed theoretical optimum.
+Using buckets for the first two objectives means an allocation improvement smaller than 1 bp is treated as equivalent. The later objectives then remove negligible fragmented trades. The chosen `Dmax` is less than 1 bp worse than the unbucketed best executable plan.
 
 `stable_trade_key` is the ordered tuple of asset-class IDs, symbols, directions, and quantities. It is a final deterministic tie-breaker only; it has no financial meaning.
 
@@ -142,7 +142,7 @@ The domain implementation is split into focused units:
 
 At every search node, a continuous relaxation supplies an optimistic lexicographic lower bound. A node is pruned when that bound cannot beat the incumbent plan. Asset branching order is deterministic and independent of caller input order.
 
-Search completes only when no open node can beat the incumbent score. Certification additionally compares the incumbent `Dmax` with the global continuous lower bound and requires a gap no greater than 1 bp.
+Search completes with exact certification when no open node can beat the incumbent score. It may complete earlier with 1 bp certification when the incumbent's `Dmax` is no more than 1 bp above the best lower bound among all open nodes. The root continuous relaxation guides and prunes the search, but an unavoidable integrality gap caused by lot sizes does not invalidate an exactly proven executable optimum.
 
 The search uses a deterministic budget of 250,000 branch nodes rather than a wall-clock cutoff. This prevents identical inputs from succeeding or failing according to machine speed. The product requirement is that a normal five-class preview completes within 500 ms on the supported local environment; exhausting the node budget is permitted to take longer but must end in the typed certification failure.
 
@@ -166,7 +166,8 @@ preview request
 New result metadata is returned for the selected valuation basis and its comparison result:
 
 - `optimization_precision`: `"0.0001"` in ratio units;
-- `optimality_gap`: certified difference between the plan's `Dmax` and the continuous lower bound;
+- `optimization_certified`: `true` for newly certified results and `false` only for normalized historical plans that predate the optimizer;
+- `optimality_gap`: certified upper bound on the plan's `Dmax` gap from the best executable discrete plan;
 - `buy_only_max_drift`: certified `Dmax` from phase one;
 - `sell_phase_used`: whether phase two supplied the final plan;
 - `net_fx_direction`: `cny_to_usd`, `usd_to_cny`, or `none`;
@@ -181,6 +182,8 @@ Trade reason codes are redesigned around optimizer intent rather than the incide
 - selling and reallocating because the certified buy-only plan remained outside tolerance.
 
 The result builder may determine a trade's reason by rescoring the complete plan without that net order. Reason text is explanatory and does not affect optimization.
+
+Newly calculated plans emit only these optimizer-intent codes. Response validation continues accepting the legacy funding-source codes so historical saved plans and restored backups remain readable without rewriting their audit data.
 
 ## Minimum-Trade Compatibility
 
@@ -217,7 +220,7 @@ The following are typed input or data failures before search:
 - lot size is nonpositive or invalid;
 - preferred sell inventory is negative or inconsistent with holding state.
 
-Node-budget exhaustion before 1 bp certification is a typed optimization failure. Its public message explains that no certified plan could be produced under the current problem size; internal diagnostics may report explored nodes and the remaining bound gap without exposing sensitive data.
+Node-budget exhaustion before 1 bp executable-optimality certification is a typed optimization failure. Its public message explains that no certified plan could be produced under the current problem size; internal diagnostics may report explored nodes and the remaining bound gap without exposing sensitive data.
 
 A certified result outside tolerance is a successful response with `feasible = false`, projected allocations, and the best executable trade list under the selected constraints.
 
@@ -272,7 +275,7 @@ Representative five-class portfolios cover small and large account values, mixed
 The redesign is complete when:
 
 - the greedy deficit-order passes are no longer used to select trades;
-- the returned plan is certified within 1 bp of the continuous `Dmax` lower bound;
+- the returned plan is certified within 1 bp of the best executable discrete plan;
 - result selection follows the approved lexicographic objectives;
 - sell gating, bidirectional net FX, currency budgets, lot sizes, and preferred-holding sale caps are enforced;
 - unused cash stays outside projected allocation weights;
