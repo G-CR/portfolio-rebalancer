@@ -11,7 +11,6 @@ from decimal import (
     localcontext,
 )
 from heapq import heappop, heappush
-from itertools import product
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -777,19 +776,22 @@ def _optimistic_score(bound: ContinuousBound) -> PlanScore:
     )
 
 
-def _guide_lot_options(
+def _guide_lot_roundings(
     asset: AssetInput,
     guide_value: Decimal,
     lot_bound: tuple[int, int],
-) -> tuple[int, ...]:
+) -> tuple[int, int, int]:
     guide_lots = (guide_value - asset.current_value_cny) / _lot_value(asset)
     lower, upper = lot_bound
-    rounded = (
-        int(guide_lots.to_integral_value(rounding=ROUND_DOWN)),
-        int(guide_lots.to_integral_value(rounding=ROUND_FLOOR)),
-        int(guide_lots.to_integral_value(rounding=ROUND_CEILING)),
+
+    def bounded_lots(lot_count: int) -> int:
+        return min(upper, max(lower, lot_count))
+
+    return (
+        bounded_lots(int(guide_lots.to_integral_value(rounding=ROUND_DOWN))),
+        bounded_lots(int(guide_lots.to_integral_value(rounding=ROUND_FLOOR))),
+        bounded_lots(int(guide_lots.to_integral_value(rounding=ROUND_CEILING))),
     )
-    return tuple(sorted({min(upper, max(lower, lot_count)) for lot_count in rounded}))
 
 
 def _seed_incumbent(
@@ -799,33 +801,41 @@ def _seed_incumbent(
     *,
     allow_fx: bool,
 ) -> CandidatePlan:
-    lot_vectors = product(
-        *(
-            _guide_lot_options(asset, guide_value, lot_bound)
-            for asset, guide_value, lot_bound in zip(
-                assets,
-                root_bound.guide_values,
-                root_bound.lot_bounds,
-                strict=True,
-            )
+    roundings = tuple(
+        _guide_lot_roundings(asset, guide_value, lot_bound)
+        for asset, guide_value, lot_bound in zip(
+            assets,
+            root_bound.guide_values,
+            root_bound.lot_bounds,
+            strict=True,
         )
     )
-    incumbent = _candidate_from_lots(
-        assets,
-        cash,
-        tuple(0 for _ in assets),
-        allow_fx=allow_fx,
-    )
-    if incumbent is None:
-        raise RuntimeError("the no-trade rebalance candidate must be feasible")
+    guide_vector = tuple(toward_zero for toward_zero, _, _ in roundings)
+    lot_vectors: list[tuple[int, ...]] = []
+    seen_vectors: set[tuple[int, ...]] = set()
+
+    def add_seed(lot_counts: tuple[int, ...]) -> None:
+        if lot_counts not in seen_vectors:
+            seen_vectors.add(lot_counts)
+            lot_vectors.append(lot_counts)
+
+    add_seed(tuple(0 for _ in assets))
+    add_seed(guide_vector)
+    for index, (_, floor_lots, ceiling_lots) in enumerate(roundings):
+        for neighboring_lots in (floor_lots, ceiling_lots):
+            neighboring_vector = list(guide_vector)
+            neighboring_vector[index] = neighboring_lots
+            add_seed(tuple(neighboring_vector))
+
+    incumbent: CandidatePlan | None = None
     for lot_counts in lot_vectors:
-        candidate = _candidate_from_lots(
-            assets, cash, tuple(lot_counts), allow_fx=allow_fx
-        )
-        if candidate is not None and score_candidate(candidate) < score_candidate(
-            incumbent
+        candidate = _candidate_from_lots(assets, cash, lot_counts, allow_fx=allow_fx)
+        if candidate is not None and (
+            incumbent is None or score_candidate(candidate) < score_candidate(incumbent)
         ):
             incumbent = candidate
+    if incumbent is None:
+        raise RuntimeError("the no-trade rebalance candidate must be feasible")
     return incumbent
 
 

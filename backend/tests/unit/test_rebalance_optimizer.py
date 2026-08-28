@@ -243,6 +243,62 @@ def test_node_budget_raises_typed_uncertified_failure(
     assert not hasattr(raised.value, "candidate")
 
 
+def test_seed_work_is_linear_before_node_budget_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset_count = 16
+    assets = tuple(
+        AssetInput(
+            asset_class_id=f"a{index:02d}",
+            symbol=f"A{index:02d}",
+            currency="CNY",
+            current_value_cny=Decimal("0"),
+            target_weight=Decimal("0.0625"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        )
+        for index in range(asset_count)
+    )
+    original_candidate_from_lots = optimizer._candidate_from_lots
+    evaluated_candidates = 0
+    maximum_linear_seeds = 2 + 2 * asset_count
+
+    def counted_candidate_from_lots(
+        candidate_assets: tuple[AssetInput, ...],
+        candidate_cash: CashInput,
+        lot_counts: tuple[int, ...],
+        *,
+        allow_fx: bool,
+    ) -> CandidatePlan | None:
+        nonlocal evaluated_candidates
+        evaluated_candidates += 1
+        if evaluated_candidates > maximum_linear_seeds:
+            pytest.fail("seed evaluation exceeded the deterministic linear bound")
+        return original_candidate_from_lots(
+            candidate_assets,
+            candidate_cash,
+            lot_counts,
+            allow_fx=allow_fx,
+        )
+
+    monkeypatch.setattr(optimizer, "_candidate_from_lots", counted_candidate_from_lots)
+    monkeypatch.setattr(optimizer, "NODE_BUDGET", 1)
+
+    with pytest.raises(OptimizationFailure) as raised:
+        optimize_discrete(
+            assets,
+            CashInput(Decimal("8"), Decimal("0"), Decimal("7")),
+            allow_sell=False,
+            allow_fx=False,
+        )
+
+    assert evaluated_candidates <= maximum_linear_seeds
+    assert raised.value.code == "REBALANCE_OPTIMIZATION_UNCERTIFIED"
+    assert raised.value.explored_nodes == 1
+    assert raised.value.gap > 0
+
+
 def test_score_uses_one_basis_point_buckets_before_activity() -> None:
     quiet = _candidate(max_drift="0.020001", total_drift="0.030001")
     noisy = _candidate(max_drift="0.020099", total_drift="0.030099", sale="100")
