@@ -1,13 +1,17 @@
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
+from itertools import product
 
 import pytest
-
+from app.domain import rebalance_optimizer as optimizer
 from app.domain.rebalance import AssetInput, CashInput
 from app.domain.rebalance_optimizer import (
+    OPTIMIZATION_EPSILON,
     CandidatePlan,
+    OptimizationFailure,
     continuous_relaxation,
     evaluate_cash_ledger,
+    optimize_discrete,
     score_candidate,
 )
 
@@ -36,6 +40,207 @@ def _candidate(
         total_sale_cny=Decimal(sale),
         net_fx_cny=Decimal(fx),
     )
+
+
+SMALL_ASSETS = (
+    asset("a", "CNY", "40", "0.5"),
+    asset("b", "USD", "60", "0.5"),
+)
+SMALL_CASH = CashInput(Decimal("30"), Decimal("20") / Decimal("7"), Decimal("7"))
+
+
+def _candidate_from_lots(
+    assets: tuple[AssetInput, ...],
+    cash: CashInput,
+    lot_counts: tuple[int, ...],
+    *,
+    allow_fx: bool,
+) -> CandidatePlan | None:
+    ledger = evaluate_cash_ledger(assets, lot_counts, cash, allow_fx=allow_fx)
+    lot_values = tuple(item.unit_price_cny * item.lot_size for item in assets)
+    final_values = tuple(
+        item.current_value_cny + Decimal(lots) * lot_value
+        for item, lots, lot_value in zip(assets, lot_counts, lot_values, strict=True)
+    )
+    if not ledger.feasible or any(value < 0 for value in final_values):
+        return None
+
+    invested_total = sum(final_values, Decimal("0"))
+    if invested_total == 0:
+        drifts = tuple(item.target_weight for item in assets)
+    else:
+        drifts = tuple(
+            abs(value / invested_total - item.target_weight)
+            for item, value in zip(assets, final_values, strict=True)
+        )
+    trade_values = tuple(
+        Decimal(lots) * lot_value
+        for lots, lot_value in zip(lot_counts, lot_values, strict=True)
+    )
+    return CandidatePlan(
+        lot_counts=lot_counts,
+        final_values=final_values,
+        max_drift=max(drifts, default=Decimal("0")),
+        total_drift=sum(drifts, Decimal("0")),
+        total_sale_cny=sum(
+            (-value for value in trade_values if value < 0), Decimal("0")
+        ),
+        net_fx_cny=ledger.net_fx_cny,
+        total_traded_cny=sum((abs(value) for value in trade_values), Decimal("0")),
+        trade_count=sum(lots != 0 for lots in lot_counts),
+        remaining_cny=ledger.remaining_cny,
+        remaining_usd=ledger.remaining_usd,
+        stable_trade_key=tuple(
+            (item.asset_class_id, item.symbol, Decimal(lots) * item.lot_size)
+            for item, lots in zip(assets, lot_counts, strict=True)
+            if lots != 0
+        ),
+    )
+
+
+def _exhaustive_best(
+    assets: tuple[AssetInput, ...],
+    cash: CashInput,
+    *,
+    allow_sell: bool,
+    allow_fx: bool,
+) -> CandidatePlan:
+    ranges = [range(-int(item.max_sell_quantity / item.lot_size), 7) for item in assets]
+    candidates = []
+    for lots in product(*ranges):
+        candidate = _candidate_from_lots(assets, cash, lots, allow_fx=allow_fx)
+        if candidate is not None and (
+            allow_sell or all(lot_count >= 0 for lot_count in lots)
+        ):
+            candidates.append(candidate)
+    return min(candidates, key=score_candidate)
+
+
+@pytest.mark.parametrize(
+    ("allow_sell", "allow_fx"),
+    ((False, False), (False, True), (True, False), (True, True)),
+)
+def test_search_matches_exhaustive_oracle(allow_sell: bool, allow_fx: bool) -> None:
+    expected = _exhaustive_best(
+        SMALL_ASSETS,
+        SMALL_CASH,
+        allow_sell=allow_sell,
+        allow_fx=allow_fx,
+    )
+
+    actual = optimize_discrete(
+        SMALL_ASSETS,
+        SMALL_CASH,
+        allow_sell=allow_sell,
+        allow_fx=allow_fx,
+    )
+
+    assert score_candidate(actual.candidate) == score_candidate(expected)
+    assert actual.optimality_gap <= OPTIMIZATION_EPSILON
+
+
+def test_search_never_sells_more_than_preferred_holding_inventory() -> None:
+    assets = (
+        AssetInput(
+            asset_class_id="a",
+            symbol="A",
+            currency="CNY",
+            current_value_cny=Decimal("1000"),
+            target_weight=Decimal("0.1"),
+            unit_price_cny=Decimal("10"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("2.5"),
+        ),
+        asset("b", "CNY", "100", "0.9"),
+    )
+
+    plan = optimize_discrete(
+        assets,
+        CashInput(Decimal("0"), Decimal("0"), Decimal("7")),
+        allow_sell=True,
+        allow_fx=False,
+    )
+
+    assert plan.candidate.lot_counts[0] == -2
+
+
+def test_search_is_independent_of_input_order() -> None:
+    canonical = optimize_discrete(
+        SMALL_ASSETS,
+        SMALL_CASH,
+        allow_sell=True,
+        allow_fx=True,
+    )
+
+    permuted = optimize_discrete(
+        tuple(reversed(SMALL_ASSETS)),
+        SMALL_CASH,
+        allow_sell=True,
+        allow_fx=True,
+    )
+
+    assert permuted == canonical
+
+
+def _large_lot_assets() -> tuple[AssetInput, ...]:
+    return (
+        AssetInput(
+            asset_class_id="a",
+            symbol="A",
+            currency="CNY",
+            current_value_cny=Decimal("60"),
+            target_weight=Decimal("0.5"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("100"),
+            max_sell_quantity=Decimal("0"),
+        ),
+        AssetInput(
+            asset_class_id="b",
+            symbol="B",
+            currency="CNY",
+            current_value_cny=Decimal("40"),
+            target_weight=Decimal("0.5"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("100"),
+            max_sell_quantity=Decimal("0"),
+        ),
+    )
+
+
+def test_search_exhaustion_certifies_a_large_integrality_gap() -> None:
+    plan = optimize_discrete(
+        _large_lot_assets(),
+        CashInput(Decimal("100"), Decimal("0"), Decimal("7")),
+        allow_sell=False,
+        allow_fx=False,
+    )
+
+    assert plan.candidate.lot_counts == (0, 0)
+    assert plan.candidate.max_drift == Decimal("0.1")
+    assert plan.best_open_lower_bound == plan.candidate.max_drift
+    assert plan.optimality_gap == 0
+    assert plan.explored_nodes > 1
+
+
+def test_node_budget_raises_typed_uncertified_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(optimizer, "NODE_BUDGET", 1)
+    result = None
+
+    with pytest.raises(OptimizationFailure) as raised:
+        result = optimize_discrete(
+            _large_lot_assets(),
+            CashInput(Decimal("100"), Decimal("0"), Decimal("7")),
+            allow_sell=False,
+            allow_fx=False,
+        )
+
+    assert result is None
+    assert raised.value.code == "REBALANCE_OPTIMIZATION_UNCERTIFIED"
+    assert raised.value.explored_nodes == 1
+    assert raised.value.gap > 0
+    assert not hasattr(raised.value, "candidate")
 
 
 def test_score_uses_one_basis_point_buckets_before_activity() -> None:

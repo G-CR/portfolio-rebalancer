@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, getcontext, localcontext
+from decimal import (
+    ROUND_CEILING,
+    ROUND_DOWN,
+    ROUND_FLOOR,
+    Decimal,
+    getcontext,
+    localcontext,
+)
+from heapq import heappop, heappush
+from itertools import product
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -685,4 +694,260 @@ def continuous_relaxation(
             total_drift=sum(guide_drifts, Decimal("0")),
             guide_values=guide_values,
             lot_bounds=resolved_bounds,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchNode:
+    lot_bounds: tuple[tuple[int, int], ...]
+    bound: ContinuousBound
+
+    @property
+    def is_singleton(self) -> bool:
+        return all(lower == upper for lower, upper in self.lot_bounds)
+
+
+def _candidate_from_lots(
+    assets: tuple[AssetInput, ...],
+    cash: CashInput,
+    lot_counts: tuple[int, ...],
+    *,
+    allow_fx: bool,
+) -> CandidatePlan | None:
+    ledger = evaluate_cash_ledger(assets, lot_counts, cash, allow_fx=allow_fx)
+    lot_values = tuple(_lot_value(asset) for asset in assets)
+    final_values = tuple(
+        asset.current_value_cny + Decimal(lot_count) * lot_value
+        for asset, lot_count, lot_value in zip(
+            assets, lot_counts, lot_values, strict=True
+        )
+    )
+    if not ledger.feasible or any(value < 0 for value in final_values):
+        return None
+
+    invested_total = sum(final_values, Decimal("0"))
+    if invested_total == 0:
+        drifts = tuple(asset.target_weight for asset in assets)
+    else:
+        drifts = tuple(
+            abs(value / invested_total - asset.target_weight)
+            for asset, value in zip(assets, final_values, strict=True)
+        )
+    trade_values = tuple(
+        Decimal(lot_count) * lot_value
+        for lot_count, lot_value in zip(lot_counts, lot_values, strict=True)
+    )
+    return CandidatePlan(
+        lot_counts=lot_counts,
+        final_values=final_values,
+        max_drift=max(drifts, default=Decimal("0")),
+        total_drift=sum(drifts, Decimal("0")),
+        total_sale_cny=sum(
+            (-value for value in trade_values if value < 0), Decimal("0")
+        ),
+        net_fx_cny=ledger.net_fx_cny,
+        total_traded_cny=sum((abs(value) for value in trade_values), Decimal("0")),
+        trade_count=sum(lot_count != 0 for lot_count in lot_counts),
+        remaining_cny=ledger.remaining_cny,
+        remaining_usd=ledger.remaining_usd,
+        stable_trade_key=tuple(
+            (
+                asset.asset_class_id,
+                asset.symbol,
+                Decimal(lot_count) * asset.lot_size,
+            )
+            for asset, lot_count in zip(assets, lot_counts, strict=True)
+            if lot_count != 0
+        ),
+    )
+
+
+def _optimistic_score(bound: ContinuousBound) -> PlanScore:
+    # Every executable total drift is at least its maximum component drift.
+    # Activity is left at zero because a partial interval has not fixed trades.
+    drift_bucket_lower_bound = _bucket(bound.max_drift)
+    return PlanScore(
+        drift_bucket_lower_bound,
+        drift_bucket_lower_bound,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        0,
+        (),
+    )
+
+
+def _guide_lot_options(
+    asset: AssetInput,
+    guide_value: Decimal,
+    lot_bound: tuple[int, int],
+) -> tuple[int, ...]:
+    guide_lots = (guide_value - asset.current_value_cny) / _lot_value(asset)
+    lower, upper = lot_bound
+    rounded = (
+        int(guide_lots.to_integral_value(rounding=ROUND_DOWN)),
+        int(guide_lots.to_integral_value(rounding=ROUND_FLOOR)),
+        int(guide_lots.to_integral_value(rounding=ROUND_CEILING)),
+    )
+    return tuple(sorted({min(upper, max(lower, lot_count)) for lot_count in rounded}))
+
+
+def _seed_incumbent(
+    assets: tuple[AssetInput, ...],
+    cash: CashInput,
+    root_bound: ContinuousBound,
+    *,
+    allow_fx: bool,
+) -> CandidatePlan:
+    lot_vectors = product(
+        *(
+            _guide_lot_options(asset, guide_value, lot_bound)
+            for asset, guide_value, lot_bound in zip(
+                assets,
+                root_bound.guide_values,
+                root_bound.lot_bounds,
+                strict=True,
+            )
+        )
+    )
+    incumbent = _candidate_from_lots(
+        assets,
+        cash,
+        tuple(0 for _ in assets),
+        allow_fx=allow_fx,
+    )
+    if incumbent is None:
+        raise RuntimeError("the no-trade rebalance candidate must be feasible")
+    for lot_counts in lot_vectors:
+        candidate = _candidate_from_lots(
+            assets, cash, tuple(lot_counts), allow_fx=allow_fx
+        )
+        if candidate is not None and score_candidate(candidate) < score_candidate(
+            incumbent
+        ):
+            incumbent = candidate
+    return incumbent
+
+
+def _split_node(
+    node: _SearchNode,
+    assets: tuple[AssetInput, ...],
+) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    splittable = [
+        index for index, (lower, upper) in enumerate(node.lot_bounds) if lower < upper
+    ]
+    split_index = max(
+        splittable,
+        key=lambda index: (
+            Decimal(node.lot_bounds[index][1] - node.lot_bounds[index][0])
+            * _lot_value(assets[index]),
+            -index,
+        ),
+    )
+    lower, upper = node.lot_bounds[split_index]
+    guide_lots = (
+        node.bound.guide_values[split_index] - assets[split_index].current_value_cny
+    ) / _lot_value(assets[split_index])
+    split_at = int(guide_lots.to_integral_value(rounding=ROUND_FLOOR))
+    split_at = min(upper - 1, max(lower, split_at))
+
+    left = list(node.lot_bounds)
+    right = list(node.lot_bounds)
+    left[split_index] = (lower, split_at)
+    right[split_index] = (split_at + 1, upper)
+    return tuple(left), tuple(right)
+
+
+def optimize_discrete(
+    assets: Sequence[AssetInput],
+    cash: CashInput,
+    *,
+    allow_sell: bool,
+    allow_fx: bool,
+) -> CertifiedPlan:
+    """Return a deterministic executable plan with a certified drift gap."""
+    ordered_assets = tuple(sorted(assets, key=_asset_key))
+    decimal_inputs = [cash.cny, cash.usd, cash.usd_cny]
+    for asset in ordered_assets:
+        decimal_inputs.extend(
+            (
+                asset.current_value_cny,
+                asset.target_weight,
+                asset.unit_price_cny,
+                asset.lot_size,
+                asset.max_sell_quantity,
+            )
+        )
+
+    with localcontext() as context:
+        context.prec = _calculation_precision(decimal_inputs)
+        root_bound = continuous_relaxation(
+            ordered_assets,
+            cash,
+            allow_sell=allow_sell,
+            allow_fx=allow_fx,
+        )
+        incumbent = _seed_incumbent(ordered_assets, cash, root_bound, allow_fx=allow_fx)
+        heap: list[
+            tuple[
+                PlanScore,
+                tuple[tuple[int, int], ...],
+                _SearchNode,
+            ]
+        ] = []
+
+        def push_node(lot_bounds: tuple[tuple[int, int], ...]) -> None:
+            bound = continuous_relaxation(
+                ordered_assets,
+                cash,
+                allow_sell=allow_sell,
+                allow_fx=allow_fx,
+                lot_bounds=lot_bounds,
+            )
+            if bound.max_drift.is_infinite():
+                return
+            node = _SearchNode(lot_bounds, bound)
+            heappush(heap, (_optimistic_score(bound), lot_bounds, node))
+
+        push_node(root_bound.lot_bounds)
+        explored_nodes = 0
+        while heap:
+            if explored_nodes == NODE_BUDGET:
+                best_open_bound = min(node.bound.max_drift for _, _, node in heap)
+                gap = max(Decimal("0"), incumbent.max_drift - best_open_bound)
+                raise OptimizationFailure(
+                    "REBALANCE_OPTIMIZATION_UNCERTIFIED", explored_nodes, gap
+                )
+
+            optimistic_score, _, node = heappop(heap)
+            explored_nodes += 1
+            if optimistic_score >= score_candidate(incumbent):
+                continue
+            if node.is_singleton:
+                lot_counts = tuple(lower for lower, _ in node.lot_bounds)
+                candidate = _candidate_from_lots(
+                    ordered_assets, cash, lot_counts, allow_fx=allow_fx
+                )
+                if candidate is not None and score_candidate(
+                    candidate
+                ) < score_candidate(incumbent):
+                    incumbent = candidate
+            else:
+                left, right = _split_node(node, ordered_assets)
+                push_node(left)
+                push_node(right)
+
+            if not heap:
+                return CertifiedPlan(
+                    incumbent,
+                    incumbent.max_drift,
+                    Decimal("0"),
+                    explored_nodes,
+                )
+
+        return CertifiedPlan(
+            incumbent,
+            incumbent.max_drift,
+            Decimal("0"),
+            explored_nodes,
         )
