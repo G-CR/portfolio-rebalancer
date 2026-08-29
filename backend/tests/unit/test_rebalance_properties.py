@@ -1,4 +1,4 @@
-from decimal import Decimal, localcontext
+from decimal import ROUND_DOWN, Decimal, localcontext
 from itertools import permutations
 
 from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, rebalance
@@ -179,6 +179,13 @@ def test_multiple_usd_orders_conserve_repeating_currency_conversions(
     usd_trades = tuple(trade for trade in result.trades if trade.symbol in {"B", "C"})
 
     assert len(usd_trades) == 2
+    with localcontext() as context:
+        context.prec = 100
+        context.rounding = ROUND_DOWN
+        assert all(
+            trade.amount_trade_currency == trade.amount_cny / cash.usd_cny
+            for trade in usd_trades
+        )
     with localcontext() as context:
         context.prec = 250
         assert result.remaining_usd == cash.usd - sum(

@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from decimal import Decimal, localcontext
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, localcontext
 
 import pytest
 from app.domain.rebalance import (
@@ -313,13 +313,20 @@ def test_multiple_usd_orders_exactly_conserve_reported_currency() -> None:
     )
     assert len(usd_buys) == 2
     with localcontext() as context:
+        context.prec = 100
+        context.rounding = ROUND_DOWN
+        assert all(
+            trade.amount_trade_currency == trade.amount_cny / cash.usd_cny
+            for trade in usd_buys
+        )
+    with localcontext() as context:
         context.prec = 250
         assert result.remaining_usd == cash.usd - sum(
             (trade.amount_trade_currency for trade in usd_buys), Decimal("0")
         )
 
 
-def test_fully_spent_repeating_usd_orders_never_report_negative_cash() -> None:
+def test_fully_spent_repeating_usd_orders_preserve_canonical_amounts() -> None:
     cash = CashInput(Decimal("0"), Decimal("3"), Decimal("3"))
     assets = (
         _asset("a", "A", "CNY", "1", "0.1", "1", max_sell_quantity="0"),
@@ -337,8 +344,15 @@ def test_fully_spent_repeating_usd_orders_never_report_negative_cash() -> None:
     usd_buys = tuple(trade for trade in result.trades if trade.symbol != "A")
     assert len(usd_buys) == 3
     with localcontext() as context:
+        context.prec = 100
+        context.rounding = ROUND_DOWN
+        assert all(
+            trade.amount_trade_currency == trade.amount_cny / cash.usd_cny
+            for trade in usd_buys
+        )
+    with localcontext() as context:
         context.prec = 250
-        assert result.remaining_usd == Decimal("0")
+        assert result.remaining_usd >= 0
         assert result.remaining_usd == cash.usd - sum(
             (trade.amount_trade_currency for trade in usd_buys), Decimal("0")
         )
@@ -476,6 +490,25 @@ def test_result_is_independent_of_ambient_decimal_precision() -> None:
 
     with localcontext() as context:
         context.prec = 4
+        actual = rebalance(assets, cash, options)
+
+    assert actual == expected
+
+
+def test_result_is_independent_of_ambient_decimal_rounding() -> None:
+    assets = (
+        _asset("a", "A", "CNY", "2", "0.5", "1", max_sell_quantity="0"),
+        _asset("b", "B", "USD", "0", "0.25", "1", max_sell_quantity="0"),
+        _asset("c", "C", "USD", "0", "0.25", "1", max_sell_quantity="0"),
+    )
+    cash = CashInput(Decimal("0"), Decimal("1"), Decimal("3"))
+    options = RebalanceOptions(Decimal("0"), False, False)
+
+    with localcontext() as context:
+        context.rounding = ROUND_HALF_EVEN
+        expected = rebalance(assets, cash, options)
+    with localcontext() as context:
+        context.rounding = ROUND_DOWN
         actual = rebalance(assets, cash, options)
 
     assert actual == expected

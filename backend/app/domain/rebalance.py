@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, localcontext
 from typing import Literal
 
 from app.domain.rebalance_optimizer import (
@@ -68,10 +68,17 @@ def _exact_sum_precision(values: Sequence[Decimal]) -> int:
     return max(100, highest_adjusted - lowest_exponent + carry_digits + 2)
 
 
-def _exact_product(left: Decimal, right: Decimal) -> Decimal:
+def _public_usd_amount(
+    amount_cny: Decimal,
+    usd_cny: Decimal,
+    *,
+    precision: int,
+) -> Decimal:
+    """Convert the authoritative CNY ledger amount for public USD display."""
     with localcontext() as context:
-        context.prec = len(left.as_tuple().digits) + len(right.as_tuple().digits)
-        return left * right
+        context.prec = precision
+        context.rounding = ROUND_DOWN
+        return amount_cny / usd_cny
 
 
 @dataclass(frozen=True)
@@ -256,8 +263,12 @@ def rebalance(
             )
         )
 
+    calculation_precision = _calculation_precision(decimal_values)
     with localcontext() as context:
-        context.prec = _calculation_precision(decimal_values)
+        context.prec = calculation_precision
+        # Nested optimizer contexts inherit this explicit mode, preserving the
+        # approved half-even score semantics independently of the caller.
+        context.rounding = ROUND_HALF_EVEN
         if asset_list and sum(
             (item.target_weight for item in asset_list), Decimal("0")
         ) != Decimal("1"):
@@ -303,8 +314,6 @@ def rebalance(
         trade_suggestions = []
         signed_cny_amounts: list[Decimal] = []
         signed_usd_amounts: list[Decimal] = []
-        signed_usd_cny_amounts: list[Decimal] = []
-        last_usd_trade_index: int | None = None
         for index, (asset, lot_count) in enumerate(
             zip(asset_list, candidate.lot_counts, strict=True)
         ):
@@ -312,16 +321,22 @@ def rebalance(
                 continue
             quantity = abs(Decimal(lot_count)) * asset.lot_size
             amount_cny = quantity * asset.unit_price_cny
+            # This is the canonical public order conversion. Remaining cash is
+            # derived from it; the order amount is never reconciled or adjusted.
             amount_trade_currency = (
-                amount_cny if asset.currency == "CNY" else amount_cny / cash.usd_cny
+                amount_cny
+                if asset.currency == "CNY"
+                else _public_usd_amount(
+                    amount_cny,
+                    cash.usd_cny,
+                    precision=calculation_precision,
+                )
             )
             signed_amount = Decimal("1") if lot_count < 0 else Decimal("-1")
             if asset.currency == "CNY":
                 signed_cny_amounts.append(signed_amount * amount_cny)
             else:
                 signed_usd_amounts.append(signed_amount * amount_trade_currency)
-                signed_usd_cny_amounts.append(signed_amount * amount_cny)
-                last_usd_trade_index = len(trade_suggestions)
             trade_suggestions.append(
                 TradeSuggestion(
                     symbol=asset.symbol,
@@ -338,57 +353,25 @@ def rebalance(
                 )
             )
         net_fx_direction, net_fx_amount_cny = _net_fx(candidate.net_fx_cny)
-        cash_usd_cny = _exact_product(cash.usd, cash.usd_cny)
+        fx_usd = _public_usd_amount(
+            candidate.net_fx_cny,
+            cash.usd_cny,
+            precision=calculation_precision,
+        )
         balance_values = [
             cash.cny,
             cash.usd,
-            cash.usd_cny,
-            cash_usd_cny,
             candidate.net_fx_cny,
-            candidate.remaining_cny,
-            candidate.remaining_usd,
+            fx_usd,
             *signed_cny_amounts,
             *signed_usd_amounts,
-            *signed_usd_cny_amounts,
         ]
         with localcontext() as balance_context:
             balance_context.prec = _exact_sum_precision(balance_values)
-            fx_usd = candidate.net_fx_cny / cash.usd_cny
-            aggregate_remaining_usd = (
-                cash_usd_cny
-                + sum(signed_usd_cny_amounts, Decimal("0"))
-                + candidate.net_fx_cny
-            ) / cash.usd_cny
+            balance_context.rounding = ROUND_HALF_EVEN
             remaining_cny = (
                 cash.cny + sum(signed_cny_amounts, Decimal("0")) - candidate.net_fx_cny
             )
-            if last_usd_trade_index is not None:
-                # Independent repeating-decimal conversions can differ from
-                # the optimizer's aggregate ledger. Solve the last canonical
-                # USD order as the exact finite remainder in an expanded
-                # context so published orders conserve at any higher precision.
-                trade = trade_suggestions[last_usd_trade_index]
-                signed_direction = (
-                    Decimal("1") if trade.action == "sell" else Decimal("-1")
-                )
-                reconciled_signed_amount = (
-                    aggregate_remaining_usd
-                    - cash.usd
-                    - sum(signed_usd_amounts[:-1], Decimal("0"))
-                    - fx_usd
-                )
-                adjusted_amount = reconciled_signed_amount / signed_direction
-                if adjusted_amount <= 0:
-                    raise RuntimeError("USD residual produced a nonpositive order")
-                trade_suggestions[last_usd_trade_index] = TradeSuggestion(
-                    symbol=trade.symbol,
-                    action=trade.action,
-                    quantity=trade.quantity,
-                    amount_cny=trade.amount_cny,
-                    amount_trade_currency=adjusted_amount,
-                    reason_code=trade.reason_code,
-                )
-                signed_usd_amounts[-1] = reconciled_signed_amount
             remaining_usd = cash.usd + sum(signed_usd_amounts, Decimal("0")) + fx_usd
         trades = tuple(trade_suggestions)
 
