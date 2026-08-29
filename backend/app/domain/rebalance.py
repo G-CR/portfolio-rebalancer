@@ -1,25 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_FLOOR, localcontext
-from types import MappingProxyType
+from decimal import Decimal, localcontext
 from typing import Literal
 
+from app.domain.rebalance_optimizer import (
+    OPTIMIZATION_EPSILON,
+    CandidatePlan,
+    optimize_discrete,
+    score_candidate,
+)
 
 Currency = Literal["CNY", "USD"]
 TradeAction = Literal["buy", "sell"]
-FundingComponent = Literal["CASH", "FX", "SELL_PROCEEDS"]
 ReasonCode = Literal[
-    "UNDERWEIGHT_WITH_CASH",
-    "UNDERWEIGHT_AFTER_FX",
-    "UNDERWEIGHT_WITH_SELL_PROCEEDS",
-    "UNDERWEIGHT_WITH_CASH_AND_FX",
-    "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS",
-    "UNDERWEIGHT_AFTER_SELL_AND_FX",
-    "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
-    "OVERWEIGHT_AFTER_CASH",
+    "REDUCE_MAX_DRIFT",
+    "REDUCE_TOTAL_DRIFT",
+    "REALLOCATE_OUTSIDE_TOLERANCE",
 ]
+NetFxDirection = Literal["cny_to_usd", "usd_to_cny", "none"]
 
 
 def _require_finite(name: str, value: Decimal) -> None:
@@ -42,7 +42,10 @@ def _require_positive(name: str, value: Decimal) -> None:
 def _digit_counts(value: Decimal) -> tuple[int, int]:
     exponent = value.as_tuple().exponent
     fractional_digits = max(-exponent, 0)
-    integer_digits = max(len(value.as_tuple().digits) - fractional_digits, 1)
+    integer_digits = max(
+        len(value.as_tuple().digits) - fractional_digits + max(exponent, 0),
+        1,
+    )
     return integer_digits, fractional_digits
 
 
@@ -54,6 +57,21 @@ def _calculation_precision(values: Sequence[Decimal]) -> int:
         integer_digits += current_integer
         fractional_digits += current_fractional
     return max(100, integer_digits + fractional_digits + 30)
+
+
+def _exact_sum_precision(values: Sequence[Decimal]) -> int:
+    if not values:
+        return 100
+    lowest_exponent = min(value.as_tuple().exponent for value in values)
+    highest_adjusted = max((value.adjusted() if value else 0) for value in values)
+    carry_digits = len(str(len(values)))
+    return max(100, highest_adjusted - lowest_exponent + carry_digits + 2)
+
+
+def _exact_product(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = len(left.as_tuple().digits) + len(right.as_tuple().digits)
+        return left * right
 
 
 @dataclass(frozen=True)
@@ -135,7 +153,7 @@ class RebalanceResult:
     optimization_certified: bool
     optimality_gap: Decimal
     sell_phase_used: bool
-    net_fx_direction: Literal["cny_to_usd", "usd_to_cny", "none"]
+    net_fx_direction: NetFxDirection
     net_fx_amount_cny: Decimal
     fx_required_cny: Decimal
     remaining_cny: Decimal
@@ -144,115 +162,71 @@ class RebalanceResult:
     trades: tuple[TradeSuggestion, ...]
 
 
-@dataclass
-class _TradeTotal:
-    symbol: str
-    action: TradeAction
-    quantity: Decimal
-    amount_cny: Decimal
-    amount_trade_currency: Decimal
-    reason_components: set[FundingComponent]
-
-
-@dataclass
-class _CashLedger:
-    initial_cny: Decimal
-    initial_usd: Decimal
-    sale_cny: Decimal
-    sale_usd: Decimal
-
-    def available_cny(self, currency: Currency, usd_cny: Decimal) -> Decimal:
-        if currency == "CNY":
-            return self.initial_cny + self.sale_cny
-        return (self.initial_usd + self.sale_usd) * usd_cny
-
-    def spend_same_currency(
-        self, currency: Currency, amount_cny: Decimal, usd_cny: Decimal
-    ) -> set[FundingComponent]:
-        amount = amount_cny if currency == "CNY" else amount_cny / usd_cny
-        if currency == "CNY":
-            initial_used = min(self.initial_cny, amount)
-            self.initial_cny -= initial_used
-            sale_used = amount - initial_used
-            self.sale_cny -= sale_used
-        else:
-            initial_used = min(self.initial_usd, amount)
-            self.initial_usd -= initial_used
-            sale_used = amount - initial_used
-            self.sale_usd -= sale_used
-
-        components: set[FundingComponent] = set()
-        if initial_used > 0:
-            components.add("CASH")
-        if sale_used > 0:
-            components.add("SELL_PROCEEDS")
-        return components
-
-    def spend_cny_for_fx(self, amount_cny: Decimal) -> set[FundingComponent]:
-        initial_used = min(self.initial_cny, amount_cny)
-        self.initial_cny -= initial_used
-        sale_used = amount_cny - initial_used
-        self.sale_cny -= sale_used
-        components: set[FundingComponent] = {"FX"}
-        if sale_used > 0:
-            components.add("SELL_PROCEEDS")
-        return components
-
-    def add_sale(
-        self, currency: Currency, amount_cny: Decimal, usd_cny: Decimal
-    ) -> None:
-        if currency == "CNY":
-            self.sale_cny += amount_cny
-        else:
-            self.sale_usd += amount_cny / usd_cny
-
-    @property
-    def remaining_cny(self) -> Decimal:
-        return self.initial_cny + self.sale_cny
-
-    @property
-    def remaining_usd(self) -> Decimal:
-        return self.initial_usd + self.sale_usd
-
-
-def _buy_reason_code(components: frozenset[FundingComponent]) -> ReasonCode:
-    mapping: dict[frozenset[FundingComponent], ReasonCode] = {
-        frozenset(("CASH",)): "UNDERWEIGHT_WITH_CASH",
-        frozenset(("FX",)): "UNDERWEIGHT_AFTER_FX",
-        frozenset(("SELL_PROCEEDS",)): "UNDERWEIGHT_WITH_SELL_PROCEEDS",
-        frozenset(("CASH", "FX")): "UNDERWEIGHT_WITH_CASH_AND_FX",
-        frozenset(
-            ("CASH", "SELL_PROCEEDS")
-        ): "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS",
-        frozenset(
-            ("FX", "SELL_PROCEEDS")
-        ): "UNDERWEIGHT_AFTER_SELL_AND_FX",
-        frozenset(
-            ("CASH", "FX", "SELL_PROCEEDS")
-        ): "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
-    }
-    return mapping[components]
-
-
-def _floor_lots(amount_cny: Decimal, asset: AssetInput) -> Decimal:
-    lot_value_cny = asset.unit_price_cny * asset.lot_size
-    lot_count = (amount_cny / lot_value_cny).to_integral_value(rounding=ROUND_FLOOR)
-    return lot_count * asset.lot_size
-
-
 def _weight(value: Decimal, total: Decimal) -> Decimal:
     return value / total if total else Decimal("0")
 
 
-def _max_drift(
-    assets: Sequence[AssetInput], values: Mapping[str, Decimal], total: Decimal
-) -> Decimal:
-    if not assets:
-        return Decimal("0")
-    return max(
-        abs(_weight(values[item.asset_class_id], total) - item.target_weight)
-        for item in assets
+def _drifts(
+    assets: Sequence[AssetInput], values: Sequence[Decimal]
+) -> tuple[Decimal, ...]:
+    invested_total = sum(values, Decimal("0"))
+    if invested_total == 0:
+        return tuple(asset.target_weight for asset in assets)
+    return tuple(
+        abs(value / invested_total - asset.target_weight)
+        for asset, value in zip(assets, values, strict=True)
     )
+
+
+def _candidate_without_order(
+    assets: tuple[AssetInput, ...],
+    candidate: CandidatePlan,
+    order_index: int,
+) -> CandidatePlan:
+    lot_counts = list(candidate.lot_counts)
+    lot_counts[order_index] = 0
+    final_values = tuple(
+        asset.current_value_cny
+        + Decimal(lot_count) * asset.unit_price_cny * asset.lot_size
+        for asset, lot_count in zip(assets, lot_counts, strict=True)
+    )
+    drifts = _drifts(assets, final_values)
+    return CandidatePlan.for_test(
+        lot_counts=tuple(lot_counts),
+        final_values=final_values,
+        max_drift=max(drifts, default=Decimal("0")),
+        total_drift=sum(drifts, Decimal("0")),
+    )
+
+
+def _reason_code(
+    assets: tuple[AssetInput, ...],
+    candidate: CandidatePlan,
+    order_index: int,
+    *,
+    sell_phase_used: bool,
+) -> ReasonCode:
+    if sell_phase_used and candidate.lot_counts[order_index] < 0:
+        return "REALLOCATE_OUTSIDE_TOLERANCE"
+
+    removed = _candidate_without_order(assets, candidate, order_index)
+    selected_score = score_candidate(candidate)
+    removed_score = score_candidate(removed)
+    if removed_score.max_drift_bucket > selected_score.max_drift_bucket:
+        return "REDUCE_MAX_DRIFT"
+    if removed_score.total_drift_bucket > selected_score.total_drift_bucket:
+        return "REDUCE_TOTAL_DRIFT"
+    if sell_phase_used:
+        return "REALLOCATE_OUTSIDE_TOLERANCE"
+    return "REDUCE_TOTAL_DRIFT"
+
+
+def _net_fx(net_fx_cny: Decimal) -> tuple[NetFxDirection, Decimal]:
+    if net_fx_cny > 0:
+        return "cny_to_usd", net_fx_cny
+    if net_fx_cny < 0:
+        return "usd_to_cny", -net_fx_cny
+    return "none", Decimal("0")
 
 
 def rebalance(
@@ -270,13 +244,7 @@ def rebalance(
     if len(symbols) != len(set(symbols)):
         raise ValueError("duplicate symbol")
 
-    decimal_values = [
-        cash.cny,
-        cash.usd,
-        cash.usd_cny,
-        options.tolerance,
-        options.minimum_trade_cny,
-    ]
+    decimal_values = [cash.cny, cash.usd, cash.usd_cny, options.tolerance]
     for item in asset_list:
         decimal_values.extend(
             (
@@ -284,6 +252,7 @@ def rebalance(
                 item.target_weight,
                 item.unit_price_cny,
                 item.lot_size,
+                item.max_sell_quantity,
             )
         )
 
@@ -294,252 +263,151 @@ def rebalance(
         ) != Decimal("1"):
             raise ValueError("target weights must sum to 1")
 
-        original_values = MappingProxyType(
-            {
-                item.asset_class_id: item.current_value_cny
-                for item in asset_list
-            }
-        )
-        original_invested_total = sum(original_values.values(), Decimal("0"))
-        values = dict(original_values)
-        investable_total = (
-            original_invested_total + cash.cny + cash.usd * cash.usd_cny
-        )
-        initial_targets = {
-            item.asset_class_id: investable_total * item.target_weight
-            for item in asset_list
-        }
-        ledger = _CashLedger(
-            initial_cny=cash.cny,
-            initial_usd=cash.usd,
-            sale_cny=Decimal("0"),
-            sale_usd=Decimal("0"),
-        )
-        fx_required_cny = Decimal("0")
-        trade_totals: dict[tuple[str, TradeAction], _TradeTotal] = {}
+        original_values = tuple(item.current_value_cny for item in asset_list)
+        original_total = sum(original_values, Decimal("0"))
+        original_drifts = _drifts(asset_list, original_values)
 
-        def add_trade(
-            asset: AssetInput,
-            action: TradeAction,
-            quantity: Decimal,
-            reason_components: set[FundingComponent],
-        ) -> None:
+        buy_only = optimize_discrete(
+            asset_list,
+            cash,
+            allow_sell=False,
+            allow_fx=options.allow_fx,
+        )
+        selected = buy_only
+        sell_phase_used = False
+        if options.allow_sell and buy_only.candidate.max_drift > options.tolerance:
+            selected = optimize_discrete(
+                asset_list,
+                cash,
+                allow_sell=True,
+                allow_fx=options.allow_fx,
+            )
+            sell_phase_used = True
+
+        candidate = selected.candidate
+        final_total = sum(candidate.final_values, Decimal("0"))
+        projected_weights = tuple(
+            ProjectedWeight(
+                asset_class_id=asset.asset_class_id,
+                before=_weight(original, original_total),
+                after=_weight(final, final_total),
+                target=asset.target_weight,
+            )
+            for asset, original, final in zip(
+                asset_list,
+                original_values,
+                candidate.final_values,
+                strict=True,
+            )
+        )
+        trade_suggestions = []
+        signed_cny_amounts: list[Decimal] = []
+        signed_usd_amounts: list[Decimal] = []
+        signed_usd_cny_amounts: list[Decimal] = []
+        last_usd_trade_index: int | None = None
+        for index, (asset, lot_count) in enumerate(
+            zip(asset_list, candidate.lot_counts, strict=True)
+        ):
+            if lot_count == 0:
+                continue
+            quantity = abs(Decimal(lot_count)) * asset.lot_size
             amount_cny = quantity * asset.unit_price_cny
             amount_trade_currency = (
                 amount_cny if asset.currency == "CNY" else amount_cny / cash.usd_cny
             )
-            key = (asset.symbol, action)
-            existing = trade_totals.get(key)
-            if existing is None:
-                trade_totals[key] = _TradeTotal(
-                    symbol=asset.symbol,
-                    action=action,
-                    quantity=quantity,
-                    amount_cny=amount_cny,
-                    amount_trade_currency=amount_trade_currency,
-                    reason_components=set(reason_components),
-                )
-                return
-            existing.quantity += quantity
-            existing.amount_cny += amount_cny
-            existing.amount_trade_currency += amount_trade_currency
-            existing.reason_components.update(reason_components)
-
-        def invested_state() -> tuple[Decimal, dict[str, Decimal]]:
-            total = sum(values.values(), Decimal("0"))
-            targets = {
-                item.asset_class_id: total * item.target_weight
-                for item in asset_list
-            }
-            return total, targets
-
-        def deficits(
-            targets: dict[str, Decimal],
-            currency: Currency | None = None,
-            *,
-            adjust_for_invested_denominator: bool,
-        ) -> list[tuple[Decimal, Decimal | None, AssetInput]]:
-            candidates = []
-            for item in asset_list:
-                deficit = targets[item.asset_class_id] - values[item.asset_class_id]
-                is_full_target = (
-                    adjust_for_invested_denominator
-                    and item.target_weight == Decimal("1")
-                )
-                if (
-                    currency is None or item.currency == currency
-                ) and (deficit > 0 or is_full_target):
-                    required_buy = deficit
-                    if adjust_for_invested_denominator:
-                        required_buy = (
-                            None
-                            if is_full_target
-                            else deficit / (Decimal("1") - item.target_weight)
-                        )
-                    candidates.append((deficit, required_buy, item))
-            return sorted(candidates, key=lambda row: (-row[0], row[2].symbol))
-
-        def buy_with_same_currency(
-            targets: dict[str, Decimal],
-            *,
-            adjust_for_invested_denominator: bool,
-        ) -> None:
-            for _, required_buy, item in deficits(
-                targets,
-                adjust_for_invested_denominator=adjust_for_invested_denominator,
-            ):
-                available_cny = ledger.available_cny(item.currency, cash.usd_cny)
-                buy_limit = (
-                    available_cny
-                    if required_buy is None
-                    else min(required_buy, available_cny)
-                )
-                quantity = _floor_lots(buy_limit, item)
-                amount_cny = quantity * item.unit_price_cny
-                if quantity <= 0 or amount_cny < options.minimum_trade_cny:
-                    continue
-                values[item.asset_class_id] += amount_cny
-                components = ledger.spend_same_currency(
-                    item.currency, amount_cny, cash.usd_cny
-                )
-                add_trade(item, "buy", quantity, components)
-
-        def buy_usd_with_fx(targets: dict[str, Decimal]) -> None:
-            nonlocal fx_required_cny
-            if not options.allow_fx or ledger.remaining_cny <= 0:
-                return
-            for _, required_buy, item in deficits(
-                targets,
-                "USD",
-                adjust_for_invested_denominator=True,
-            ):
-                buy_limit = (
-                    ledger.remaining_cny
-                    if required_buy is None
-                    else min(required_buy, ledger.remaining_cny)
-                )
-                quantity = _floor_lots(buy_limit, item)
-                amount_cny = quantity * item.unit_price_cny
-                if quantity <= 0 or amount_cny < options.minimum_trade_cny:
-                    continue
-                components = ledger.spend_cny_for_fx(amount_cny)
-                fx_required_cny += amount_cny
-                values[item.asset_class_id] += amount_cny
-                add_trade(item, "buy", quantity, components)
-
-        # Pass 2 may plan against all temporary cash; later passes use invested state.
-        buy_with_same_currency(
-            initial_targets,
-            adjust_for_invested_denominator=False,
-        )
-        _, current_targets = invested_state()
-        buy_usd_with_fx(current_targets)
-
-        # Pass 4: only residual upper-bound breaches can create sale proceeds.
-        current_total, current_targets = invested_state()
-        if options.allow_sell and current_total > 0:
-            upper_candidates = []
-            for item in asset_list:
-                upper_value = current_total * (
-                    item.target_weight + options.tolerance
-                )
-                excess_to_target = (
-                    values[item.asset_class_id]
-                    - current_targets[item.asset_class_id]
-                )
-                if values[item.asset_class_id] > upper_value and excess_to_target > 0:
-                    upper_candidates.append((excess_to_target, item))
-
-            for excess, item in sorted(
-                upper_candidates, key=lambda row: (-row[0], row[1].symbol)
-            ):
-                available_quantity = _floor_lots(
-                    values[item.asset_class_id], item
-                )
-                quantity = min(_floor_lots(excess, item), available_quantity)
-                amount_cny = quantity * item.unit_price_cny
-                if quantity <= 0 or amount_cny < options.minimum_trade_cny:
-                    continue
-                values[item.asset_class_id] -= amount_cny
-                ledger.add_sale(item.currency, amount_cny, cash.usd_cny)
-                add_trade(item, "sell", quantity, set())
-
-            _, current_targets = invested_state()
-            buy_with_same_currency(
-                current_targets,
-                adjust_for_invested_denominator=True,
-            )
-            _, current_targets = invested_state()
-            buy_usd_with_fx(current_targets)
-
-        final_total = sum(values.values(), Decimal("0"))
-        max_drift_before = _max_drift(
-            asset_list, original_values, original_invested_total
-        )
-        max_drift_after = _max_drift(asset_list, values, final_total)
-        projected_weights = tuple(
-            ProjectedWeight(
-                asset_class_id=item.asset_class_id,
-                before=_weight(
-                    original_values[item.asset_class_id], original_invested_total
-                ),
-                after=_weight(values[item.asset_class_id], final_total),
-                target=item.target_weight,
-            )
-            for item in asset_list
-        )
-        execution_order: dict[str, int] = {}
-        for symbol, _ in trade_totals:
-            execution_order.setdefault(symbol, len(execution_order))
-
-        net_trades = []
-        for asset in asset_list:
-            delta_cny = (
-                values[asset.asset_class_id]
-                - original_values[asset.asset_class_id]
-            )
-            if delta_cny == 0:
-                continue
-            action: TradeAction = "buy" if delta_cny > 0 else "sell"
-            amount_cny = abs(delta_cny)
-            quantity = amount_cny / asset.unit_price_cny
-            amount_trade_currency = (
-                amount_cny
-                if asset.currency == "CNY"
-                else amount_cny / cash.usd_cny
-            )
-            reason_code: ReasonCode
-            if action == "sell":
-                reason_code = "OVERWEIGHT_AFTER_CASH"
+            signed_amount = Decimal("1") if lot_count < 0 else Decimal("-1")
+            if asset.currency == "CNY":
+                signed_cny_amounts.append(signed_amount * amount_cny)
             else:
-                buy_total = trade_totals[(asset.symbol, "buy")]
-                reason_code = _buy_reason_code(
-                    frozenset(buy_total.reason_components)
-                )
-            net_trades.append(
+                signed_usd_amounts.append(signed_amount * amount_trade_currency)
+                signed_usd_cny_amounts.append(signed_amount * amount_cny)
+                last_usd_trade_index = len(trade_suggestions)
+            trade_suggestions.append(
                 TradeSuggestion(
                     symbol=asset.symbol,
-                    action=action,
+                    action="buy" if lot_count > 0 else "sell",
                     quantity=quantity,
                     amount_cny=amount_cny,
                     amount_trade_currency=amount_trade_currency,
-                    reason_code=reason_code,
+                    reason_code=_reason_code(
+                        asset_list,
+                        candidate,
+                        index,
+                        sell_phase_used=sell_phase_used,
+                    ),
                 )
             )
-        trades = tuple(
-            sorted(
-                net_trades,
-                key=lambda item: (execution_order[item.symbol], item.symbol),
+        net_fx_direction, net_fx_amount_cny = _net_fx(candidate.net_fx_cny)
+        cash_usd_cny = _exact_product(cash.usd, cash.usd_cny)
+        balance_values = [
+            cash.cny,
+            cash.usd,
+            cash.usd_cny,
+            cash_usd_cny,
+            candidate.net_fx_cny,
+            candidate.remaining_cny,
+            candidate.remaining_usd,
+            *signed_cny_amounts,
+            *signed_usd_amounts,
+            *signed_usd_cny_amounts,
+        ]
+        with localcontext() as balance_context:
+            balance_context.prec = _exact_sum_precision(balance_values)
+            fx_usd = candidate.net_fx_cny / cash.usd_cny
+            aggregate_remaining_usd = (
+                cash_usd_cny
+                + sum(signed_usd_cny_amounts, Decimal("0"))
+                + candidate.net_fx_cny
+            ) / cash.usd_cny
+            remaining_cny = (
+                cash.cny + sum(signed_cny_amounts, Decimal("0")) - candidate.net_fx_cny
             )
-        )
+            if last_usd_trade_index is not None:
+                # Independent repeating-decimal conversions can differ from
+                # the optimizer's aggregate ledger. Solve the last canonical
+                # USD order as the exact finite remainder in an expanded
+                # context so published orders conserve at any higher precision.
+                trade = trade_suggestions[last_usd_trade_index]
+                signed_direction = (
+                    Decimal("1") if trade.action == "sell" else Decimal("-1")
+                )
+                reconciled_signed_amount = (
+                    aggregate_remaining_usd
+                    - cash.usd
+                    - sum(signed_usd_amounts[:-1], Decimal("0"))
+                    - fx_usd
+                )
+                adjusted_amount = reconciled_signed_amount / signed_direction
+                if adjusted_amount <= 0:
+                    raise RuntimeError("USD residual produced a nonpositive order")
+                trade_suggestions[last_usd_trade_index] = TradeSuggestion(
+                    symbol=trade.symbol,
+                    action=trade.action,
+                    quantity=trade.quantity,
+                    amount_cny=trade.amount_cny,
+                    amount_trade_currency=adjusted_amount,
+                    reason_code=trade.reason_code,
+                )
+                signed_usd_amounts[-1] = reconciled_signed_amount
+            remaining_usd = cash.usd + sum(signed_usd_amounts, Decimal("0")) + fx_usd
+        trades = tuple(trade_suggestions)
 
         return RebalanceResult(
-            feasible=max_drift_after <= options.tolerance,
-            max_drift_before=max_drift_before,
-            max_drift_after=max_drift_after,
-            fx_required_cny=fx_required_cny,
-            remaining_cny=ledger.remaining_cny,
-            remaining_usd=ledger.remaining_usd,
+            feasible=candidate.max_drift <= options.tolerance,
+            max_drift_before=max(original_drifts, default=Decimal("0")),
+            max_drift_after=candidate.max_drift,
+            buy_only_max_drift=buy_only.candidate.max_drift,
+            optimization_precision=OPTIMIZATION_EPSILON,
+            optimization_certified=True,
+            optimality_gap=selected.optimality_gap,
+            sell_phase_used=sell_phase_used,
+            net_fx_direction=net_fx_direction,
+            net_fx_amount_cny=net_fx_amount_cny,
+            fx_required_cny=(
+                net_fx_amount_cny if net_fx_direction == "cny_to_usd" else Decimal("0")
+            ),
+            remaining_cny=remaining_cny,
+            remaining_usd=remaining_usd,
             projected_weights=projected_weights,
             trades=trades,
         )

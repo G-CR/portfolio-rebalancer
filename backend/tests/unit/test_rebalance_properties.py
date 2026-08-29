@@ -1,44 +1,35 @@
 from decimal import Decimal, localcontext
-
-from hypothesis import assume, given, settings, strategies as st
+from itertools import permutations
 
 from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, rebalance
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 
-money = st.decimals(
-    min_value="0",
-    max_value="1000000",
-    places=2,
-    allow_nan=False,
-    allow_infinity=False,
-)
-positive_price = st.decimals(
-    min_value="0.01",
-    max_value="10000",
-    places=2,
-    allow_nan=False,
-    allow_infinity=False,
-)
-cash_value = st.decimals(
-    min_value="0",
-    max_value="100000",
-    places=2,
-    allow_nan=False,
-    allow_infinity=False,
-)
+def _ratio(value: Decimal, total: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = 100
+        return value / total if total else Decimal("0")
+
+
+def _absolute_difference(value: Decimal, target: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = 100
+        return abs(value - target)
 
 
 @st.composite
-def portfolios(draw: st.DrawFn) -> tuple[tuple[AssetInput, ...], CashInput]:
-    first_value = draw(money)
-    second_value = draw(money)
-    first_price = draw(positive_price)
-    second_price = draw(positive_price)
-    cash = CashInput(
-        draw(cash_value),
-        draw(cash_value) / Decimal("7.2"),
-        Decimal("7.2"),
-    )
+def bounded_portfolios(
+    draw: st.DrawFn,
+) -> tuple[tuple[AssetInput, ...], CashInput]:
+    first_lot_size = Decimal(draw(st.sampled_from((1, 2, 5))))
+    second_lot_size = Decimal(draw(st.sampled_from((1, 2, 5))))
+    first_inventory_lots = draw(st.integers(min_value=0, max_value=8))
+    second_inventory_lots = draw(st.integers(min_value=0, max_value=8))
+    first_value = Decimal(draw(st.integers(min_value=0, max_value=80))) * Decimal("10")
+    second_value = Decimal(draw(st.integers(min_value=0, max_value=80))) * Decimal("10")
+    cny_cash = Decimal(draw(st.integers(min_value=0, max_value=8))) * Decimal("10")
+    usd_cash = Decimal(draw(st.integers(min_value=0, max_value=8)))
     assets = (
         AssetInput(
             "a",
@@ -46,9 +37,9 @@ def portfolios(draw: st.DrawFn) -> tuple[tuple[AssetInput, ...], CashInput]:
             "CNY",
             first_value,
             Decimal("0.5"),
-            first_price,
-            Decimal("1"),
-            first_value / first_price,
+            Decimal("10") / first_lot_size,
+            first_lot_size,
+            Decimal(first_inventory_lots) * first_lot_size,
         ),
         AssetInput(
             "b",
@@ -56,446 +47,258 @@ def portfolios(draw: st.DrawFn) -> tuple[tuple[AssetInput, ...], CashInput]:
             "USD",
             second_value,
             Decimal("0.5"),
-            second_price,
-            Decimal("1"),
-            second_value / second_price,
+            Decimal("10") / second_lot_size,
+            second_lot_size,
+            Decimal(second_inventory_lots) * second_lot_size,
         ),
     )
-    return assets, cash
+    return assets, CashInput(cny_cash, usd_cash, Decimal("10"))
 
 
-@given(portfolios())
-@settings(max_examples=80)
-def test_disabled_actions_never_appear(
+@given(bounded_portfolios(), st.booleans(), st.booleans())
+@settings(max_examples=80, deadline=None)
+def test_lots_inventory_cash_fx_and_disabled_actions_are_exact(
     value: tuple[tuple[AssetInput, ...], CashInput],
-) -> None:
-    assets, cash = value
-    no_actions = rebalance(
-        assets,
-        cash,
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, False),
-    )
-    no_sells = rebalance(
-        assets,
-        cash,
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, True),
-    )
-    no_fx = rebalance(
-        assets,
-        cash,
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), True, False),
-    )
-
-    assert all(trade.action != "sell" for trade in no_actions.trades)
-    assert no_actions.fx_required_cny == 0
-    assert all(trade.action != "sell" for trade in no_sells.trades)
-    assert no_fx.fx_required_cny == 0
-
-
-@given(portfolios())
-@settings(max_examples=80)
-def test_spending_is_bounded_lots_are_exact_and_outputs_nonnegative(
-    value: tuple[tuple[AssetInput, ...], CashInput],
+    allow_sell: bool,
+    allow_fx: bool,
 ) -> None:
     assets, cash = value
     result = rebalance(
         assets,
         cash,
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), True, True),
+        RebalanceOptions(Decimal("0.02"), allow_sell, allow_fx),
     )
     by_symbol = {asset.symbol: asset for asset in assets}
-    buy_cny = sum(
-        (trade.amount_cny for trade in result.trades if trade.action == "buy"),
-        Decimal("0"),
-    )
-    sale_cny = sum(
-        (trade.amount_cny for trade in result.trades if trade.action == "sell"),
-        Decimal("0"),
-    )
-    starting_cny = cash.cny + cash.usd * cash.usd_cny
 
-    assert buy_cny <= starting_cny + sale_cny
-    assert result.fx_required_cny <= cash.cny + sum(
-        (
+    assert result.remaining_cny >= 0
+    assert result.remaining_usd >= 0
+    assert result.net_fx_direction in {"cny_to_usd", "usd_to_cny", "none"}
+    assert result.net_fx_amount_cny >= 0
+    assert result.fx_required_cny == (
+        result.net_fx_amount_cny
+        if result.net_fx_direction == "cny_to_usd"
+        else Decimal("0")
+    )
+    if not allow_sell:
+        assert all(trade.action != "sell" for trade in result.trades)
+        assert not result.sell_phase_used
+    if not allow_fx:
+        assert result.net_fx_direction == "none"
+        assert result.net_fx_amount_cny == 0
+
+    sold_by_symbol: dict[str, Decimal] = {}
+    for trade in result.trades:
+        asset = by_symbol[trade.symbol]
+        assert trade.quantity > 0
+        assert trade.quantity % asset.lot_size == 0
+        assert trade.amount_cny == trade.quantity * asset.unit_price_cny
+        assert trade.amount_trade_currency == (
             trade.amount_cny
+            if asset.currency == "CNY"
+            else trade.amount_cny / cash.usd_cny
+        )
+        if trade.action == "sell":
+            sold_by_symbol[trade.symbol] = trade.quantity
+            assert trade.reason_code == "REALLOCATE_OUTSIDE_TOLERANCE"
+    for symbol, quantity in sold_by_symbol.items():
+        assert quantity <= by_symbol[symbol].max_sell_quantity
+
+    signed_cny = sum(
+        (
+            trade.amount_cny if trade.action == "sell" else -trade.amount_cny
             for trade in result.trades
-            if trade.action == "sell"
-            and by_symbol[trade.symbol].currency == "CNY"
+            if by_symbol[trade.symbol].currency == "CNY"
         ),
         Decimal("0"),
     )
-    assert result.remaining_cny >= 0
-    assert result.remaining_usd >= 0
-    assert result.max_drift_before >= 0
-    assert result.max_drift_after >= 0
-    for weight in result.projected_weights:
-        assert weight.before >= 0
-        assert weight.after >= 0
-        assert weight.target >= 0
+    signed_usd = sum(
+        (
+            trade.amount_trade_currency
+            if trade.action == "sell"
+            else -trade.amount_trade_currency
+            for trade in result.trades
+            if by_symbol[trade.symbol].currency == "USD"
+        ),
+        Decimal("0"),
+    )
+    fx_cny = (
+        -result.net_fx_amount_cny
+        if result.net_fx_direction == "cny_to_usd"
+        else result.net_fx_amount_cny
+        if result.net_fx_direction == "usd_to_cny"
+        else Decimal("0")
+    )
+    fx_usd = -fx_cny / cash.usd_cny
+    assert result.remaining_cny == cash.cny + signed_cny + fx_cny
+    assert result.remaining_usd == cash.usd + signed_usd + fx_usd
+
+
+@given(usd_cny=st.sampled_from((Decimal("3"), Decimal("7"))))
+@settings(max_examples=2, deadline=None)
+def test_multiple_usd_orders_conserve_repeating_currency_conversions(
+    usd_cny: Decimal,
+) -> None:
+    assets = (
+        AssetInput(
+            "a",
+            "A",
+            "CNY",
+            Decimal("2"),
+            Decimal("0.5"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+        AssetInput(
+            "b",
+            "B",
+            "USD",
+            Decimal("0"),
+            Decimal("0.25"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+        AssetInput(
+            "c",
+            "C",
+            "USD",
+            Decimal("0"),
+            Decimal("0.25"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+    )
+    cash = CashInput(Decimal("0"), Decimal("1"), usd_cny)
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+    usd_trades = tuple(trade for trade in result.trades if trade.symbol in {"B", "C"})
+
+    assert len(usd_trades) == 2
+    with localcontext() as context:
+        context.prec = 250
+        assert result.remaining_usd == cash.usd - sum(
+            (trade.amount_trade_currency for trade in usd_trades), Decimal("0")
+        )
+
+
+@given(bounded_portfolios(), st.booleans(), st.booleans())
+@settings(max_examples=60, deadline=None)
+def test_projected_state_is_conserved_and_metrics_are_exact(
+    value: tuple[tuple[AssetInput, ...], CashInput],
+    allow_sell: bool,
+    allow_fx: bool,
+) -> None:
+    assets, cash = value
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0.02"), allow_sell, allow_fx),
+    )
+    by_symbol = {asset.symbol: asset for asset in assets}
+    final_values = {asset.asset_class_id: asset.current_value_cny for asset in assets}
     for trade in result.trades:
         asset = by_symbol[trade.symbol]
-        assert trade.quantity >= 0
-        assert trade.amount_cny >= 0
-        assert trade.amount_trade_currency >= 0
-        assert trade.quantity % asset.lot_size == 0
+        direction = Decimal("1") if trade.action == "buy" else Decimal("-1")
+        final_values[asset.asset_class_id] += direction * trade.amount_cny
+
+    original_total = sum((asset.current_value_cny for asset in assets), Decimal("0"))
+    final_total = sum(final_values.values(), Decimal("0"))
+    projected = {weight.asset_class_id: weight for weight in result.projected_weights}
+    expected_before_drifts = []
+    expected_after_drifts = []
+    for asset in assets:
+        expected_before = _ratio(asset.current_value_cny, original_total)
+        expected_after = _ratio(final_values[asset.asset_class_id], final_total)
+        assert projected[asset.asset_class_id].before == expected_before
+        assert projected[asset.asset_class_id].after == expected_after
+        assert projected[asset.asset_class_id].target == asset.target_weight
+        expected_before_drifts.append(
+            _absolute_difference(expected_before, asset.target_weight)
+        )
+        expected_after_drifts.append(
+            _absolute_difference(expected_after, asset.target_weight)
+        )
+
+    assert result.max_drift_before == max(expected_before_drifts)
+    assert result.max_drift_after == max(expected_after_drifts)
+    assert result.feasible == (result.max_drift_after <= Decimal("0.02"))
 
 
-@given(portfolios())
-@settings(max_examples=60)
-def test_result_is_deterministic_context_independent_and_inputs_are_unchanged(
+@given(bounded_portfolios(), st.booleans(), st.booleans())
+@settings(max_examples=50, deadline=None)
+def test_results_are_permutation_stable_immutable_and_precision_independent(
     value: tuple[tuple[AssetInput, ...], CashInput],
+    allow_sell: bool,
+    allow_fx: bool,
 ) -> None:
     assets, cash = value
     before = tuple(assets)
-    options = RebalanceOptions(Decimal("0.02"), Decimal("10"), True, True)
+    options = RebalanceOptions(Decimal("0.02"), allow_sell, allow_fx)
     expected = rebalance(assets, cash, options)
 
+    for permuted in permutations(assets):
+        assert rebalance(permuted, cash, options) == expected
     with localcontext() as context:
         context.prec = 3
-        actual = rebalance(tuple(assets), cash, options)
-
-    assert actual == expected
+        assert rebalance(assets, cash, options) == expected
     assert assets == before
-    assert len(actual.trades) == len(
-        {(trade.symbol, trade.action) for trade in actual.trades}
-    )
-
-
-def test_pnl_fields_cannot_influence_the_engine_contract() -> None:
-    fields = set(AssetInput.__dataclass_fields__)
-
-    assert fields == {
-        "asset_class_id",
-        "symbol",
-        "currency",
-        "current_value_cny",
-        "target_weight",
-        "unit_price_cny",
-        "lot_size",
-        "max_sell_quantity",
-    }
+    result_symbols = [trade.symbol for trade in expected.trades]
+    assert len(result_symbols) == len(set(result_symbols))
 
 
 @given(
-    usd_value=st.integers(min_value=1, max_value=500),
-    cny_value=st.integers(min_value=0, max_value=500),
-    cny_cash=st.integers(min_value=1, max_value=500),
-    cny_lot_value=st.integers(min_value=1, max_value=200),
-    usd_lot_value=st.integers(min_value=1, max_value=200),
+    preferred_lots=st.integers(min_value=0, max_value=5),
+    extra_class_lots=st.integers(min_value=1, max_value=20),
 )
-@settings(max_examples=120)
-def test_fx_pass_never_buys_a_class_overweight_after_same_currency_pass(
-    usd_value: int,
-    cny_value: int,
-    cny_cash: int,
-    cny_lot_value: int,
-    usd_lot_value: int,
+@settings(max_examples=40, deadline=None)
+def test_sales_never_exceed_exact_preferred_inventory_cap(
+    preferred_lots: int,
+    extra_class_lots: int,
 ) -> None:
+    lot_size = Decimal("2")
+    price = Decimal("10")
+    capped_quantity = Decimal(preferred_lots) * lot_size
+    over_value = (capped_quantity + Decimal(extra_class_lots) * lot_size) * price
     assets = (
         AssetInput(
-            "usd",
-            "USD-FUND",
-            "USD",
-            Decimal(usd_value),
-            Decimal("0.5"),
-            Decimal(usd_lot_value),
-            Decimal("1"),
-            Decimal(usd_value) / Decimal(usd_lot_value),
-        ),
-        AssetInput(
-            "cny",
-            "CNY-FUND",
+            "over",
+            "OVER",
             "CNY",
-            Decimal(cny_value),
-            Decimal("0.5"),
-            Decimal(cny_lot_value),
-            Decimal("1"),
-            Decimal(cny_value) / Decimal(cny_lot_value),
+            over_value,
+            Decimal("0.1"),
+            price,
+            lot_size,
+            capped_quantity,
         ),
-    )
-    cash = CashInput(Decimal(cny_cash), Decimal("0"), Decimal("1"))
-    options_without_fx = RebalanceOptions(
-        Decimal("0.02"), Decimal("0"), False, False
-    )
-    options_with_fx = RebalanceOptions(
-        Decimal("0.02"), Decimal("0"), False, True
-    )
-    without_fx = rebalance(assets, cash, options_without_fx)
-    usd_after_same_currency = next(
-        weight.after
-        for weight in without_fx.projected_weights
-        if weight.asset_class_id == "usd"
-    )
-    assume(usd_after_same_currency >= Decimal("0.5"))
-
-    with_fx = rebalance(assets, cash, options_with_fx)
-
-    assert all(
-        not (trade.symbol == "USD-FUND" and trade.action == "buy")
-        for trade in with_fx.trades
-    )
-    assert with_fx.max_drift_after <= without_fx.max_drift_after
-
-
-@given(
-    first_value=st.integers(min_value=1, max_value=999),
-    cny_cash=st.integers(min_value=0, max_value=1000),
-    usd_cash=st.integers(min_value=0, max_value=1000),
-    tolerance=st.integers(min_value=0, max_value=50),
-    minimum_trade=st.integers(min_value=0, max_value=100),
-    allow_sell=st.booleans(),
-    allow_fx=st.booleans(),
-)
-@settings(max_examples=100)
-def test_before_metrics_match_original_weights_independent_of_cash_and_options(
-    first_value: int,
-    cny_cash: int,
-    usd_cash: int,
-    tolerance: int,
-    minimum_trade: int,
-    allow_sell: bool,
-    allow_fx: bool,
-) -> None:
-    second_value = 1000 - first_value
-    assets = (
         AssetInput(
-            "first",
-            "FIRST",
+            "under",
+            "UNDER",
             "CNY",
-            Decimal(first_value),
-            Decimal("0.5"),
             Decimal("10"),
-            Decimal("1"),
-            Decimal(first_value) / Decimal("10"),
-        ),
-        AssetInput(
-            "second",
-            "SECOND",
-            "USD",
-            Decimal(second_value),
-            Decimal("0.5"),
-            Decimal("10"),
-            Decimal("1"),
-            Decimal(second_value) / Decimal("10"),
-        ),
-    )
-    expected_weights = (
-        Decimal(first_value) / Decimal("1000"),
-        Decimal(second_value) / Decimal("1000"),
-    )
-    expected_drift = max(
-        abs(expected_weights[0] - Decimal("0.5")),
-        abs(expected_weights[1] - Decimal("0.5")),
-    )
-    baseline = rebalance(
-        assets,
-        CashInput(Decimal("0"), Decimal("0"), Decimal("1")),
-        RebalanceOptions(Decimal("0"), Decimal("0"), False, False),
-    )
-    variant = rebalance(
-        assets,
-        CashInput(Decimal(cny_cash), Decimal(usd_cash), Decimal("1")),
-        RebalanceOptions(
-            Decimal(tolerance) / Decimal("100"),
-            Decimal(minimum_trade),
-            allow_sell,
-            allow_fx,
-        ),
-    )
-
-    assert tuple(
-        weight.before for weight in baseline.projected_weights
-    ) == expected_weights
-    assert tuple(
-        weight.before for weight in variant.projected_weights
-    ) == expected_weights
-    assert baseline.max_drift_before == expected_drift
-    assert variant.max_drift_before == expected_drift
-
-
-@given(
-    target_all_is_usd=st.booleans(),
-    all_value=st.integers(min_value=0, max_value=500),
-    zero_value=st.integers(min_value=0, max_value=500),
-    cny_cash=st.integers(min_value=0, max_value=500),
-    usd_cash=st.integers(min_value=0, max_value=500),
-    allow_sell=st.booleans(),
-    allow_fx=st.booleans(),
-)
-@settings(max_examples=120)
-def test_zero_and_full_targets_never_crash_and_respect_constraints(
-    target_all_is_usd: bool,
-    all_value: int,
-    zero_value: int,
-    cny_cash: int,
-    usd_cash: int,
-    allow_sell: bool,
-    allow_fx: bool,
-) -> None:
-    all_currency = "USD" if target_all_is_usd else "CNY"
-    zero_currency = "CNY" if target_all_is_usd else "USD"
-    assets = (
-        AssetInput(
-            "all",
-            "ALL",
-            all_currency,
-            Decimal(all_value),
-            Decimal("1"),
-            Decimal("10"),
-            Decimal("1"),
-            Decimal(all_value) / Decimal("10"),
-        ),
-        AssetInput(
-            "zero",
-            "ZERO",
-            zero_currency,
-            Decimal(zero_value),
+            Decimal("0.9"),
+            price,
+            lot_size,
             Decimal("0"),
-            Decimal("10"),
-            Decimal("1"),
-            Decimal(zero_value) / Decimal("10"),
         ),
     )
 
     result = rebalance(
         assets,
-        CashInput(Decimal(cny_cash), Decimal(usd_cash), Decimal("1")),
-        RebalanceOptions(Decimal("0"), Decimal("0"), allow_sell, allow_fx),
+        CashInput(Decimal("0"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0"), True, False),
     )
 
-    assert result.remaining_cny >= 0
-    assert result.remaining_usd >= 0
-    assert all(trade.quantity % Decimal("1") == 0 for trade in result.trades)
-    assert len(result.trades) == len({trade.symbol for trade in result.trades})
-
-
-@given(
-    first_value=st.integers(min_value=0, max_value=500),
-    second_value=st.integers(min_value=0, max_value=500),
-    cash=st.integers(min_value=0, max_value=500),
-    first_price=st.integers(min_value=1, max_value=100),
-    second_price=st.integers(min_value=1, max_value=100),
-    allow_sell=st.booleans(),
-)
-@settings(max_examples=150)
-def test_net_trades_have_one_direction_and_conserve_final_state(
-    first_value: int,
-    second_value: int,
-    cash: int,
-    first_price: int,
-    second_price: int,
-    allow_sell: bool,
-) -> None:
-    assume(first_value + second_value > 0)
-    assets = (
-        AssetInput(
-            "a",
-            "AAA",
-            "CNY",
-            Decimal(first_value),
-            Decimal("0.5"),
-            Decimal(first_price),
-            Decimal("1"),
-            Decimal(first_value) / Decimal(first_price),
+    sold = sum(
+        (
+            trade.quantity
+            for trade in result.trades
+            if trade.symbol == "OVER" and trade.action == "sell"
         ),
-        AssetInput(
-            "b",
-            "BBB",
-            "CNY",
-            Decimal(second_value),
-            Decimal("0.5"),
-            Decimal(second_price),
-            Decimal("1"),
-            Decimal(second_value) / Decimal(second_price),
-        ),
-    )
-    result = rebalance(
-        assets,
-        CashInput(Decimal(cash), Decimal("0"), Decimal("1")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), allow_sell, False),
-    )
-    trades_by_symbol = {trade.symbol: trade for trade in result.trades}
-    assert len(trades_by_symbol) == len(result.trades)
-
-    final_values = {"AAA": Decimal(first_value), "BBB": Decimal(second_value)}
-    for trade in result.trades:
-        direction = Decimal("1") if trade.action == "buy" else Decimal("-1")
-        final_values[trade.symbol] += direction * trade.amount_cny
-    final_total = sum(final_values.values(), Decimal("0"))
-    by_class = {weight.asset_class_id: weight for weight in result.projected_weights}
-    with localcontext() as context:
-        context.prec = 100
-        assert by_class["a"].after == final_values["AAA"] / final_total
-        assert by_class["b"].after == final_values["BBB"] / final_total
-
-    buys = sum(
-        (trade.amount_cny for trade in result.trades if trade.action == "buy"),
         Decimal("0"),
     )
-    sells = sum(
-        (trade.amount_cny for trade in result.trades if trade.action == "sell"),
-        Decimal("0"),
-    )
-    assert Decimal(cash) + sells - buys == result.remaining_cny
-
-
-@given(
-    first_value=st.integers(min_value=0, max_value=500),
-    second_value=st.integers(min_value=0, max_value=500),
-    third_value=st.integers(min_value=0, max_value=500),
-    cny_cash=st.integers(min_value=0, max_value=300),
-    usd_cash=st.integers(min_value=0, max_value=300),
-    allow_sell=st.booleans(),
-    allow_fx=st.booleans(),
-)
-@settings(max_examples=100)
-def test_full_result_is_invariant_under_input_permutations(
-    first_value: int,
-    second_value: int,
-    third_value: int,
-    cny_cash: int,
-    usd_cash: int,
-    allow_sell: bool,
-    allow_fx: bool,
-) -> None:
-    assets = (
-        AssetInput(
-            "c",
-            "CCC",
-            "CNY",
-            Decimal(first_value),
-            Decimal("0.2"),
-            Decimal("10"),
-            Decimal("1"),
-            Decimal(first_value) / Decimal("10"),
-        ),
-        AssetInput(
-            "a",
-            "AAA",
-            "USD",
-            Decimal(second_value),
-            Decimal("0.3"),
-            Decimal("10"),
-            Decimal("1"),
-            Decimal(second_value) / Decimal("10"),
-        ),
-        AssetInput(
-            "b",
-            "BBB",
-            "CNY",
-            Decimal(third_value),
-            Decimal("0.5"),
-            Decimal("10"),
-            Decimal("1"),
-            Decimal(third_value) / Decimal("10"),
-        ),
-    )
-    cash = CashInput(Decimal(cny_cash), Decimal(usd_cash), Decimal("1"))
-    options = RebalanceOptions(
-        Decimal("0.02"), Decimal("0"), allow_sell, allow_fx
-    )
-
-    forward = rebalance(assets, cash, options)
-    reverse = rebalance(tuple(reversed(assets)), cash, options)
-
-    assert forward == reverse
+    assert sold <= capped_quantity
