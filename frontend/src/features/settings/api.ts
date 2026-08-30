@@ -6,9 +6,11 @@ import type {
   EmailSettings,
   EmailTestResult,
   GeneralSettings,
+  GeneralSettingsUpdate,
   ProviderName,
   ProviderSetting,
   RebalanceDefaults,
+  RebalanceDefaultsUpdate,
 } from "../../api/types";
 
 export const providerSettingsQueryKey = ["settings", "providers"] as const;
@@ -65,10 +67,16 @@ export function useGeneralSettings() {
 export function useSaveGeneralSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: Omit<GeneralSettings, "updated_at">) => apiRequest<GeneralSettings>("/api/settings/general", {
-      method: "PUT",
-      body: jsonBody(payload),
-    }),
+    mutationFn: (payload: GeneralSettingsUpdate) => {
+      const request: GeneralSettingsUpdate = {
+        refresh_time: payload.refresh_time,
+        provider_priority: payload.provider_priority,
+        default_tolerance: payload.default_tolerance,
+        allow_sell: payload.allow_sell,
+        allow_fx: payload.allow_fx,
+      };
+      return apiRequest<GeneralSettings>("/api/settings/general", { method: "PUT", body: jsonBody(request) });
+    },
     onSuccess: (saved) => queryClient.setQueryData(generalSettingsQueryKey, saved),
   });
 }
@@ -83,16 +91,22 @@ export function useRebalanceDefaults() {
 export function useSaveRebalanceDefaults() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: Omit<RebalanceDefaults, "updated_at">) => apiRequest<RebalanceDefaults>("/api/settings/rebalance-defaults", {
-      method: "PUT",
-      body: jsonBody(payload),
-    }),
+    mutationFn: (payload: RebalanceDefaultsUpdate) => {
+      const request: RebalanceDefaultsUpdate = {
+        available_cny: payload.available_cny,
+        available_usd: payload.available_usd,
+        valuation_basis: payload.valuation_basis,
+        tolerance: payload.tolerance,
+        allow_sell: payload.allow_sell,
+        allow_fx: payload.allow_fx,
+      };
+      return apiRequest<RebalanceDefaults>("/api/settings/rebalance-defaults", { method: "PUT", body: jsonBody(request) });
+    },
     onSuccess: (saved) => {
       queryClient.setQueryData(rebalanceDefaultsQueryKey, saved);
       queryClient.setQueryData<GeneralSettings>(generalSettingsQueryKey, (current) => current ? {
         ...current,
         default_tolerance: saved.tolerance,
-        minimum_trade_amount_cny: saved.minimum_trade_cny,
         allow_sell: saved.allow_sell,
         allow_fx: saved.allow_fx,
         updated_at: saved.updated_at,

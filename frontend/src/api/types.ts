@@ -363,7 +363,6 @@ export interface RebalancePreviewPayload {
   allow_sell: boolean;
   allow_fx: boolean;
   tolerance: DecimalString;
-  minimum_trade_cny: DecimalString;
   acknowledge_stale_data: boolean;
 }
 
@@ -384,10 +383,19 @@ export interface RebalanceProjectedWeight {
   target: DecimalString;
 }
 
+export type RebalanceNetFxDirection = "cny_to_usd" | "usd_to_cny" | "none";
+
 export interface RebalanceResult {
   feasible: boolean;
   max_drift_before: DecimalString;
   max_drift_after: DecimalString;
+  buy_only_max_drift: DecimalString;
+  optimization_precision: DecimalString;
+  optimization_certified: boolean;
+  optimality_gap: DecimalString;
+  sell_phase_used: boolean;
+  net_fx_direction: RebalanceNetFxDirection;
+  net_fx_amount_cny: DecimalString;
   fx_required_cny: DecimalString;
   remaining_cny: DecimalString;
   remaining_usd: DecimalString;
@@ -417,7 +425,7 @@ export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | 
   status: "draft" | "in_progress" | "completed" | "cancelled";
   available_cny: DecimalString;
   available_usd: DecimalString;
-  minimum_trade_cny: DecimalString;
+  minimum_trade_cny: DecimalString | null;
   allow_sell: boolean;
   allow_fx: boolean;
   acknowledge_stale_data: boolean;
@@ -477,6 +485,14 @@ export interface GeneralSettings {
   updated_at: string;
 }
 
+export interface GeneralSettingsUpdate {
+  refresh_time: string;
+  provider_priority: ProviderName[];
+  default_tolerance: DecimalString;
+  allow_sell: boolean;
+  allow_fx: boolean;
+}
+
 export interface RebalanceDefaults {
   available_cny: DecimalString;
   available_usd: DecimalString;
@@ -486,6 +502,15 @@ export interface RebalanceDefaults {
   allow_sell: boolean;
   allow_fx: boolean;
   updated_at: string;
+}
+
+export interface RebalanceDefaultsUpdate {
+  available_cny: DecimalString;
+  available_usd: DecimalString;
+  valuation_basis: RebalanceValuationBasis;
+  tolerance: DecimalString;
+  allow_sell: boolean;
+  allow_fx: boolean;
 }
 
 export type EmailSecurity = "ssl" | "starttls";

@@ -8,7 +8,6 @@ export type RebalanceFormState = {
   availableCny: string;
   availableUsd: string;
   tolerance: string;
-  minimumTradeCny: string;
   allowSell: boolean;
   allowFx: boolean;
   valuationBasis: RebalanceValuationBasis;
@@ -44,12 +43,11 @@ export function RebalanceInputs({ value, pending, disabled, hasPreview, onChange
         <FormField label="人民币" suffix="CNY"><input inputMode="decimal" value={value.availableCny} disabled={disabled} onChange={(event) => set("availableCny", event.target.value)} /></FormField>
         <FormField label="美元" suffix="USD"><input inputMode="decimal" value={value.availableUsd} disabled={disabled} onChange={(event) => set("availableUsd", event.target.value)} /></FormField>
         <FormField label="允许偏离" suffix="%"><input inputMode="decimal" value={value.tolerance} disabled={disabled} onChange={(event) => set("tolerance", event.target.value)} /></FormField>
-        <FormField label="最小交易金额" suffix="CNY"><input inputMode="decimal" value={value.minimumTradeCny} disabled={disabled} onChange={(event) => set("minimumTradeCny", event.target.value)} /></FormField>
       </div>
 
       <div className={styles.switches}>
         <label><input type="checkbox" checked={value.allowSell} disabled={disabled} onChange={(event) => set("allowSell", event.target.checked)} /><span><b>允许卖出</b><small>新增资金不足时可减少高配资产</small></span></label>
-        <label><input type="checkbox" checked={value.allowFx} disabled={disabled} onChange={(event) => set("allowFx", event.target.checked)} /><span><b>允许换汇</b><small>人民币不足时可估算换入美元</small></span></label>
+        <label><input type="checkbox" checked={value.allowFx} disabled={disabled} onChange={(event) => set("allowFx", event.target.checked)} /><span><b>允许换汇</b><small>人民币与美元可按需要双向净换汇</small></span></label>
       </div>
 
       {value.acknowledgeStaleData ? <p className={styles.acknowledged}>已确认使用过期行情进行本次测算。</p> : null}

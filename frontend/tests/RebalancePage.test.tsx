@@ -52,10 +52,11 @@ it("loads persisted defaults without starting a preview", async () => {
   await waitFor(() => expect(screen.getByLabelText("人民币")).toHaveValue("12000.5"));
   expect(screen.getByLabelText("美元")).toHaveValue("800.25");
   expect(screen.getByLabelText("允许偏离")).toHaveValue("3.5");
-  expect(screen.getByLabelText("最小交易金额")).toHaveValue("900");
+  expect(screen.queryByLabelText("最小交易金额")).not.toBeInTheDocument();
   expect(screen.getByRole("radio", { name: "剔汇率口径" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许卖出/ })).not.toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许换汇/ })).not.toBeChecked();
+  expect(screen.getByText("人民币与美元可按需要双向净换汇")).toBeInTheDocument();
   expect(previewRequests).toBe(0);
 });
 
@@ -98,6 +99,8 @@ it("saves the current defaults before calculating", async () => {
     allow_sell: false,
     tolerance: "0.02",
   });
+  expect(savedDefaults).not.toHaveProperty("minimum_trade_cny");
+  expect(previewPayload).not.toHaveProperty("minimum_trade_cny");
 });
 
 it("continues calculating when persisted defaults cannot be saved", async () => {

@@ -51,7 +51,6 @@ function GeneralSettingsForm({ value }: { value: GeneralSettings }) {
   const save = useSaveGeneralSettings();
   const [refreshTime, setRefreshTime] = useState(value.refresh_time);
   const [tolerance, setTolerance] = useState(value.default_tolerance);
-  const [minimumTrade, setMinimumTrade] = useState(value.minimum_trade_amount_cny);
   const [allowSell, setAllowSell] = useState(value.allow_sell);
   const [allowFx, setAllowFx] = useState(value.allow_fx);
 
@@ -61,10 +60,9 @@ function GeneralSettingsForm({ value }: { value: GeneralSettings }) {
       <div className={styles.generalGrid}>
         <FormField label="每日刷新时间"><input type="time" value={refreshTime} onChange={(event) => setRefreshTime(event.target.value)} /></FormField>
         <FormField label="默认允许偏离" suffix="比例"><input inputMode="decimal" value={tolerance} onChange={(event) => setTolerance(event.target.value)} /></FormField>
-        <FormField label="默认最小交易金额" suffix="CNY"><input inputMode="decimal" value={minimumTrade} onChange={(event) => setMinimumTrade(event.target.value)} /></FormField>
         <div className={styles.defaultSwitches}><label><input type="checkbox" checked={allowSell} onChange={(event) => setAllowSell(event.target.checked)} />默认允许卖出</label><label><input type="checkbox" checked={allowFx} onChange={(event) => setAllowFx(event.target.checked)} />默认允许换汇</label></div>
       </div>
-      <button type="button" className={styles.primary} disabled={save.isPending} onClick={() => void save.mutateAsync({ refresh_time: refreshTime, provider_priority: value.provider_priority, default_tolerance: tolerance, minimum_trade_amount_cny: minimumTrade, allow_sell: allowSell, allow_fx: allowFx })}><Save size={16} aria-hidden="true" />保存通用设置</button>
+      <button type="button" className={styles.primary} disabled={save.isPending} onClick={() => void save.mutateAsync({ refresh_time: refreshTime, provider_priority: value.provider_priority, default_tolerance: tolerance, allow_sell: allowSell, allow_fx: allowFx })}><Save size={16} aria-hidden="true" />保存通用设置</button>
     </section>
   );
 }
