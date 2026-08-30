@@ -186,6 +186,32 @@ def _uuid_decimal_map(value: JsonValue, *, bounded: bool) -> None:
             raise _Incompatible
 
 
+def _result_for_response_validation(
+    value: dict[str, JsonValue],
+    generation: str,
+) -> dict[str, JsonValue]:
+    if generation != "legacy":
+        return value
+    normalized = dict(value)
+    normalized.setdefault("optimization_precision", "0.0001")
+    normalized.setdefault("optimization_certified", False)
+    normalized.setdefault("optimality_gap", "0")
+    normalized.setdefault("buy_only_max_drift", normalized["max_drift_after"])
+    normalized.setdefault(
+        "sell_phase_used",
+        any(trade["action"] == "sell" for trade in normalized["trades"]),
+    )
+    fx_required_cny = _decimal(normalized["fx_required_cny"])
+    if not fx_required_cny.is_finite():
+        raise _Incompatible
+    normalized.setdefault(
+        "net_fx_direction",
+        "cny_to_usd" if fx_required_cny > 0 else "none",
+    )
+    normalized.setdefault("net_fx_amount_cny", normalized["fx_required_cny"])
+    return normalized
+
+
 def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
     summary = row["input_summary"]
     projected = row["projected_result"]
@@ -317,12 +343,24 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         or comparison_generation != constraints_generation
     ):
         raise _Incompatible
+
+    result_for_validation = _result_for_response_validation(
+        projected["result"],
+        primary_generation,
+    )
+    comparison_for_validation = {
+        **comparison,
+        "result": _result_for_response_validation(
+            comparison["result"],
+            comparison_generation,
+        ),
+    }
     if projected["valuation_basis"] != row["strategy_mode"] or projected["data_status"] not in {"valid", "stale", "manual"}:
         raise _Incompatible
     try:
         TypeAdapter(list[TradeSuggestionResponse]).validate_python(actions)
-        result = RebalanceResultResponse.model_validate(projected["result"])
-        RebalanceComparisonResponse.model_validate(projected["fx_comparison"])
+        result = RebalanceResultResponse.model_validate(result_for_validation)
+        RebalanceComparisonResponse.model_validate(comparison_for_validation)
     except ValidationError:
         raise _Incompatible from None
     if [item.model_dump(mode="json") for item in result.trades] != actions:

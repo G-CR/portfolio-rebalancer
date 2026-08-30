@@ -125,12 +125,14 @@ it("restores an in-progress plan so it can be completed after returning to rebal
   expect(screen.getByRole("textbox", { name: "允许偏离" })).toBeDisabled();
   expect(screen.getByRole("textbox", { name: "人民币" })).toHaveValue("12345.67");
   expect(screen.getByRole("textbox", { name: "美元" })).toHaveValue("890.12");
-  expect(screen.getByRole("textbox", { name: "最小交易金额" })).toHaveValue("321");
+  expect(screen.queryByRole("textbox", { name: "最小交易金额" })).not.toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /允许卖出/ })).not.toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许卖出/ })).toBeDisabled();
   expect(screen.getByRole("checkbox", { name: /允许换汇/ })).not.toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许换汇/ })).toBeDisabled();
   expect(screen.getByText("已确认使用过期行情进行本次测算。")).toBeInTheDocument();
+  expect(screen.getByText("已在 1bp 精度内认证")).toBeInTheDocument();
+  expect(screen.getByText("净换汇：人民币换美元 ¥7,200")).toBeInTheDocument();
   expect(screen.getAllByTestId("tolerance-band")[0]).toHaveAccessibleName("允许偏离目标正负 0.8 个百分点");
   await user.click(screen.getByRole("button", { name: "完成再平衡并建立新基准" }));
 
