@@ -229,24 +229,47 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         if not canonical or isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise _Incompatible
     _uuid_decimal_map(summary.get("asset_class_targets", {}), bounded=True)
+    legacy_resolved_keys = {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}
+    current_resolved_keys = {"allow_sell", "allow_fx", "tolerance"}
     resolved = summary.get("resolved_constraints", summary)
-    if (
-        not isinstance(resolved, dict)
-        or not {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}.issubset(resolved)
-        or (
-            "resolved_constraints" in summary
-            and set(resolved) != {"allow_sell", "allow_fx", "tolerance", "minimum_trade_cny"}
-        )
-    ):
+    if not isinstance(resolved, dict):
+        raise _Incompatible
+    if "resolved_constraints" in summary:
+        if set(resolved) == current_resolved_keys:
+            if summary["minimum_trade_cny"] is not None:
+                raise _Incompatible
+            constraints_generation = "current"
+        elif set(resolved) == legacy_resolved_keys:
+            if summary["minimum_trade_cny"] is not None and not isinstance(
+                summary["minimum_trade_cny"], str
+            ):
+                raise _Incompatible
+            constraints_generation = "legacy"
+        else:
+            raise _Incompatible
+    elif legacy_resolved_keys.issubset(resolved):
+        if summary["minimum_trade_cny"] is not None and not isinstance(
+            summary["minimum_trade_cny"], str
+        ):
+            raise _Incompatible
+        constraints_generation = "legacy"
+    else:
         raise _Incompatible
     if not isinstance(resolved["allow_sell"], bool) or not isinstance(resolved["allow_fx"], bool):
         raise _Incompatible
-    if _decimal(resolved["tolerance"]) < 0 or _decimal(resolved["tolerance"]) > 1 or _decimal(resolved["minimum_trade_cny"]) < 0:
+    if _decimal(resolved["tolerance"]) < 0 or _decimal(resolved["tolerance"]) > 1:
         raise _Incompatible
-    result_keys = {
+    if "minimum_trade_cny" in resolved and _decimal(resolved["minimum_trade_cny"]) < 0:
+        raise _Incompatible
+    legacy_result_keys = {
         "feasible", "max_drift_before", "max_drift_after", "fx_required_cny",
         "remaining_cny", "remaining_usd", "projected_weights", "trades",
     }
+    optimizer_metadata_keys = {
+        "buy_only_max_drift", "optimization_precision", "optimization_certified",
+        "optimality_gap", "sell_phase_used", "net_fx_direction", "net_fx_amount_cny",
+    }
+    current_result_keys = legacy_result_keys | optimizer_metadata_keys
     weight_keys = {"asset_class_id", "before", "after", "target"}
     action_keys = {
         "symbol", "action", "quantity", "amount_cny", "amount_trade_currency",
@@ -254,15 +277,26 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
     }
     comparison_keys = {"valuation_basis", "result"}
 
-    def exact_result(value: JsonValue) -> bool:
-        return (
-            isinstance(value, dict)
-            and set(value) == result_keys
-            and isinstance(value["projected_weights"], list)
-            and all(isinstance(item, dict) and set(item) == weight_keys for item in value["projected_weights"])
-            and isinstance(value["trades"], list)
-            and all(isinstance(item, dict) and set(item) == action_keys for item in value["trades"])
-        )
+    def result_generation(value: JsonValue) -> str | None:
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get("projected_weights"), list)
+            or not all(
+                isinstance(item, dict) and set(item) == weight_keys
+                for item in value["projected_weights"]
+            )
+            or not isinstance(value.get("trades"), list)
+            or not all(
+                isinstance(item, dict) and set(item) == action_keys
+                for item in value["trades"]
+            )
+        ):
+            return None
+        if set(value) == legacy_result_keys:
+            return "legacy"
+        if set(value) == current_result_keys:
+            return "current"
+        return None
 
     if (
         not isinstance(actions, list)
@@ -272,11 +306,15 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
     ):
         raise _Incompatible
     comparison = projected["fx_comparison"]
+    primary_generation = result_generation(projected["result"])
+    comparison_generation = (
+        result_generation(comparison["result"])
+        if isinstance(comparison, dict) and set(comparison) == comparison_keys
+        else None
+    )
     if (
-        not exact_result(projected["result"])
-        or not isinstance(comparison, dict)
-        or set(comparison) != comparison_keys
-        or not exact_result(comparison["result"])
+        primary_generation != constraints_generation
+        or comparison_generation != constraints_generation
     ):
         raise _Incompatible
     if projected["valuation_basis"] != row["strategy_mode"] or projected["data_status"] not in {"valid", "stale", "manual"}:

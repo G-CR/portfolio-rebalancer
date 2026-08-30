@@ -338,6 +338,22 @@ def test_legacy_rebalance_fallback_and_optional_asset_targets_are_supported(
     _validate(tmp_path, source)
 
 
+def test_legacy_rebalance_fallback_rejects_numeric_top_level_minimum(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    summary = plan["input_summary"]
+    summary.update(summary["resolved_constraints"])
+    summary.pop("resolved_constraints")
+    summary["minimum_trade_cny"] = 0
+    plan["data_version"] = "legacy-opaque-version"
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
 def test_legacy_rebalance_fallback_still_requires_renderer_constraint_keys(
     tmp_path: Path,
 ) -> None:
@@ -345,6 +361,70 @@ def test_legacy_rebalance_fallback_still_requires_renderer_constraint_keys(
     summary = source["data/rebalance_plans.json"][0]["input_summary"]
     summary.pop("resolved_constraints")
     summary.pop("minimum_trade_cny")
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+_CURRENT_OPTIMIZER_METADATA = {
+    "buy_only_max_drift": "0",
+    "optimization_precision": "0.0001",
+    "optimization_certified": True,
+    "optimality_gap": "0",
+    "sell_phase_used": False,
+    "net_fx_direction": "none",
+    "net_fx_amount_cny": "0",
+}
+
+
+def _make_current_constraints(plan: dict[str, Any]) -> None:
+    summary = plan["input_summary"]
+    summary["minimum_trade_cny"] = None
+    summary["resolved_constraints"] = {
+        key: value
+        for key, value in summary["resolved_constraints"].items()
+        if key != "minimum_trade_cny"
+    }
+
+
+def _make_current_result(result: dict[str, Any]) -> None:
+    result.update(_CURRENT_OPTIMIZER_METADATA)
+
+
+@pytest.mark.parametrize(
+    "hybrid",
+    [
+        "current_constraints_legacy_results",
+        "legacy_constraints_current_results",
+        "current_primary_legacy_comparison",
+        "legacy_primary_current_comparison",
+    ],
+)
+def test_rebalance_mixed_persisted_generations_are_rejected(
+    tmp_path: Path,
+    hybrid: str,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    projected = plan["projected_result"]
+    primary = dict(projected["result"])
+    comparison_container = dict(projected["fx_comparison"])
+    comparison = dict(comparison_container["result"])
+    projected["result"] = primary
+    comparison_container["result"] = comparison
+    projected["fx_comparison"] = comparison_container
+
+    if hybrid == "current_constraints_legacy_results":
+        _make_current_constraints(plan)
+    elif hybrid == "legacy_constraints_current_results":
+        _make_current_result(primary)
+        _make_current_result(comparison)
+    elif hybrid == "current_primary_legacy_comparison":
+        _make_current_constraints(plan)
+        _make_current_result(primary)
+    else:
+        _make_current_result(comparison)
+
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"

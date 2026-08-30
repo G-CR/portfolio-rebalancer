@@ -27,7 +27,7 @@ def _holding_payload(asset_class_id: str, *, symbol: str, quantity: str) -> dict
 
 async def test_preview_with_defaults_uses_persisted_constraints(api_client, db_session) -> None:
     asset_classes = (await api_client.get("/api/asset-classes")).json()
-    quantities = ("20", "20", "30", "20", "10")
+    quantities = ("18", "20", "30", "20", "10")
     for index, (asset_class, quantity) in enumerate(zip(asset_classes, quantities, strict=True)):
         await api_client.post(
             "/api/holdings",
@@ -54,6 +54,7 @@ async def test_preview_with_defaults_uses_persisted_constraints(api_client, db_s
         update(Setting).values(
             rebalance_available_cny=Decimal("10000"),
             default_tolerance=Decimal("0.01"),
+            minimum_trade_amount_cny=Decimal("999999999"),
             allow_sell=True,
             allow_fx=False,
         )
@@ -66,4 +67,9 @@ async def test_preview_with_defaults_uses_persisted_constraints(api_client, db_s
     assert preview.valuation_basis == "actual"
     assert len(preview.result.projected_weights) == 5
     assert preview.result.feasible is True
-    assert any(trade.action == "buy" for trade in preview.result.trades)
+    assert preview.result.optimization_precision == Decimal("0.0001")
+    assert preview.result.optimization_certified is True
+    assert preview.result.optimality_gap <= Decimal("0.0001")
+    assert preview.result.net_fx_direction in {"cny_to_usd", "usd_to_cny", "none"}
+    assert preview.result.sell_phase_used is False
+    assert any(trade.action == "buy" for trade in preview.result.trades), preview.result

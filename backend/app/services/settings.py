@@ -184,7 +184,6 @@ async def update_general_settings(
     setting.refresh_minute = minute
     setting.provider_priority = list(payload.provider_priority)
     setting.default_tolerance = payload.default_tolerance
-    setting.minimum_trade_amount_cny = payload.minimum_trade_amount_cny
     setting.allow_sell = payload.allow_sell
     setting.allow_fx = payload.allow_fx
     setting.updated_at = datetime.now(UTC)
@@ -205,7 +204,6 @@ async def update_rebalance_defaults(
     setting.rebalance_available_usd = payload.available_usd
     setting.rebalance_valuation_basis = payload.valuation_basis
     setting.default_tolerance = payload.tolerance
-    setting.minimum_trade_amount_cny = payload.minimum_trade_cny
     setting.allow_sell = payload.allow_sell
     setting.allow_fx = payload.allow_fx
     setting.updated_at = datetime.now(UTC)
