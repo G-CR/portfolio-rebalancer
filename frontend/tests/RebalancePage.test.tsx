@@ -180,6 +180,18 @@ it("shows a reason for every sell suggestion", async () => {
   expect(within(sellRow).getByText("新增资金不足以消除高配")).toBeInTheDocument();
 });
 
+it("explains the certified drift path and net FX before execution", async () => {
+  renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
+
+  expect(await screen.findByText("最大偏离 4.00pp → 0.20pp")).toBeInTheDocument();
+  expect(screen.getByText("纯补仓 0.60pp，卖出转配后 0.20pp")).toBeInTheDocument();
+  expect(screen.getByText("已在 1bp 精度内认证")).toBeInTheDocument();
+  expect(screen.getByText("净换汇：人民币换美元 ¥7,200")).toBeInTheDocument();
+});
+
 it("shows the user-entered holding name beside the trade symbol", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
   const user = userEvent.setup();
