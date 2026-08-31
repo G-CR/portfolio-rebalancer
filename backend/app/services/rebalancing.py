@@ -797,7 +797,17 @@ def _run_engine(
                 "Active rebalance asset class is missing a preferred holding.",
                 {"status": "incomplete", "items": [f"preferred:{asset_class.id}"]},
             )
-        preferred = next((holding for holding in class_holdings if holding.is_rebalance_preferred), class_holdings[0])
+        preferred = next(
+            (holding for holding in class_holdings if holding.is_rebalance_preferred),
+            None,
+        )
+        if preferred is None:
+            raise ServiceError(
+                409,
+                "REBALANCE_DATA_INCOMPLETE",
+                "Active rebalance asset class is missing a preferred holding.",
+                {"status": "incomplete", "items": [f"preferred:{asset_class.id}"]},
+            )
         total_value = _ZERO
         for holding in class_holdings:
             price = effective_inputs[f"price:{holding.symbol}"].value

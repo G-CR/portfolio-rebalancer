@@ -328,6 +328,45 @@ async def test_preview_caps_sell_inventory_at_the_preferred_holding_quantity(
     ]
 
 
+async def test_preview_rejects_active_class_without_a_preferred_holding(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    configured = await _configure_two_class_portfolio(api_client, db_session)
+    cny_holding = await db_session.get(Holding, UUID(configured["cny_holding_id"]))
+    assert cny_holding is not None
+    cny_holding.is_rebalance_preferred = False
+    await db_session.commit()
+
+    optimizer_calls: list[object] = []
+    run_optimizer = rebalancing_service.rebalance
+
+    def _capture_optimizer(*args, **kwargs):
+        optimizer_calls.append((args, kwargs))
+        return run_optimizer(*args, **kwargs)
+
+    async def _record_refresh(_session) -> None:
+        return None
+
+    monkeypatch.setattr(rebalancing_service, "rebalance", _capture_optimizer)
+    monkeypatch.setattr(rebalancing_service, "refresh_all_required_data", _record_refresh)
+
+    response = await api_client.post(
+        "/api/rebalance/preview",
+        json=_preview_payload(session_token="missing-preferred-session"),
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == {
+        "code": "REBALANCE_DATA_INCOMPLETE",
+        "message": "Active rebalance asset class is missing a preferred holding.",
+        "status": "incomplete",
+        "items": [f"preferred:{configured['cny_asset_class_id']}"],
+    }
+    assert optimizer_calls == []
+
+
 async def test_preview_maps_optimizer_certification_failure_to_typed_service_error(
     api_client,
     db_session,

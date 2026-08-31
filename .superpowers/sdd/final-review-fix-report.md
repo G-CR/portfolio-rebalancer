@@ -163,3 +163,19 @@ Compose project:
 
 No dashboard visual snapshots were changed. This updated report is committed
 with the follow-up final-review corrections.
+
+## Preferred-holding contract correction
+
+The rebalance engine no longer falls back to the first holding of an active
+asset class when none is marked `is_rebalance_preferred`. It now returns the
+same typed incomplete-data contract used for an active class with no holdings:
+HTTP 409 `REBALANCE_DATA_INCOMPLETE`, with the preferred-holding message and
+the exact `preferred:<asset-class-id>` item.
+
+RED proof: the new integration test first received `200 OK` and produced a
+plan trading the arbitrary `CNY-FUND` holding. GREEN proof through the guarded
+`make test-backend` target: the focused regression passed, the rebalance API
+file passed `12` tests (including the preferred sell-cap case), and the full
+backend suite passed `603`, skipped `3` (29 pre-existing warnings). The
+regression also asserts the optimizer is never called. No frontend files
+changed, so no frontend verification was applicable.
