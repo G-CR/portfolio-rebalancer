@@ -1,10 +1,11 @@
+import time
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
 from itertools import product
 
 import pytest
 from app.domain import rebalance_optimizer as optimizer
-from app.domain.rebalance import AssetInput, CashInput
+from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, rebalance
 from app.domain.rebalance_optimizer import (
     OPTIMIZATION_EPSILON,
     CandidatePlan,
@@ -47,6 +48,102 @@ SMALL_ASSETS = (
     asset("b", "USD", "60", "0.5"),
 )
 SMALL_CASH = CashInput(Decimal("30"), Decimal("20") / Decimal("7"), Decimal("7"))
+
+
+def _representative_large_assets() -> tuple[AssetInput, ...]:
+    return (
+        AssetInput(
+            asset_class_id="dividend",
+            symbol="510880",
+            currency="CNY",
+            current_value_cny=Decimal("202000"),
+            target_weight=Decimal("0.20"),
+            unit_price_cny=Decimal("11.45"),
+            lot_size=Decimal("100"),
+            max_sell_quantity=Decimal("17600"),
+        ),
+        AssetInput(
+            asset_class_id="quality",
+            symbol="563020",
+            currency="CNY",
+            current_value_cny=Decimal("193000"),
+            target_weight=Decimal("0.20"),
+            unit_price_cny=Decimal("11.84"),
+            lot_size=Decimal("100"),
+            max_sell_quantity=Decimal("16300"),
+        ),
+        AssetInput(
+            asset_class_id="sp500",
+            symbol="VOO",
+            currency="USD",
+            current_value_cny=Decimal("313000"),
+            target_weight=Decimal("0.30"),
+            unit_price_cny=Decimal("48690"),
+            lot_size=Decimal("0.01"),
+            max_sell_quantity=Decimal("6.43"),
+        ),
+        AssetInput(
+            asset_class_id="nasdaq",
+            symbol="QQQ",
+            currency="USD",
+            current_value_cny=Decimal("205000"),
+            target_weight=Decimal("0.20"),
+            unit_price_cny=Decimal("35750"),
+            lot_size=Decimal("0.01"),
+            max_sell_quantity=Decimal("5.73"),
+        ),
+        AssetInput(
+            asset_class_id="gold",
+            symbol="518880",
+            currency="CNY",
+            current_value_cny=Decimal("87000"),
+            target_weight=Decimal("0.10"),
+            unit_price_cny=Decimal("200"),
+            lot_size=Decimal("100"),
+            max_sell_quantity=Decimal("400"),
+        ),
+    )
+
+
+def test_rebalance_representative_fixture_is_certified_within_latency_budget() -> None:
+    started_at = time.perf_counter()
+    result = rebalance(
+        _representative_large_assets(),
+        CashInput(Decimal("100000"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.02"), True, True),
+    )
+    elapsed = time.perf_counter() - started_at
+
+    assert elapsed < 0.5
+    assert result.optimization_certified
+    assert result.optimality_gap <= OPTIMIZATION_EPSILON
+    assert not result.sell_phase_used
+    assert result.net_fx_direction == "cny_to_usd"
+    assert any(trade.symbol == "518880" and trade.quantity % Decimal("100") == 0 for trade in result.trades)
+    assert any(trade.symbol in {"VOO", "QQQ"} and trade.quantity % Decimal("0.01") == 0 for trade in result.trades)
+
+
+def test_rebalance_representative_fixture_uses_sell_phase_at_tight_tolerance() -> None:
+    result = rebalance(
+        _representative_large_assets(),
+        CashInput(Decimal("100000"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.0001"), True, True),
+    )
+
+    assert result.optimization_certified
+    assert result.sell_phase_used
+    assert result.buy_only_max_drift > Decimal("0.0001")
+
+
+def test_rebalance_representative_fixture_can_convert_usd_to_cny() -> None:
+    result = rebalance(
+        _representative_large_assets(),
+        CashInput(Decimal("0"), Decimal("100000") / Decimal("7.2"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.02"), True, True),
+    )
+
+    assert result.optimization_certified
+    assert result.net_fx_direction == "usd_to_cny"
 
 
 def _candidate_from_lots(
