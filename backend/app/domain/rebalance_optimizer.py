@@ -679,6 +679,30 @@ def _infeasible_continuous_bound(
     )
 
 
+def _zero_total_liquidation_lots(
+    assets: tuple[AssetInput, ...],
+    cash: CashInput,
+    lot_bounds: tuple[tuple[int, int], ...],
+    *,
+    allow_fx: bool,
+) -> tuple[int, ...] | None:
+    """Return the exact zero-value endpoint when this node can execute it."""
+    lot_counts: list[int] = []
+    for asset, (lower, upper) in zip(assets, lot_bounds, strict=True):
+        zero_lots = -asset.current_value_cny / _lot_value(asset)
+        if zero_lots != zero_lots.to_integral_value():
+            return None
+        lot_count = int(zero_lots)
+        if not lower <= lot_count <= upper:
+            return None
+        lot_counts.append(lot_count)
+
+    candidate_lots = tuple(lot_counts)
+    if not evaluate_cash_ledger(assets, candidate_lots, cash, allow_fx=allow_fx).feasible:
+        return None
+    return candidate_lots
+
+
 def continuous_relaxation(
     assets: Sequence[AssetInput],
     cash: CashInput,
@@ -752,6 +776,16 @@ def continuous_relaxation(
         if sum(target_weights, Decimal("0")) != 1:
             raise ValueError("target weights must sum to 1")
 
+        zero_total_lots = _zero_total_liquidation_lots(
+            ordered_assets,
+            cash,
+            resolved_bounds,
+            allow_fx=allow_fx,
+        )
+        zero_total_max_drift = (
+            max(target_weights) if zero_total_lots is not None else None
+        )
+
         lot_values = tuple(_lot_value(asset) for asset in ordered_assets)
         minimum_values = tuple(
             asset.current_value_cny + Decimal(lower) * lot_value
@@ -813,7 +847,11 @@ def continuous_relaxation(
             return _infeasible_continuous_bound(minimum_values, resolved_bounds)
         if maximum_invested_total == 0:
             return ContinuousBound(
-                max_drift=max(target_weights),
+                max_drift=(
+                    zero_total_max_drift
+                    if zero_total_max_drift is not None
+                    else Decimal("Infinity")
+                ),
                 total_drift=sum(target_weights, Decimal("0")),
                 guide_values=minimum_values,
                 lot_bounds=resolved_bounds,
@@ -862,6 +900,13 @@ def continuous_relaxation(
             upper_bound = Decimal("1")
             feasible_trial = trial(upper_bound)
             if feasible_trial is None:
+                if zero_total_max_drift is not None:
+                    return ContinuousBound(
+                        max_drift=zero_total_max_drift,
+                        total_drift=sum(target_weights, Decimal("0")),
+                        guide_values=minimum_values,
+                        lot_bounds=resolved_bounds,
+                    )
                 return _infeasible_continuous_bound(minimum_values, resolved_bounds)
 
             tolerance = OPTIMIZATION_EPSILON / Decimal("16")
@@ -888,11 +933,19 @@ def continuous_relaxation(
             abs(value / invested_total - target)
             for value, target in zip(guide_values, target_weights, strict=True)
         )
+        bound_max_drift = lower_bound
+        bound_total_drift = sum(guide_drifts, Decimal("0"))
+        if (
+            zero_total_max_drift is not None
+            and zero_total_max_drift < bound_max_drift
+        ):
+            bound_max_drift = zero_total_max_drift
+            bound_total_drift = sum(target_weights, Decimal("0"))
         return ContinuousBound(
             # The last infeasible bisection endpoint is conservative for branch
             # pruning; its distance from the relaxed optimum is < epsilon / 16.
-            max_drift=lower_bound,
-            total_drift=sum(guide_drifts, Decimal("0")),
+            max_drift=bound_max_drift,
+            total_drift=bound_total_drift,
             guide_values=guide_values,
             lot_bounds=resolved_bounds,
         )
@@ -1153,13 +1206,13 @@ def optimize_discrete(
                 return CertifiedPlan(
                     incumbent,
                     incumbent.max_drift,
-                    Decimal("0"),
+                    OPTIMIZATION_EPSILON,
                     explored_nodes,
                 )
 
         return CertifiedPlan(
             incumbent,
             incumbent.max_drift,
-            Decimal("0"),
+            OPTIMIZATION_EPSILON,
             explored_nodes,
         )

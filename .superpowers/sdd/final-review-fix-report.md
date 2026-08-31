@@ -124,4 +124,42 @@ guard, score-bucket and node-budget behavior are untouched, and `git diff
 
 ## Commit
 
-Pending creation after this report is staged.
+The first final-review correction was committed as `be5e40e`
+(`fix: preserve minimax bound soundness`).
+
+## Follow-up final-review corrections
+
+This follow-up fixes the remaining merge-blocking review findings:
+
+1. An executable all-zero final-value endpoint can be better than every
+   positive continuous relaxation in a branch node. The relaxation now detects
+   that endpoint only when every asset's exact zero lot lies in the node range
+   and the complete cash ledger is feasible. Its exact `Dmax` participates in
+   pruning, while a positive guide remains available for deterministic branch
+   splitting when one exists.
+2. A score is bucketed at one basis point before later tie breakers, so search
+   exhaustion proves bucket optimality rather than raw-`Dmax` equality. All
+   certified plans therefore report the conservative one-basis-point
+   `optimality_gap` certificate instead of an unjustified zero.
+
+## Follow-up RED and GREEN proof
+
+Before the production change, the exact CNY/USD liquidation fixture failed in
+both FX modes: its child node `((-3,-2), (0,0), (0,0))` reported a positive
+continuous lower bound of `0.899997711181640625`, even though exact liquidation
+`(-3,0,0)` has `Dmax = 0.5`. The optimizer selected the worse `(-3,1,0)` plan.
+The same RED run showed a bucket-optimal `(1,0,6)` plan returning gap zero even
+though executable `(2,0,6)` has a marginally lower raw `Dmax`.
+
+GREEN verification completed with the isolated `portfolio-rebalancer-test`
+Compose project:
+
+- Focused optimizer regressions: `3 passed`.
+- Optimizer and rebalance unit tests: `73 passed`.
+- Full backend suite: `602 passed, 3 skipped, 29 warnings`.
+- Frontend Vitest: `203 passed`.
+- Production frontend build: succeeded.
+- Rebalance Playwright E2E: `1 passed`.
+
+No dashboard visual snapshots were changed. This updated report is committed
+with the follow-up final-review corrections.

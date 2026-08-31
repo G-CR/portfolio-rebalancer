@@ -288,7 +288,117 @@ def test_search_does_not_prune_higher_total_that_dilutes_an_overweight_asset() -
     assert exhaustive.lot_counts == (0, 0, 18)
     assert bound.max_drift <= exhaustive.max_drift
     assert score_candidate(actual.candidate) == score_candidate(exhaustive)
-    assert actual.optimality_gap == 0
+    assert actual.optimality_gap == OPTIMIZATION_EPSILON
+
+
+def _zero_total_liquidation_assets() -> tuple[AssetInput, ...]:
+    return (
+        AssetInput(
+            asset_class_id="a",
+            symbol="A",
+            currency="CNY",
+            current_value_cny=Decimal("3"),
+            target_weight=Decimal("0.1"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("3"),
+        ),
+        AssetInput(
+            asset_class_id="b",
+            symbol="B",
+            currency="CNY",
+            current_value_cny=Decimal("0"),
+            target_weight=Decimal("0.4"),
+            unit_price_cny=Decimal("4"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        ),
+        AssetInput(
+            asset_class_id="c",
+            symbol="C",
+            currency="USD",
+            current_value_cny=Decimal("0"),
+            target_weight=Decimal("0.5"),
+            unit_price_cny=Decimal("10"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        ),
+    )
+
+
+@pytest.mark.parametrize("allow_fx", (False, True))
+def test_zero_total_liquidation_endpoint_keeps_root_child_and_search_bounds_sound(
+    allow_fx: bool,
+) -> None:
+    assets = _zero_total_liquidation_assets()
+    cash = CashInput(Decimal("1"), Decimal("0"), Decimal("2"))
+    exhaustive = _exhaustive_best(
+        assets, cash, allow_sell=True, allow_fx=allow_fx
+    )
+    root_bound = continuous_relaxation(
+        assets, cash, allow_sell=True, allow_fx=allow_fx
+    )
+    child_bound = continuous_relaxation(
+        assets,
+        cash,
+        allow_sell=True,
+        allow_fx=allow_fx,
+        lot_bounds=((-3, -2), (0, 0), (0, 0)),
+    )
+    actual = optimize_discrete(assets, cash, allow_sell=True, allow_fx=allow_fx)
+
+    assert exhaustive.lot_counts == (-3, 0, 0)
+    assert exhaustive.max_drift == Decimal("0.5")
+    assert root_bound.max_drift <= exhaustive.max_drift
+    assert child_bound.max_drift == exhaustive.max_drift
+    assert score_candidate(actual.candidate) == score_candidate(exhaustive)
+    assert actual.candidate.lot_counts == exhaustive.lot_counts
+
+
+def test_bucket_optimal_plan_reports_nonzero_raw_drift_certificate() -> None:
+    assets = (
+        AssetInput(
+            "a",
+            "A",
+            "USD",
+            Decimal("20"),
+            Decimal("0.463"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+        AssetInput(
+            "b",
+            "B",
+            "USD",
+            Decimal("11"),
+            Decimal("0.1883"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+        AssetInput(
+            "c",
+            "C",
+            "CNY",
+            Decimal("8"),
+            Decimal("0.3487"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+    )
+    cash = CashInput(Decimal("6"), Decimal("2"), Decimal("2"))
+    raw_drift_best = _candidate_from_lots(
+        assets, cash, (2, 0, 6), allow_fx=False
+    )
+    actual = optimize_discrete(assets, cash, allow_sell=False, allow_fx=False)
+
+    assert raw_drift_best is not None
+    assert actual.candidate.lot_counts == (1, 0, 6)
+    assert raw_drift_best.max_drift < actual.candidate.max_drift
+    assert score_candidate(actual.candidate) < score_candidate(raw_drift_best)
+    assert 0 < actual.optimality_gap <= OPTIMIZATION_EPSILON
 
 
 @pytest.mark.parametrize(
@@ -411,7 +521,7 @@ def test_search_exhaustion_certifies_a_large_integrality_gap() -> None:
     assert plan.candidate.lot_counts == (0, 0)
     assert plan.candidate.max_drift == Decimal("0.1")
     assert plan.best_open_lower_bound == plan.candidate.max_drift
-    assert plan.optimality_gap == 0
+    assert plan.optimality_gap == OPTIMIZATION_EPSILON
     assert plan.explored_nodes > 1
 
 

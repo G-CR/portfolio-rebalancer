@@ -437,7 +437,7 @@ def test_result_metadata_and_weights_come_from_the_certified_candidate() -> None
     assert result.buy_only_max_drift == result.max_drift_after
     assert result.optimization_precision == OPTIMIZATION_EPSILON
     assert result.optimization_certified
-    assert result.optimality_gap == 0
+    assert result.optimality_gap == Decimal("0.0001")
     assert not result.sell_phase_used
     assert [weight.asset_class_id for weight in result.projected_weights] == ["a", "b"]
     assert result.projected_weights[0].before == Decimal("0.4")
