@@ -202,7 +202,13 @@ def _exhaustive_best(
     allow_sell: bool,
     allow_fx: bool,
 ) -> CandidatePlan:
-    ranges = [range(-int(item.max_sell_quantity / item.lot_size), 7) for item in assets]
+    bounds = optimizer._full_lot_bounds(
+        assets,
+        cash,
+        allow_sell=allow_sell,
+        allow_fx=allow_fx,
+    )
+    ranges = [range(lower, upper + 1) for lower, upper in bounds]
     candidates = []
     for lots in product(*ranges):
         candidate = _candidate_from_lots(assets, cash, lots, allow_fx=allow_fx)
@@ -234,6 +240,96 @@ def test_search_matches_exhaustive_oracle(allow_sell: bool, allow_fx: bool) -> N
 
     assert score_candidate(actual.candidate) == score_candidate(expected)
     assert actual.optimality_gap <= OPTIMIZATION_EPSILON
+
+
+def test_search_does_not_prune_higher_total_that_dilutes_an_overweight_asset() -> None:
+    assets = (
+        AssetInput(
+            asset_class_id="a",
+            symbol="A",
+            currency="CNY",
+            current_value_cny=Decimal("13"),
+            target_weight=Decimal("0.03"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        ),
+        AssetInput(
+            asset_class_id="b",
+            symbol="B",
+            currency="CNY",
+            current_value_cny=Decimal("26"),
+            target_weight=Decimal("0.35"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        ),
+        AssetInput(
+            asset_class_id="c",
+            symbol="C",
+            currency="CNY",
+            current_value_cny=Decimal("29"),
+            target_weight=Decimal("0.62"),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        ),
+    )
+    cash = CashInput(Decimal("18"), Decimal("0"), Decimal("1"))
+
+    exhaustive = _exhaustive_best(
+        assets, cash, allow_sell=False, allow_fx=False
+    )
+    bound = continuous_relaxation(
+        assets, cash, allow_sell=False, allow_fx=False
+    )
+    actual = optimize_discrete(assets, cash, allow_sell=False, allow_fx=False)
+
+    assert exhaustive.lot_counts == (0, 0, 18)
+    assert bound.max_drift <= exhaustive.max_drift
+    assert score_candidate(actual.candidate) == score_candidate(exhaustive)
+    assert actual.optimality_gap == 0
+
+
+@pytest.mark.parametrize(
+    ("values", "targets", "cash_cny"),
+    (
+        (("0", "1", "2"), ("0.1", "0.3", "0.6"), "4"),
+        (("2", "0", "3"), ("0.2", "0.5", "0.3"), "3"),
+        (("4", "1", "0"), ("0.6", "0.2", "0.2"), "5"),
+        (("1", "3", "2"), ("0.15", "0.45", "0.40"), "2"),
+    ),
+)
+def test_continuous_bound_is_sound_against_small_three_asset_oracles(
+    values: tuple[str, str, str],
+    targets: tuple[str, str, str],
+    cash_cny: str,
+) -> None:
+    assets = tuple(
+        AssetInput(
+            asset_class_id=f"a{index}",
+            symbol=f"A{index}",
+            currency="CNY",
+            current_value_cny=Decimal(value),
+            target_weight=Decimal(target),
+            unit_price_cny=Decimal("1"),
+            lot_size=Decimal("1"),
+            max_sell_quantity=Decimal("0"),
+        )
+        for index, (value, target) in enumerate(zip(values, targets, strict=True))
+    )
+    cash = CashInput(Decimal(cash_cny), Decimal("0"), Decimal("1"))
+
+    exhaustive = _exhaustive_best(
+        assets, cash, allow_sell=False, allow_fx=False
+    )
+    bound = continuous_relaxation(
+        assets, cash, allow_sell=False, allow_fx=False
+    )
+    actual = optimize_discrete(assets, cash, allow_sell=False, allow_fx=False)
+
+    assert bound.max_drift <= exhaustive.max_drift
+    assert score_candidate(actual.candidate) == score_candidate(exhaustive)
 
 
 def test_search_never_sells_more_than_preferred_holding_inventory() -> None:

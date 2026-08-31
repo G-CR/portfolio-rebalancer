@@ -287,6 +287,214 @@ def _minimum_invested_total(
         active.update(newly_active)
 
 
+def _feasible_invested_total(
+    assets: tuple[AssetInput, ...],
+    minimum_values: tuple[Decimal, ...],
+    maximum_values: tuple[Decimal, ...],
+    target_weights: tuple[Decimal, ...],
+    drift: Decimal,
+    minimum_invested_total: Decimal,
+    maximum_invested_total: Decimal,
+    currency_caps: dict[str, Decimal],
+    *,
+    allow_fx: bool,
+) -> Decimal | None:
+    """Find any feasible relaxed total over the complete executable interval.
+
+    Allocation lower and upper intervals are piecewise affine in the invested
+    total.  Checking only the least total that satisfies the lower intervals is
+    unsound: investing more can dilute an overweight position.  This scans the
+    affine pieces and solves their linear feasibility constraints exactly.
+    """
+    if minimum_invested_total > maximum_invested_total:
+        return None
+
+    lower_slopes = tuple(max(Decimal("0"), target - drift) for target in target_weights)
+    upper_slopes = tuple(target + drift for target in target_weights)
+    breakpoints = {minimum_invested_total, maximum_invested_total}
+    for minimum, maximum, lower_slope, upper_slope in zip(
+        minimum_values,
+        maximum_values,
+        lower_slopes,
+        upper_slopes,
+        strict=True,
+    ):
+        if lower_slope > 0:
+            breakpoint = minimum / lower_slope
+            if minimum_invested_total < breakpoint < maximum_invested_total:
+                breakpoints.add(breakpoint)
+        if upper_slope > 0:
+            breakpoint = maximum / upper_slope
+            if minimum_invested_total < breakpoint < maximum_invested_total:
+                breakpoints.add(breakpoint)
+
+    def allocation_affines(
+        value: Decimal,
+    ) -> tuple[tuple[tuple[Decimal, Decimal], ...], tuple[tuple[Decimal, Decimal], ...]]:
+        lower_affines = tuple(
+            (slope, Decimal("0")) if slope * value >= minimum else (Decimal("0"), minimum)
+            for minimum, slope in zip(minimum_values, lower_slopes, strict=True)
+        )
+        upper_affines = tuple(
+            (slope, Decimal("0")) if slope * value <= maximum else (Decimal("0"), maximum)
+            for maximum, slope in zip(maximum_values, upper_slopes, strict=True)
+        )
+        return lower_affines, upper_affines
+
+    base_points = sorted(breakpoints)
+    if len(base_points) == 1:
+        base_points.append(base_points[0])
+    segments: list[tuple[Decimal, Decimal]] = []
+    for left, right in zip(base_points, base_points[1:]):
+        midpoint = (left + right) / Decimal("2")
+        _, upper_affines = allocation_affines(midpoint)
+        points = {left, right}
+        if not allow_fx:
+            for currency in ("CNY", "USD"):
+                slope = sum(
+                    (
+                        affine_slope
+                        for asset, (affine_slope, _) in zip(
+                            assets, upper_affines, strict=True
+                        )
+                        if asset.currency == currency
+                    ),
+                    Decimal("0"),
+                )
+                intercept = sum(
+                    (
+                        affine_intercept
+                        for asset, (_, affine_intercept) in zip(
+                            assets, upper_affines, strict=True
+                        )
+                        if asset.currency == currency
+                    ),
+                    Decimal("0"),
+                )
+                if slope > 0:
+                    breakpoint = (currency_caps[currency] - intercept) / slope
+                    if left < breakpoint < right:
+                        points.add(breakpoint)
+        ordered_points = sorted(points)
+        segments.extend(zip(ordered_points, ordered_points[1:]))
+
+    if minimum_invested_total == maximum_invested_total:
+        segments.append((minimum_invested_total, maximum_invested_total))
+
+    for left, right in segments:
+        midpoint = (left + right) / Decimal("2")
+        lower_affines, upper_affines = allocation_affines(midpoint)
+        feasible_lower = left
+        feasible_upper = right
+
+        def require_at_most(slope: Decimal, intercept: Decimal) -> bool:
+            nonlocal feasible_lower, feasible_upper
+            # slope * total + intercept <= 0
+            if slope > 0:
+                feasible_upper = min(feasible_upper, -intercept / slope)
+            elif slope < 0:
+                feasible_lower = max(feasible_lower, -intercept / slope)
+            elif intercept > 0:
+                return False
+            return feasible_lower <= feasible_upper
+
+        lower_slope = sum((slope for slope, _ in lower_affines), Decimal("0"))
+        lower_intercept = sum(
+            (intercept for _, intercept in lower_affines), Decimal("0")
+        )
+        if not require_at_most(lower_slope - Decimal("1"), lower_intercept):
+            continue
+        interval_feasible = True
+        for (lower_slope, lower_intercept), (upper_slope, upper_intercept) in zip(
+            lower_affines,
+            upper_affines,
+            strict=True,
+        ):
+            if not require_at_most(
+                lower_slope - upper_slope,
+                lower_intercept - upper_intercept,
+            ):
+                interval_feasible = False
+                break
+        if not interval_feasible:
+            continue
+
+        def selected_total() -> Decimal:
+            if feasible_lower == 0 and feasible_upper > 0:
+                return feasible_upper
+            return feasible_lower
+
+        if allow_fx:
+            upper_slope = sum((slope for slope, _ in upper_affines), Decimal("0"))
+            upper_intercept = sum(
+                (intercept for _, intercept in upper_affines), Decimal("0")
+            )
+            if require_at_most(Decimal("1") - upper_slope, -upper_intercept):
+                selected = selected_total()
+                if selected > 0:
+                    return selected
+            continue
+
+        for currency in ("CNY", "USD"):
+            currency_lower_slope = sum(
+                (
+                    slope
+                    for asset, (slope, _) in zip(assets, lower_affines, strict=True)
+                    if asset.currency == currency
+                ),
+                Decimal("0"),
+            )
+            currency_lower_intercept = sum(
+                (
+                    intercept
+                    for asset, (_, intercept) in zip(assets, lower_affines, strict=True)
+                    if asset.currency == currency
+                ),
+                Decimal("0"),
+            )
+            if not require_at_most(
+                currency_lower_slope,
+                currency_lower_intercept - currency_caps[currency],
+            ):
+                break
+        else:
+            capped_upper_slope = Decimal("0")
+            capped_upper_intercept = Decimal("0")
+            for currency in ("CNY", "USD"):
+                currency_upper_slope = sum(
+                    (
+                        slope
+                        for asset, (slope, _) in zip(assets, upper_affines, strict=True)
+                        if asset.currency == currency
+                    ),
+                    Decimal("0"),
+                )
+                currency_upper_intercept = sum(
+                    (
+                        intercept
+                        for asset, (_, intercept) in zip(assets, upper_affines, strict=True)
+                        if asset.currency == currency
+                    ),
+                    Decimal("0"),
+                )
+                currency_upper = (
+                    currency_upper_slope * midpoint + currency_upper_intercept
+                )
+                if currency_upper <= currency_caps[currency]:
+                    capped_upper_slope += currency_upper_slope
+                    capped_upper_intercept += currency_upper_intercept
+                else:
+                    capped_upper_intercept += currency_caps[currency]
+            if require_at_most(
+                Decimal("1") - capped_upper_slope,
+                -capped_upper_intercept,
+            ):
+                selected = selected_total()
+                if selected > 0:
+                    return selected
+    return None
+
+
 def _trial_intervals(
     minimum_values: tuple[Decimal, ...],
     maximum_values: tuple[Decimal, ...],
@@ -614,24 +822,18 @@ def continuous_relaxation(
         def trial(
             drift: Decimal,
         ) -> tuple[Decimal, tuple[Decimal, ...], tuple[Decimal, ...]] | None:
-            invested_total = _minimum_invested_total(
-                minimum_values, target_weights, drift
+            invested_total = _feasible_invested_total(
+                ordered_assets,
+                minimum_values,
+                maximum_values,
+                target_weights,
+                drift,
+                minimum_invested_total,
+                maximum_invested_total,
+                currency_caps,
+                allow_fx=allow_fx,
             )
             if invested_total is None:
-                return None
-            if invested_total == 0:
-                invested_total = _positive_zero_minimum_trial(
-                    ordered_assets,
-                    maximum_values,
-                    target_weights,
-                    drift,
-                    maximum_invested_total,
-                    currency_caps,
-                    allow_fx=allow_fx,
-                )
-                if invested_total is None:
-                    return None
-            if not (minimum_invested_total <= invested_total <= maximum_invested_total):
                 return None
             lower_values, upper_values = _trial_intervals(
                 minimum_values,

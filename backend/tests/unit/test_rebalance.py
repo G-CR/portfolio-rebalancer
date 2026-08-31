@@ -222,7 +222,7 @@ def test_cash_feasible_sell_still_describes_phase_two_reallocation() -> None:
     assert sell.reason_code == "REALLOCATE_OUTSIDE_TOLERANCE"
 
 
-def test_secondary_objective_order_reason_describes_total_drift_reduction() -> None:
+def test_trade_reason_describes_max_drift_reduction_for_the_certified_plan() -> None:
     result = rebalance(
         (
             _asset("a", "A", "CNY", "40", "0.4", "20"),
@@ -236,7 +236,7 @@ def test_secondary_objective_order_reason_describes_total_drift_reduction() -> N
 
     buy = next(trade for trade in result.trades if trade.symbol == "D")
     assert buy.action == "buy"
-    assert buy.reason_code == "REDUCE_TOTAL_DRIFT"
+    assert buy.reason_code == "REDUCE_MAX_DRIFT"
 
 
 @pytest.mark.parametrize(

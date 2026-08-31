@@ -559,11 +559,15 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     legacy_result["trades"] = [
         {
             **legacy_result["trades"][0],
+            "action": "sell",
             "reason_code": "OVERWEIGHT_AFTER_CASH",
             "reason": "当前实际占比在投入现有现金后仍高于上限，需要卖出以回到目标附近。",
         },
         *legacy_result["trades"][1:],
     ]
+    legacy_result["fx_required_cny"] = "70"
+    legacy_comparison_result["trades"] = []
+    legacy_comparison_result["fx_required_cny"] = "0"
     legacy_comparison["result"] = legacy_comparison_result
     legacy_projected["result"] = legacy_result
     legacy_projected["fx_comparison"] = legacy_comparison
@@ -595,6 +599,15 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     assert legacy_detail.json()["data_version"] == "legacy-opaque-version"
     assert legacy_detail.json()["result"]["trades"][0]["reason_code"] == "OVERWEIGHT_AFTER_CASH"
     assert legacy_detail.json()["result"]["optimization_certified"] is False
+    assert legacy_detail.json()["result"]["optimization_precision"] == "0.0001"
+    assert legacy_detail.json()["result"]["buy_only_max_drift"] == legacy_result["max_drift_after"]
+    assert legacy_detail.json()["result"]["sell_phase_used"] is True
+    assert legacy_detail.json()["result"]["net_fx_direction"] == "cny_to_usd"
+    assert legacy_detail.json()["result"]["net_fx_amount_cny"] == "70"
+    assert legacy_detail.json()["fx_comparison"]["result"]["buy_only_max_drift"] == legacy_comparison_result["max_drift_after"]
+    assert legacy_detail.json()["fx_comparison"]["result"]["sell_phase_used"] is False
+    assert legacy_detail.json()["fx_comparison"]["result"]["net_fx_direction"] == "none"
+    assert legacy_detail.json()["fx_comparison"]["result"]["net_fx_amount_cny"] == "0"
 
 
 async def test_current_task5_plan_backup_validates_and_restores_without_legacy_mutation(

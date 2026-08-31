@@ -107,15 +107,27 @@ class RebalanceResultResponse(BaseModel):
             return value
         # Plans saved before the certified optimizer did not serialize these
         # fields. Preserve them as readable historical responses without
-        # claiming their output was certified.
+        # claiming their output was certified, while deriving metadata that is
+        # observable from the stored historical result.
+        try:
+            fx_required_cny = Decimal(str(value.get("fx_required_cny", "0")))
+        except ArithmeticError:
+            fx_required_cny = Decimal("0")
+        if not fx_required_cny.is_finite():
+            fx_required_cny = Decimal("0")
+        trades = value.get("trades", ())
+        sell_phase_used = isinstance(trades, (list, tuple)) and any(
+            isinstance(trade, dict) and trade.get("action") == "sell"
+            for trade in trades
+        )
         return {
-            "buy_only_max_drift": Decimal("0"),
-            "optimization_precision": Decimal("0"),
+            "buy_only_max_drift": value.get("max_drift_after", Decimal("0")),
+            "optimization_precision": Decimal("0.0001"),
             "optimization_certified": False,
             "optimality_gap": Decimal("0"),
-            "sell_phase_used": False,
-            "net_fx_direction": "none",
-            "net_fx_amount_cny": Decimal("0"),
+            "sell_phase_used": sell_phase_used,
+            "net_fx_direction": "cny_to_usd" if fx_required_cny > 0 else "none",
+            "net_fx_amount_cny": fx_required_cny if fx_required_cny > 0 else Decimal("0"),
             **value,
         }
 
