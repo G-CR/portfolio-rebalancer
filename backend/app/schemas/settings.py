@@ -41,7 +41,6 @@ class GeneralSettingsUpdate(BaseModel):
     refresh_time: str
     provider_priority: list[ProviderName]
     default_tolerance: DecimalString
-    minimum_trade_amount_cny: DecimalString
     allow_sell: bool
     allow_fx: bool
 
@@ -67,7 +66,7 @@ class GeneralSettingsUpdate(BaseModel):
             )
         return value
 
-    @field_validator("default_tolerance", "minimum_trade_amount_cny")
+    @field_validator("default_tolerance")
     @classmethod
     def validate_nonnegative(cls, value: Decimal, info) -> Decimal:
         if not value.is_finite() or value < 0:
@@ -85,6 +84,7 @@ class GeneralSettingsUpdate(BaseModel):
 
 
 class GeneralSettingsResponse(GeneralSettingsUpdate):
+    minimum_trade_amount_cny: DecimalString
     updated_at: datetime
 
     @field_serializer("default_tolerance", "minimum_trade_amount_cny")
@@ -100,7 +100,6 @@ class RebalanceDefaultsUpdate(BaseModel):
     available_usd: DecimalString
     valuation_basis: Literal["actual", "fx_neutral"]
     tolerance: DecimalString
-    minimum_trade_cny: DecimalString
     allow_sell: bool
     allow_fx: bool
 
@@ -108,7 +107,6 @@ class RebalanceDefaultsUpdate(BaseModel):
         "available_cny",
         "available_usd",
         "tolerance",
-        "minimum_trade_cny",
     )
     @classmethod
     def validate_numeric_defaults(cls, value: Decimal, info) -> Decimal:
@@ -127,6 +125,7 @@ class RebalanceDefaultsUpdate(BaseModel):
 
 
 class RebalanceDefaultsResponse(RebalanceDefaultsUpdate):
+    minimum_trade_cny: DecimalString
     updated_at: datetime
 
     @field_serializer(

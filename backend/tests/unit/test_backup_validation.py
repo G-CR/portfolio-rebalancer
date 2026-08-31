@@ -20,6 +20,9 @@ from app.backups.archive import ArchiveMetadata, write_archive
 from app.backups.canonical import canonical_json_bytes, logical_checksum
 from app.backups import migrations
 from app.backups.constants import CURRENT_FORMAT_VERSION, DATA_MEMBERS
+from app.core.secrets import SecretStore
+from app.db.models import RebalancePlan
+from app.services.backup_restore import _insert_archive, restore_validated_backup
 from app.services.backup_storage import BackupStorage
 from app.services.backup_operations import BackupOperationManager
 from app.services.backup_validation import (
@@ -338,6 +341,22 @@ def test_legacy_rebalance_fallback_and_optional_asset_targets_are_supported(
     _validate(tmp_path, source)
 
 
+def test_legacy_rebalance_fallback_rejects_numeric_top_level_minimum(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    summary = plan["input_summary"]
+    summary.update(summary["resolved_constraints"])
+    summary.pop("resolved_constraints")
+    summary["minimum_trade_cny"] = 0
+    plan["data_version"] = "legacy-opaque-version"
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
 def test_legacy_rebalance_fallback_still_requires_renderer_constraint_keys(
     tmp_path: Path,
 ) -> None:
@@ -345,6 +364,233 @@ def test_legacy_rebalance_fallback_still_requires_renderer_constraint_keys(
     summary = source["data/rebalance_plans.json"][0]["input_summary"]
     summary.pop("resolved_constraints")
     summary.pop("minimum_trade_cny")
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+_CURRENT_OPTIMIZER_METADATA = {
+    "buy_only_max_drift": "0",
+    "optimization_precision": "0.0001",
+    "optimization_certified": True,
+    "optimality_gap": "0",
+    "sell_phase_used": False,
+    "net_fx_direction": "none",
+    "net_fx_amount_cny": "0",
+}
+
+
+def _make_current_constraints(plan: dict[str, Any]) -> None:
+    summary = plan["input_summary"]
+    summary["minimum_trade_cny"] = None
+    summary["resolved_constraints"] = {
+        key: value
+        for key, value in summary["resolved_constraints"].items()
+        if key != "minimum_trade_cny"
+    }
+
+
+def _make_current_result(result: dict[str, Any]) -> None:
+    result.update(_CURRENT_OPTIMIZER_METADATA)
+
+
+def test_legacy_rebalance_result_is_normalized_only_for_response_validation() -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    plan["input_summary"]["minimum_trade_cny"] = "275"
+    legacy_trade = {
+        "symbol": "SYNTH",
+        "action": "sell",
+        "quantity": "1",
+        "amount_cny": "7",
+        "amount_trade_currency": "1",
+        "reason_code": "OVERWEIGHT_AFTER_CASH",
+        "reason": "Preserve this historical funding-source explanation.",
+    }
+    projected = plan["projected_result"]
+    primary = {
+        **projected["result"],
+        "max_drift_after": "0.025",
+        "fx_required_cny": "70",
+        "trades": [dict(legacy_trade)],
+    }
+    comparison_result = {
+        **projected["fx_comparison"]["result"],
+        "max_drift_after": "0.03",
+        "fx_required_cny": "0",
+        "trades": [],
+    }
+    projected["result"] = primary
+    projected["fx_comparison"] = {
+        **projected["fx_comparison"],
+        "result": comparison_result,
+    }
+    plan["suggested_actions"] = [dict(legacy_trade)]
+
+    normalized_primary = module._result_for_response_validation(primary, "legacy")
+    normalized_comparison = module._result_for_response_validation(
+        comparison_result,
+        "legacy",
+    )
+    assert normalized_primary["optimization_precision"] == "0.0001"
+    assert normalized_primary["optimization_certified"] is False
+    assert normalized_primary["optimality_gap"] == "0"
+    assert normalized_primary["buy_only_max_drift"] == "0.025"
+    assert normalized_primary["sell_phase_used"] is True
+    assert normalized_primary["net_fx_direction"] == "cny_to_usd"
+    assert normalized_primary["net_fx_amount_cny"] == "70"
+    assert normalized_primary["trades"][0]["reason"] == legacy_trade["reason"]
+    assert normalized_comparison["buy_only_max_drift"] == "0.03"
+    assert normalized_comparison["net_fx_direction"] == "none"
+    assert "optimization_certified" not in primary
+    assert primary["trades"][0]["reason"] == legacy_trade["reason"]
+
+    module._rebalance_shapes(plan)
+
+
+@pytest.mark.parametrize(
+    "fx_required_cny",
+    ["not-a-decimal", "NaN", "Infinity", "-Infinity"],
+)
+def test_legacy_rebalance_malformed_fx_is_typed_incompatible(
+    tmp_path: Path,
+    fx_required_cny: str,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    plan["input_summary"]["minimum_trade_cny"] = "275"
+    plan["projected_result"]["result"]["fx_required_cny"] = fx_required_cny
+
+    with pytest.raises(BackupValidationError) as exc_info:
+        _validate(tmp_path, source)
+
+    assert exc_info.value.code == "BACKUP_INCOMPATIBLE"
+
+
+def test_current_rebalance_result_validates_without_legacy_normalization(
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    projected = plan["projected_result"]
+    _make_current_constraints(plan)
+    _make_current_result(projected["result"])
+    _make_current_result(projected["fx_comparison"]["result"])
+
+    _validate(tmp_path, source)
+
+    assert (
+        module._result_for_response_validation(projected["result"], "current")
+        is projected["result"]
+    )
+    assert projected["result"]["optimization_certified"] is True
+    assert projected["result"]["optimization_precision"] == "0.0001"
+
+
+@pytest.mark.parametrize("generation", ["legacy", "current"])
+async def test_rebalance_backup_generations_validate_and_restore(
+    db_session,
+    tmp_path: Path,
+    generation: str,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    projected = plan["projected_result"]
+    historical_reason = "Preserve this historical funding-source explanation."
+    if generation == "current":
+        _make_current_constraints(plan)
+        _make_current_result(projected["result"])
+        _make_current_result(projected["fx_comparison"]["result"])
+    else:
+        plan["input_summary"]["minimum_trade_cny"] = "275"
+        legacy_trade = {
+            "symbol": "SYNTH",
+            "action": "sell",
+            "quantity": "1",
+            "amount_cny": "7",
+            "amount_trade_currency": "1",
+            "reason_code": "OVERWEIGHT_AFTER_CASH",
+            "reason": historical_reason,
+        }
+        plan["suggested_actions"] = [dict(legacy_trade)]
+        projected["result"]["trades"] = [dict(legacy_trade)]
+        projected["fx_comparison"]["result"]["trades"] = [dict(legacy_trade)]
+
+    archive = _archive(tmp_path, source)
+    storage = BackupStorage(tmp_path / "backup-storage")
+    storage.initialize()
+    validated = validate_backup(
+        archive,
+        path_id=f"upload:{generation}",
+        workspace_root=storage.tmp_dir,
+    )
+    secret_store = SecretStore(tmp_path / "restore.key")
+
+    class _Progress:
+        async def set_stage(self, _stage) -> None:
+            return None
+
+    async with db_session.begin():
+        await _insert_archive(db_session, validated, secret_store=secret_store)
+    async with db_session.begin():
+        restored = await restore_validated_backup(
+            db_session,
+            validated,
+            storage=storage,
+            secret_store=secret_store,
+            progress=_Progress(),
+        )
+
+    restored_plan = await db_session.get(RebalancePlan, IDS["plan"])
+    assert restored.record_counts["data/rebalance_plans.json"] == 1
+    assert restored_plan is not None
+    if generation == "current":
+        assert restored_plan.input_summary["minimum_trade_cny"] is None
+        assert restored_plan.projected_result["result"]["optimization_certified"] is True
+    else:
+        assert restored_plan.input_summary["minimum_trade_cny"] == "275"
+        restored_result = restored_plan.projected_result["result"]
+        assert "optimization_certified" not in restored_result
+        assert restored_result["trades"][0]["reason"] == historical_reason
+        rendered = module.RebalanceResultResponse.model_validate(restored_result)
+        assert rendered.optimization_certified is False
+        assert rendered.trades[0].reason == historical_reason
+
+
+@pytest.mark.parametrize(
+    "hybrid",
+    [
+        "current_constraints_legacy_results",
+        "legacy_constraints_current_results",
+        "current_primary_legacy_comparison",
+        "legacy_primary_current_comparison",
+    ],
+)
+def test_rebalance_mixed_persisted_generations_are_rejected(
+    tmp_path: Path,
+    hybrid: str,
+) -> None:
+    source = _source()
+    plan = source["data/rebalance_plans.json"][0]
+    projected = plan["projected_result"]
+    primary = dict(projected["result"])
+    comparison_container = dict(projected["fx_comparison"])
+    comparison = dict(comparison_container["result"])
+    projected["result"] = primary
+    comparison_container["result"] = comparison
+    projected["fx_comparison"] = comparison_container
+
+    if hybrid == "current_constraints_legacy_results":
+        _make_current_constraints(plan)
+    elif hybrid == "legacy_constraints_current_results":
+        _make_current_result(primary)
+        _make_current_result(comparison)
+    elif hybrid == "current_primary_legacy_comparison":
+        _make_current_constraints(plan)
+        _make_current_result(primary)
+    else:
+        _make_current_result(comparison)
+
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"

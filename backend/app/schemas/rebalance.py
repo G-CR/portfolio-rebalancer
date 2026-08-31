@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from app.schemas.common import DecimalString
@@ -34,14 +34,12 @@ class RebalancePreviewRequest(BaseModel):
     allow_sell: bool | None = None
     allow_fx: bool | None = None
     tolerance: DecimalString | None = None
-    minimum_trade_cny: DecimalString | None = None
     acknowledge_stale_data: bool = False
 
     @field_validator(
         "available_cny",
         "available_usd",
         "tolerance",
-        "minimum_trade_cny",
     )
     @classmethod
     def validate_nonnegative_decimal(cls, value: Decimal | None, info) -> Decimal | None:
@@ -83,6 +81,9 @@ class TradeSuggestionResponse(BaseModel):
         "UNDERWEIGHT_AFTER_SELL_AND_FX",
         "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX",
         "OVERWEIGHT_AFTER_CASH",
+        "REDUCE_MAX_DRIFT",
+        "REDUCE_TOTAL_DRIFT",
+        "REALLOCATE_OUTSIDE_TOLERANCE",
     ]
     reason: str
 
@@ -99,9 +100,47 @@ class ProjectedWeightResponse(BaseModel):
 class RebalanceResultResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def fill_legacy_optimizer_metadata(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        # Plans saved before the certified optimizer did not serialize these
+        # fields. Preserve them as readable historical responses without
+        # claiming their output was certified, while deriving metadata that is
+        # observable from the stored historical result.
+        try:
+            fx_required_cny = Decimal(str(value.get("fx_required_cny", "0")))
+        except ArithmeticError:
+            fx_required_cny = Decimal("0")
+        if not fx_required_cny.is_finite():
+            fx_required_cny = Decimal("0")
+        trades = value.get("trades", ())
+        sell_phase_used = isinstance(trades, (list, tuple)) and any(
+            isinstance(trade, dict) and trade.get("action") == "sell"
+            for trade in trades
+        )
+        return {
+            "buy_only_max_drift": value.get("max_drift_after", Decimal("0")),
+            "optimization_precision": Decimal("0.0001"),
+            "optimization_certified": False,
+            "optimality_gap": Decimal("0"),
+            "sell_phase_used": sell_phase_used,
+            "net_fx_direction": "cny_to_usd" if fx_required_cny > 0 else "none",
+            "net_fx_amount_cny": fx_required_cny if fx_required_cny > 0 else Decimal("0"),
+            **value,
+        }
+
     feasible: bool
     max_drift_before: DecimalString
     max_drift_after: DecimalString
+    buy_only_max_drift: DecimalString
+    optimization_precision: DecimalString
+    optimization_certified: bool
+    optimality_gap: DecimalString
+    sell_phase_used: bool
+    net_fx_direction: Literal["cny_to_usd", "usd_to_cny", "none"]
+    net_fx_amount_cny: DecimalString
     fx_required_cny: DecimalString
     remaining_cny: DecimalString
     remaining_usd: DecimalString
@@ -138,7 +177,7 @@ class RebalancePlanResponse(BaseModel):
     valuation_basis: Literal["actual", "fx_neutral"]
     available_cny: DecimalString
     available_usd: DecimalString
-    minimum_trade_cny: DecimalString
+    minimum_trade_cny: DecimalString | None
     allow_sell: bool
     allow_fx: bool
     acknowledge_stale_data: bool

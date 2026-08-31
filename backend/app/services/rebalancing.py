@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import AssetClass, Holding, MarketData, MarketDataOverride, RebalancePlan, Setting
 from app.domain.analytics import PositionInput, analyze_position
 from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, RebalanceResult, rebalance
+from app.domain.rebalance_optimizer import OptimizationFailure
 from app.schemas.rebalance import (
     ProjectedWeightResponse,
     RebalanceComparisonResponse,
@@ -51,6 +52,9 @@ _REASON_TEXT = {
     "UNDERWEIGHT_AFTER_SELL_AND_FX": "同币种现金不足，建议优先使用卖出所得并补充换汇后买入低配资产。",
     "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX": "建议依次使用现有现金、卖出所得和换汇资金补足低配资产。",
     "OVERWEIGHT_AFTER_CASH": "当前实际占比在投入现有现金后仍高于上限，需要卖出以回到目标附近。",
+    "REDUCE_MAX_DRIFT": "该交易用于降低投资组合的最大配置偏离。",
+    "REDUCE_TOTAL_DRIFT": "在最佳最大偏离范围内，该交易进一步降低整体配置偏离。",
+    "REALLOCATE_OUTSIDE_TOLERANCE": "仅靠买入仍无法进入容差范围，建议卖出并重新配置。",
 }
 
 
@@ -94,7 +98,6 @@ class _ResolvedConstraints:
     allow_sell: bool
     allow_fx: bool
     tolerance: Decimal
-    minimum_trade_cny: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +198,7 @@ async def create_rebalance_plan(
     )
     input_summary = {
         **payload.model_dump(exclude={"idempotency_key"}),
+        "minimum_trade_cny": None,
         "holding_versions": prepared.holding_versions,
         "market_data_record_ids": prepared.market_data_record_ids,
         "asset_class_targets": prepared.asset_class_targets,
@@ -202,10 +206,6 @@ async def create_rebalance_plan(
             "allow_sell": prepared.resolved_constraints.allow_sell,
             "allow_fx": prepared.resolved_constraints.allow_fx,
             "tolerance": format(prepared.resolved_constraints.tolerance, "f"),
-            "minimum_trade_cny": format(
-                prepared.resolved_constraints.minimum_trade_cny,
-                "f",
-            ),
         },
     }
     suggested_actions = preview.result.model_dump(mode="json")["trades"]
@@ -429,11 +429,6 @@ async def _prepare_rebalance(
             if payload.tolerance is None
             else payload.tolerance
         ),
-        minimum_trade_cny=(
-            context["default_constraints"]["minimum_trade_cny"]
-            if payload.minimum_trade_cny is None
-            else payload.minimum_trade_cny
-        ),
     )
 
     requested_result = _run_engine(
@@ -444,7 +439,6 @@ async def _prepare_rebalance(
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
         tolerance=resolved_constraints.tolerance,
-        minimum_trade_cny=resolved_constraints.minimum_trade_cny,
         allow_sell=resolved_constraints.allow_sell,
         allow_fx=resolved_constraints.allow_fx,
     )
@@ -459,7 +453,6 @@ async def _prepare_rebalance(
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
         tolerance=resolved_constraints.tolerance,
-        minimum_trade_cny=resolved_constraints.minimum_trade_cny,
         allow_sell=resolved_constraints.allow_sell,
         allow_fx=resolved_constraints.allow_fx,
     )
@@ -658,9 +651,6 @@ async def _load_rebalance_context(session: AsyncSession, *, lock: bool = False) 
         "allow_sell": settings.allow_sell if settings is not None else True,
         "allow_fx": settings.allow_fx if settings is not None else True,
         "tolerance": settings.default_tolerance if settings is not None else Decimal("0.02"),
-        "minimum_trade_cny": (
-            settings.minimum_trade_amount_cny if settings is not None else Decimal("500")
-        ),
     }
     return {
         "asset_classes": asset_classes,
@@ -790,7 +780,6 @@ def _run_engine(
     available_cny: Decimal,
     available_usd: Decimal,
     tolerance: Decimal,
-    minimum_trade_cny: Decimal,
     allow_sell: bool,
     allow_fx: bool,
 ) -> RebalanceResult:
@@ -808,7 +797,17 @@ def _run_engine(
                 "Active rebalance asset class is missing a preferred holding.",
                 {"status": "incomplete", "items": [f"preferred:{asset_class.id}"]},
             )
-        preferred = next((holding for holding in class_holdings if holding.is_rebalance_preferred), class_holdings[0])
+        preferred = next(
+            (holding for holding in class_holdings if holding.is_rebalance_preferred),
+            None,
+        )
+        if preferred is None:
+            raise ServiceError(
+                409,
+                "REBALANCE_DATA_INCOMPLETE",
+                "Active rebalance asset class is missing a preferred holding.",
+                {"status": "incomplete", "items": [f"preferred:{asset_class.id}"]},
+            )
         total_value = _ZERO
         for holding in class_holdings:
             price = effective_inputs[f"price:{holding.symbol}"].value
@@ -827,21 +826,29 @@ def _run_engine(
                 target_weight=asset_class.target_weight,
                 unit_price_cny=unit_price_cny,
                 lot_size=preferred.lot_size,
+                max_sell_quantity=preferred.quantity,
             )
         )
 
     usd_fx = effective_inputs.get("fx:USD/CNY")
     usd_cny = usd_fx.value if usd_fx is not None and usd_fx.value is not None else Decimal("1")
-    return rebalance(
-        assets,
-        CashInput(cny=available_cny, usd=available_usd, usd_cny=usd_cny),
-        RebalanceOptions(
-            tolerance=tolerance,
-            minimum_trade_cny=minimum_trade_cny,
-            allow_sell=allow_sell,
-            allow_fx=allow_fx,
-        ),
-    )
+    try:
+        return rebalance(
+            assets,
+            CashInput(cny=available_cny, usd=available_usd, usd_cny=usd_cny),
+            RebalanceOptions(
+                tolerance=tolerance,
+                allow_sell=allow_sell,
+                allow_fx=allow_fx,
+            ),
+        )
+    except OptimizationFailure as exc:
+        raise ServiceError(
+            422,
+            "REBALANCE_OPTIMIZATION_UNCERTIFIED",
+            "无法在 1bp 精度内生成可认证的再平衡方案。",
+            {"explored_nodes": exc.explored_nodes, "optimality_gap": format(exc.gap, "f")},
+        ) from exc
 
 
 def _serialize_result(result: RebalanceResult) -> RebalanceResultResponse:
@@ -849,6 +856,13 @@ def _serialize_result(result: RebalanceResult) -> RebalanceResultResponse:
         feasible=result.feasible,
         max_drift_before=result.max_drift_before,
         max_drift_after=result.max_drift_after,
+        buy_only_max_drift=result.buy_only_max_drift,
+        optimization_precision=result.optimization_precision,
+        optimization_certified=result.optimization_certified,
+        optimality_gap=result.optimality_gap,
+        sell_phase_used=result.sell_phase_used,
+        net_fx_direction=result.net_fx_direction,
+        net_fx_amount_cny=result.net_fx_amount_cny,
         fx_required_cny=result.fx_required_cny,
         remaining_cny=result.remaining_cny,
         remaining_usd=result.remaining_usd,
@@ -895,7 +909,7 @@ def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
         valuation_basis=plan.strategy_mode,
         available_cny=input_summary["available_cny"],
         available_usd=input_summary["available_usd"],
-        minimum_trade_cny=resolved_constraints["minimum_trade_cny"],
+        minimum_trade_cny=resolved_constraints.get("minimum_trade_cny"),
         allow_sell=resolved_constraints["allow_sell"],
         allow_fx=resolved_constraints["allow_fx"],
         acknowledge_stale_data=input_summary["acknowledge_stale_data"],
@@ -928,7 +942,6 @@ async def preview_rebalance_with_defaults(session: AsyncSession) -> RebalancePre
         allow_sell=setting.allow_sell,
         allow_fx=setting.allow_fx,
         tolerance=setting.default_tolerance,
-        minimum_trade_cny=setting.minimum_trade_amount_cny,
         acknowledge_stale_data=True,
     )
     prepared = await _prepare_rebalance(session, payload=payload, allow_stale=True)

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
-import type { RebalancePlan, RebalancePreview, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
+import type { RebalanceDefaultsUpdate, RebalancePlan, RebalancePreview, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
 import { useAssetClasses } from "../features/assetClasses/api";
 import { formatPercent } from "../features/analytics/format";
 import { useHoldings } from "../features/holdings/api";
@@ -27,7 +27,6 @@ const initialForm: RebalanceFormState = {
   availableCny: "0",
   availableUsd: "0",
   tolerance: "2",
-  minimumTradeCny: "500",
   allowSell: true,
   allowFx: true,
   valuationBasis: "actual",
@@ -51,13 +50,12 @@ function percentFromRatio(value: string) {
   return formatted || "0";
 }
 
-function defaultsPayloadFor(form: RebalanceFormState) {
+function defaultsPayloadFor(form: RebalanceFormState): RebalanceDefaultsUpdate {
   return {
     available_cny: form.availableCny || "0",
     available_usd: form.availableUsd || "0",
     valuation_basis: form.valuationBasis,
     tolerance: ratioFromPercent(form.tolerance),
-    minimum_trade_cny: form.minimumTradeCny || "0",
     allow_sell: form.allowSell,
     allow_fx: form.allowFx,
   };
@@ -73,7 +71,6 @@ function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePr
     allow_sell: form.allowSell,
     allow_fx: form.allowFx,
     tolerance: ratioFromPercent(form.tolerance),
-    minimum_trade_cny: form.minimumTradeCny || "0",
     acknowledge_stale_data: form.acknowledgeStaleData,
   };
 }
@@ -143,7 +140,6 @@ export function RebalancePage() {
         availableCny: defaults.data.available_cny,
         availableUsd: defaults.data.available_usd,
         tolerance: percentFromRatio(defaults.data.tolerance),
-        minimumTradeCny: defaults.data.minimum_trade_cny,
         allowSell: defaults.data.allow_sell,
         allowFx: defaults.data.allow_fx,
         valuationBasis: defaults.data.valuation_basis,
@@ -237,7 +233,6 @@ export function RebalancePage() {
     availableUsd: activePlan.available_usd,
     valuationBasis: activePlan.valuation_basis,
     tolerance: percentFromRatio(activePlan.tolerance),
-    minimumTradeCny: activePlan.minimum_trade_cny,
     allowSell: activePlan.allow_sell,
     allowFx: activePlan.allow_fx,
     acknowledgeStaleData: activePlan.acknowledge_stale_data,

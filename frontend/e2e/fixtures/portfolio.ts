@@ -120,7 +120,7 @@ export async function seedPortfolio(
         valuation_basis: payload.valuation_basis,
         available_cny: payload.available_cny,
         available_usd: payload.available_usd,
-        minimum_trade_cny: payload.minimum_trade_cny ?? rebalanceDefaults.minimum_trade_cny,
+        minimum_trade_cny: null,
         allow_sell: payload.allow_sell ?? rebalanceDefaults.allow_sell,
         allow_fx: payload.allow_fx ?? rebalanceDefaults.allow_fx,
         acknowledge_stale_data: payload.acknowledge_stale_data,

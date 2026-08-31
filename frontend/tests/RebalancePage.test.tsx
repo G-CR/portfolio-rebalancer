@@ -52,10 +52,11 @@ it("loads persisted defaults without starting a preview", async () => {
   await waitFor(() => expect(screen.getByLabelText("人民币")).toHaveValue("12000.5"));
   expect(screen.getByLabelText("美元")).toHaveValue("800.25");
   expect(screen.getByLabelText("允许偏离")).toHaveValue("3.5");
-  expect(screen.getByLabelText("最小交易金额")).toHaveValue("900");
+  expect(screen.queryByLabelText("最小交易金额")).not.toBeInTheDocument();
   expect(screen.getByRole("radio", { name: "剔汇率口径" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许卖出/ })).not.toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许换汇/ })).not.toBeChecked();
+  expect(screen.getByText("人民币与美元可按需要双向净换汇")).toBeInTheDocument();
   expect(previewRequests).toBe(0);
 });
 
@@ -98,6 +99,8 @@ it("saves the current defaults before calculating", async () => {
     allow_sell: false,
     tolerance: "0.02",
   });
+  expect(savedDefaults).not.toHaveProperty("minimum_trade_cny");
+  expect(previewPayload).not.toHaveProperty("minimum_trade_cny");
 });
 
 it("continues calculating when persisted defaults cannot be saved", async () => {
@@ -175,6 +178,18 @@ it("shows a reason for every sell suggestion", async () => {
 
   const sellRow = await screen.findByRole("row", { name: /SPY 卖出/ });
   expect(within(sellRow).getByText("新增资金不足以消除高配")).toBeInTheDocument();
+});
+
+it("explains the certified drift path and net FX before execution", async () => {
+  renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
+
+  expect(await screen.findByText("最大偏离 4.00pp → 0.20pp")).toBeInTheDocument();
+  expect(screen.getByText("纯补仓 0.60pp，卖出转配后 0.20pp")).toBeInTheDocument();
+  expect(screen.getByText("已在 1bp 精度内认证")).toBeInTheDocument();
+  expect(screen.getByText("净换汇：人民币换美元 ¥7,200")).toBeInTheDocument();
 });
 
 it("shows the user-entered holding name beside the trade symbol", async () => {

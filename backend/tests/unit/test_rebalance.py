@@ -1,11 +1,15 @@
 from dataclasses import FrozenInstanceError
-from decimal import Decimal, localcontext
+from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, localcontext
 
 import pytest
-from pydantic import ValidationError
-
-from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, rebalance
-from app.schemas.rebalance import RebalancePreviewRequest, RebalanceResultResponse
+from app.domain.rebalance import (
+    AssetInput,
+    CashInput,
+    RebalanceOptions,
+    RebalanceResult,
+    rebalance,
+)
+from app.domain.rebalance_optimizer import OPTIMIZATION_EPSILON
 
 
 def _asset(
@@ -16,468 +20,495 @@ def _asset(
     target_weight: str,
     unit_price_cny: str,
     lot_size: str = "1",
+    max_sell_quantity: str | None = None,
 ) -> AssetInput:
     return AssetInput(
         asset_class_id=asset_class_id,
         symbol=symbol,
-        currency=currency,
+        currency=currency,  # type: ignore[arg-type]
         current_value_cny=Decimal(current_value_cny),
         target_weight=Decimal(target_weight),
         unit_price_cny=Decimal(unit_price_cny),
         lot_size=Decimal(lot_size),
-    )
-
-
-def test_cash_is_used_before_any_sell() -> None:
-    assets = [
-        _asset("low-vol", "510880", "CNY", "180000", "0.20", "3", "100"),
-        _asset("quality", "159758", "CNY", "210000", "0.20", "1.2", "100"),
-        _asset("sp500", "SPY", "USD", "310000", "0.30", "4687.20"),
-        _asset("nasdaq", "QQQ", "USD", "200000", "0.20", "3950.64"),
-        _asset("gold", "518880", "CNY", "100000", "0.10", "5.8", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(cny=Decimal("20000"), usd=Decimal("0"), usd_cny=Decimal("7.20")),
-        RebalanceOptions(
-            tolerance=Decimal("0.02"),
-            minimum_trade_cny=Decimal("500"),
-            allow_sell=True,
-            allow_fx=True,
+        max_sell_quantity=(
+            Decimal(current_value_cny) / Decimal(unit_price_cny)
+            if max_sell_quantity is None
+            else Decimal(max_sell_quantity)
         ),
     )
 
-    assert result.trades
-    assert all(item.action == "buy" for item in result.trades)
-    assert sum(
-        (item.amount_cny for item in result.trades), Decimal("0")
-    ) <= Decimal("20000")
+
+GOLD_STARVATION_ASSETS = (
+    AssetInput(
+        "sp500",
+        "VOO",
+        "USD",
+        Decimal("31300"),
+        Decimal("0.30"),
+        Decimal("4869"),
+        Decimal("0.01"),
+        Decimal("6.43"),
+    ),
+    AssetInput(
+        "nasdaq",
+        "QQQ",
+        "USD",
+        Decimal("20500"),
+        Decimal("0.20"),
+        Decimal("3575"),
+        Decimal("0.01"),
+        Decimal("5.73"),
+    ),
+    AssetInput(
+        "dividend",
+        "159209",
+        "CNY",
+        Decimal("20200"),
+        Decimal("0.20"),
+        Decimal("1.145"),
+        Decimal("100"),
+        Decimal("17600"),
+    ),
+    AssetInput(
+        "quality",
+        "563020",
+        "CNY",
+        Decimal("19300"),
+        Decimal("0.20"),
+        Decimal("1.184"),
+        Decimal("100"),
+        Decimal("16300"),
+    ),
+    AssetInput(
+        "gold",
+        "518880",
+        "CNY",
+        Decimal("8700"),
+        Decimal("0.10"),
+        Decimal("20"),
+        Decimal("100"),
+        Decimal("400"),
+    ),
+)
+GOLD_STARVATION_CASH = CashInput(Decimal("10000"), Decimal("1500"), Decimal("7.2"))
 
 
-def test_cash_buys_are_ordered_by_largest_deficit_then_symbol() -> None:
-    assets = [
-        _asset("a", "ZZZ", "CNY", "100", "0.4", "10"),
-        _asset("b", "BBB", "CNY", "200", "0.3", "10"),
-        _asset("c", "AAA", "CNY", "200", "0.3", "10"),
-    ]
+def test_minimax_contribution_does_not_starve_underweight_gold() -> None:
+    result = rebalance(
+        GOLD_STARVATION_ASSETS,
+        GOLD_STARVATION_CASH,
+        RebalanceOptions(Decimal("0.04"), True, True),
+    )
+
+    gold = next(
+        weight for weight in result.projected_weights if weight.asset_class_id == "gold"
+    )
+    assert any(
+        trade.symbol == "518880" and trade.action == "buy" for trade in result.trades
+    )
+    assert gold.after > gold.before
+    assert result.max_drift_after < Decimal("0.01")
+
+
+def test_buy_only_within_tolerance_never_uses_sell_phase() -> None:
+    assets = (
+        _asset("a", "AAA", "CNY", "51", "0.5", "1"),
+        _asset("b", "BBB", "CNY", "49", "0.5", "1"),
+    )
 
     result = rebalance(
         assets,
-        CashInput(Decimal("300"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.50"), Decimal("0"), False, False),
+        CashInput(Decimal("2"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.02"), True, True),
     )
 
-    assert [trade.symbol for trade in result.trades] == ["ZZZ", "AAA", "BBB"]
-    assert all(
-        trade.reason_code == "UNDERWEIGHT_WITH_CASH" for trade in result.trades
+    assert result.buy_only_max_drift <= Decimal("0.02")
+    assert not result.sell_phase_used
+    assert all(trade.action == "buy" for trade in result.trades)
+
+
+def test_sell_phase_runs_only_after_buy_only_plan_remains_outside_tolerance() -> None:
+    assets = (
+        _asset("over", "OVER", "CNY", "80", "0.5", "10", max_sell_quantity="8"),
+        _asset("under", "UNDER", "CNY", "20", "0.5", "10", max_sell_quantity="2"),
     )
-
-
-def test_cash_buy_order_is_global_across_currencies() -> None:
-    assets = [
-        _asset("cny", "ZZZ", "CNY", "100", "0.5", "10"),
-        _asset("usd", "AAA", "USD", "100", "0.5", "10"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("100"), Decimal("300"), Decimal("1")),
-        RebalanceOptions(Decimal("0.50"), Decimal("0"), False, False),
-    )
-
-    assert [trade.symbol for trade in result.trades] == ["AAA", "ZZZ"]
-
-
-def test_fx_converts_only_executable_usd_deficit() -> None:
-    assets = [
-        _asset("cny", "CNY-FUND", "CNY", "600", "0.4", "10"),
-        _asset("usd", "USD-FUND", "USD", "400", "0.6", "72"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("200"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.01"), Decimal("0"), False, True),
-    )
-
-    assert result.fx_required_cny == Decimal("144")
-    assert result.remaining_cny == Decimal("56")
-    assert result.remaining_usd == Decimal("0")
-    assert result.trades[0].symbol == "USD-FUND"
-    assert result.trades[0].quantity == Decimal("2")
-    assert result.trades[0].amount_trade_currency == Decimal("20")
-    assert result.trades[0].reason_code == "UNDERWEIGHT_AFTER_FX"
-
-
-def test_full_target_asset_consumes_same_currency_and_convertible_cash() -> None:
-    assets = [
-        _asset("all", "ALL", "USD", "100", "1", "10"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("25"), Decimal("25"), Decimal("1")),
-        RebalanceOptions(Decimal("0"), Decimal("0"), False, True),
-    )
-
-    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
-        ("ALL", "buy", Decimal("4"))
-    ]
-    assert result.trades[0].reason_code == "UNDERWEIGHT_WITH_CASH_AND_FX"
-    assert result.remaining_cny == Decimal("5")
-    assert result.remaining_usd == Decimal("5")
-
-
-def test_mixed_full_and_zero_targets_rebalance_without_division_by_zero() -> None:
-    assets = [
-        _asset("all", "ALL", "USD", "0", "1", "10"),
-        _asset("zero", "ZERO", "CNY", "100", "0", "10"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("100"), Decimal("0"), Decimal("1")),
-        RebalanceOptions(Decimal("0"), Decimal("0"), True, True),
-    )
-
-    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
-        ("ALL", "buy", Decimal("20")),
-        ("ZERO", "sell", Decimal("10")),
-    ]
-    assert result.feasible is True
-    assert [weight.after for weight in result.projected_weights] == [
-        Decimal("1"),
-        Decimal("0"),
-    ]
-
-
-def test_reviewer_scenario_does_not_buy_currently_overweight_usd_class() -> None:
-    assets = [
-        _asset("usd", "USD-FUND", "USD", "130", "0.5", "20"),
-        _asset("cny", "CNY-FUND", "CNY", "70", "0.5", "50"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("100"), Decimal("0"), Decimal("1")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, True),
-    )
-
-    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
-        ("CNY-FUND", "buy", Decimal("1"))
-    ]
-    assert result.max_drift_after == Decimal("0.02")
-
-
-def test_sell_gate_uses_current_invested_upper_bound_after_filtered_buy() -> None:
-    assets = [
-        _asset("over", "OVER", "CNY", "600", "0.5", "100"),
-        _asset("under", "UNDER", "CNY", "400", "0.5", "200"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("100"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, False),
-    )
-
-    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
-        ("OVER", "sell", Decimal("1"))
-    ]
-    assert result.max_drift_after < result.max_drift_before
-
-
-def test_merged_existing_usd_and_fx_buy_has_combined_reason() -> None:
-    assets = [
-        _asset("cny", "CNY-FUND", "CNY", "700", "0.4", "100"),
-        _asset("usd", "USD-FUND", "USD", "300", "0.6", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("300"), Decimal("10"), Decimal("10")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, True),
-    )
-
-    assert len(result.trades) == 1
-    assert result.trades[0].symbol == "USD-FUND"
-    assert result.trades[0].quantity == Decimal("4")
-    assert result.trades[0].reason_code == "UNDERWEIGHT_WITH_CASH_AND_FX"
-
-
-def test_sell_proceeds_are_reused_before_fx_and_restore_target() -> None:
-    assets = [
-        _asset("cny", "CNY-FUND", "CNY", "800", "0.5", "100"),
-        _asset("usd", "USD-FUND", "USD", "200", "0.5", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("0"), Decimal("0"), Decimal("5")),
-        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, True),
-    )
-
-    assert [(trade.symbol, trade.action, trade.quantity) for trade in result.trades] == [
-        ("CNY-FUND", "sell", Decimal("3")),
-        ("USD-FUND", "buy", Decimal("3")),
-    ]
-    assert result.trades[0].reason_code == "OVERWEIGHT_AFTER_CASH"
-    assert result.fx_required_cny == Decimal("300")
-    assert result.feasible is True
-    assert result.max_drift_after == Decimal("0.0")
-
-
-def test_usd_sale_proceeds_fund_usd_buys_without_fx() -> None:
-    assets = [
-        _asset("cny", "CNY-FUND", "CNY", "200", "0.2", "100"),
-        _asset("usd-over", "USD-OVER", "USD", "700", "0.4", "100"),
-        _asset("usd-under", "USD-UNDER", "USD", "100", "0.4", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("0"), Decimal("0"), Decimal("5")),
-        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, True),
-    )
-
-    assert [(trade.symbol, trade.action) for trade in result.trades] == [
-        ("USD-OVER", "sell"),
-        ("USD-UNDER", "buy"),
-    ]
-    assert result.fx_required_cny == 0
-    assert result.remaining_usd == 0
-    assert result.feasible is True
-
-
-def test_repeated_buys_are_merged_and_sales_do_not_cross_below_target() -> None:
-    assets = [
-        _asset("under", "UNDER", "CNY", "200", "0.5", "100"),
-        _asset("over", "OVER", "CNY", "800", "0.5", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("100"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, False),
-    )
-
-    under_buys = [trade for trade in result.trades if trade.symbol == "UNDER"]
-    over_sell = next(trade for trade in result.trades if trade.symbol == "OVER")
-    assert len(under_buys) == 1
-    assert under_buys[0].quantity == Decimal("3")
-    assert (
-        under_buys[0].reason_code
-        == "UNDERWEIGHT_WITH_CASH_AND_SELL_PROCEEDS"
-    )
-    assert over_sell.quantity == Decimal("2")
-    projected_over = next(
-        weight for weight in result.projected_weights if weight.asset_class_id == "over"
-    )
-    assert projected_over.after > projected_over.target
-
-
-def test_merged_buy_preserves_cash_fx_and_sell_proceeds_components() -> None:
-    assets = [
-        _asset("cny", "CNY-FUND", "CNY", "200", "0.2", "100"),
-        _asset("usd-under", "USD-UNDER", "USD", "100", "0.4", "100"),
-        _asset("usd-over", "USD-OVER", "USD", "700", "0.4", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("100"), Decimal("10"), Decimal("10")),
-        RebalanceOptions(Decimal("0.05"), Decimal("0"), True, True),
-    )
-
-    under_buy = next(
-        trade for trade in result.trades if trade.symbol == "USD-UNDER"
-    )
-    assert under_buy.reason_code == (
-        "UNDERWEIGHT_WITH_CASH_SELL_PROCEEDS_AND_FX"
-    )
-
-
-def test_reviewer_round_trip_is_removed_from_executable_trades() -> None:
-    assets = [
-        _asset("a", "AAA", "CNY", "0", "0.5", "200"),
-        _asset("b", "BBB", "CNY", "50", "0.5", "50"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("150"), Decimal("0"), Decimal("1")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), True, False),
-    )
-
-    assert result.trades == ()
-    assert result.remaining_cny == Decimal("150")
-    assert [weight.after for weight in result.projected_weights] == [
-        Decimal("0"),
-        Decimal("1"),
-    ]
-
-
-def test_cash_that_restores_tolerance_prevents_sells() -> None:
-    assets = [
-        _asset("a", "AAA", "CNY", "600", "0.5", "10"),
-        _asset("b", "BBB", "CNY", "400", "0.5", "10"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("200"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.01"), Decimal("0"), True, True),
-    )
-
-    assert [
-        (trade.symbol, trade.action, trade.amount_cny) for trade in result.trades
-    ] == [("BBB", "buy", Decimal("200"))]
-    assert result.feasible is True
-
-
-def test_before_metrics_use_original_holdings_with_temporary_cash() -> None:
-    assets = [
-        _asset("over", "OVER", "CNY", "600", "0.5", "10"),
-        _asset("under", "UNDER", "CNY", "400", "0.5", "10"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("200"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), True, True),
-    )
-
-    assert [weight.before for weight in result.projected_weights] == [
-        Decimal("0.6"),
-        Decimal("0.4"),
-    ]
-    assert result.max_drift_before == Decimal("0.1")
-    assert [weight.after for weight in result.projected_weights] == [
-        Decimal("0.5"),
-        Decimal("0.5"),
-    ]
-
-
-def test_minimum_trade_filters_lots_without_spending_cash() -> None:
-    assets = [
-        _asset("a", "AAA", "CNY", "0", "0.5", "40"),
-        _asset("b", "BBB", "CNY", "100", "0.5", "100"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("20"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.01"), Decimal("50"), False, False),
-    )
-
-    assert result.trades == ()
-    assert result.remaining_cny == Decimal("20")
-
-
-def test_final_weights_exclude_uninvested_temporary_cash() -> None:
-    assets = [
-        _asset("a", "AAA", "CNY", "100", "0.5", "60"),
-        _asset("b", "BBB", "CNY", "100", "0.5", "60"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("50"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0"), Decimal("0"), False, False),
-    )
-
-    assert result.trades == ()
-    assert [weight.after for weight in result.projected_weights] == [
-        Decimal("0.5"),
-        Decimal("0.5"),
-    ]
-
-
-def test_projected_weights_are_sorted_by_asset_class_id() -> None:
-    assets = [
-        _asset("z-class", "AAA", "CNY", "40", "0.4", "10"),
-        _asset("a-class", "ZZZ", "CNY", "60", "0.6", "10"),
-    ]
-
-    result = rebalance(
-        assets,
-        CashInput(Decimal("0"), Decimal("0"), Decimal("1")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, False),
-    )
-
-    assert [weight.asset_class_id for weight in result.projected_weights] == [
-        "a-class",
-        "z-class",
-    ]
-
-
-def test_zero_portfolio_returns_a_stable_infeasible_result() -> None:
-    assets = [
-        _asset("a", "AAA", "CNY", "0", "0.5", "10"),
-        _asset("b", "BBB", "USD", "0", "0.5", "72"),
-    ]
 
     result = rebalance(
         assets,
         CashInput(Decimal("0"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.02"), Decimal("500"), True, True),
+        RebalanceOptions(Decimal("0.05"), True, False),
+    )
+
+    assert result.buy_only_max_drift > Decimal("0.05")
+    assert result.sell_phase_used
+    assert any(trade.action == "sell" for trade in result.trades)
+    assert result.max_drift_after <= Decimal("0.05")
+
+
+def test_one_lot_is_the_only_minimum_trade() -> None:
+    assets = (
+        _asset("under", "UNDER", "CNY", "0", "0.5", "0.01", "100", "0"),
+        _asset("other", "OTHER", "CNY", "1", "0.5", "1", "1", "1"),
+    )
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("1"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    trade = next(trade for trade in result.trades if trade.symbol == "UNDER")
+    assert trade.action == "buy"
+    assert trade.quantity == Decimal("100")
+    assert trade.amount_cny == Decimal("1")
+
+
+def test_sub_one_basis_point_improvement_does_not_create_an_order() -> None:
+    assets = (
+        _asset("a", "AAA", "CNY", "5000.5", "0.5", "0.1", "1", "0"),
+        _asset("b", "BBB", "CNY", "4999.5", "0.5", "0.1", "1", "0"),
+    )
+
+    result = rebalance(
+        assets,
+        CashInput(Decimal("0.1"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0"), False, False),
     )
 
     assert result.trades == ()
-    assert result.remaining_cny == 0
-    assert result.remaining_usd == 0
+    assert result.remaining_cny == Decimal("0.1")
+
+
+def test_buy_order_reason_describes_optimizer_intent() -> None:
+    result = rebalance(
+        (
+            _asset("a", "AAA", "CNY", "40", "0.5", "10"),
+            _asset("b", "BBB", "CNY", "60", "0.5", "10"),
+        ),
+        CashInput(Decimal("20"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].reason_code == "REDUCE_MAX_DRIFT"
+
+
+def test_sell_order_reason_describes_phase_two_reallocation() -> None:
+    result = rebalance(
+        (
+            _asset("over", "OVER", "CNY", "80", "0.5", "10", max_sell_quantity="8"),
+            _asset("under", "UNDER", "CNY", "20", "0.5", "10", max_sell_quantity="2"),
+        ),
+        CashInput(Decimal("0"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.05"), True, False),
+    )
+
+    sell = next(trade for trade in result.trades if trade.action == "sell")
+    assert sell.reason_code == "REALLOCATE_OUTSIDE_TOLERANCE"
+
+
+def test_cash_feasible_sell_still_describes_phase_two_reallocation() -> None:
+    result = rebalance(
+        (
+            _asset("over", "OVER", "CNY", "90", "0.5", "10", max_sell_quantity="9"),
+            _asset("under", "UNDER", "CNY", "10", "0.5", "10", max_sell_quantity="1"),
+        ),
+        CashInput(Decimal("70"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.01"), True, False),
+    )
+
+    sell = next(trade for trade in result.trades if trade.action == "sell")
+    assert result.sell_phase_used
+    assert sell.reason_code == "REALLOCATE_OUTSIDE_TOLERANCE"
+
+
+def test_trade_reason_describes_max_drift_reduction_for_the_certified_plan() -> None:
+    result = rebalance(
+        (
+            _asset("a", "A", "CNY", "40", "0.4", "20"),
+            _asset("b", "B", "CNY", "20", "0.3", "20"),
+            _asset("c", "C", "CNY", "60", "0.2", "20"),
+            _asset("d", "D", "CNY", "0", "0.1", "20", max_sell_quantity="0"),
+        ),
+        CashInput(Decimal("0"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0"), True, False),
+    )
+
+    buy = next(trade for trade in result.trades if trade.symbol == "D")
+    assert buy.action == "buy"
+    assert buy.reason_code == "REDUCE_MAX_DRIFT"
+
+
+@pytest.mark.parametrize(
+    ("assets", "cash", "direction", "amount", "compatibility_amount"),
+    [
+        (
+            (
+                _asset("cny", "CNY", "CNY", "100", "0.5", "10", max_sell_quantity="0"),
+                _asset("usd", "USD", "USD", "0", "0.5", "10", max_sell_quantity="0"),
+            ),
+            CashInput(Decimal("0"), Decimal("10"), Decimal("10")),
+            "none",
+            Decimal("0"),
+            Decimal("0"),
+        ),
+        (
+            (
+                _asset("cny", "CNY", "CNY", "100", "0.5", "10", max_sell_quantity="0"),
+                _asset("usd", "USD", "USD", "0", "0.5", "10", max_sell_quantity="0"),
+            ),
+            CashInput(Decimal("100"), Decimal("0"), Decimal("10")),
+            "cny_to_usd",
+            Decimal("100"),
+            Decimal("100"),
+        ),
+        (
+            (
+                _asset("cny", "CNY", "CNY", "0", "0.5", "10", max_sell_quantity="0"),
+                _asset("usd", "USD", "USD", "100", "0.5", "10", max_sell_quantity="0"),
+            ),
+            CashInput(Decimal("0"), Decimal("10"), Decimal("10")),
+            "usd_to_cny",
+            Decimal("100"),
+            Decimal("0"),
+        ),
+    ],
+)
+def test_net_fx_metadata_and_compatibility_alias(
+    assets: tuple[AssetInput, ...],
+    cash: CashInput,
+    direction: str,
+    amount: Decimal,
+    compatibility_amount: Decimal,
+) -> None:
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0"), False, True),
+    )
+
+    assert result.net_fx_direction == direction
+    assert result.net_fx_amount_cny == amount
+    assert result.fx_required_cny == compatibility_amount
+
+
+def test_multiple_usd_orders_exactly_conserve_reported_currency() -> None:
+    cash = CashInput(Decimal("0"), Decimal("1"), Decimal("3"))
+    assets = (
+        _asset("a", "A", "CNY", "2", "0.5", "1", max_sell_quantity="0"),
+        _asset("b", "B", "USD", "0", "0.25", "1", max_sell_quantity="0"),
+        _asset("c", "C", "USD", "0", "0.25", "1", max_sell_quantity="0"),
+    )
+
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    usd_buys = tuple(
+        trade
+        for trade in result.trades
+        if trade.symbol in {"B", "C"} and trade.action == "buy"
+    )
+    assert len(usd_buys) == 2
+    with localcontext() as context:
+        context.prec = 100
+        context.rounding = ROUND_DOWN
+        assert all(
+            trade.amount_trade_currency == trade.amount_cny / cash.usd_cny
+            for trade in usd_buys
+        )
+    with localcontext() as context:
+        context.prec = 250
+        assert result.remaining_usd == cash.usd - sum(
+            (trade.amount_trade_currency for trade in usd_buys), Decimal("0")
+        )
+
+
+def test_fully_spent_repeating_usd_orders_preserve_canonical_amounts() -> None:
+    cash = CashInput(Decimal("0"), Decimal("3"), Decimal("3"))
+    assets = (
+        _asset("a", "A", "CNY", "1", "0.1", "1", max_sell_quantity="0"),
+        _asset("b", "B", "USD", "0", "0.2", "2", max_sell_quantity="0"),
+        _asset("c", "C", "USD", "0", "0.5", "5", max_sell_quantity="0"),
+        _asset("d", "D", "USD", "0", "0.2", "2", max_sell_quantity="0"),
+    )
+
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    usd_buys = tuple(trade for trade in result.trades if trade.symbol != "A")
+    assert len(usd_buys) == 3
+    with localcontext() as context:
+        context.prec = 100
+        context.rounding = ROUND_DOWN
+        assert all(
+            trade.amount_trade_currency == trade.amount_cny / cash.usd_cny
+            for trade in usd_buys
+        )
+    with localcontext() as context:
+        context.prec = 250
+        assert result.remaining_usd >= 0
+        assert result.remaining_usd == cash.usd - sum(
+            (trade.amount_trade_currency for trade in usd_buys), Decimal("0")
+        )
+
+
+@pytest.mark.parametrize("cash_usd", ("1E+120", "1E+150", "1E+200"))
+def test_large_positive_exponent_cash_preserves_a_small_usd_order(
+    cash_usd: str,
+) -> None:
+    cash = CashInput(Decimal("0"), Decimal(cash_usd), Decimal("3"))
+    assets = (
+        _asset("a", "A", "CNY", "1", "0.5", "1", max_sell_quantity="0"),
+        _asset("b", "B", "USD", "0", "0.5", "1", max_sell_quantity="0"),
+    )
+
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    usd_buy = next(trade for trade in result.trades if trade.symbol == "B")
+    assert usd_buy.amount_trade_currency > 0
+    with localcontext() as context:
+        context.prec = 600
+        assert result.remaining_usd == cash.usd - usd_buy.amount_trade_currency
+
+
+def test_large_cash_and_fx_operands_preserve_exact_trade_currency() -> None:
+    usd_cash = Decimal("9" * 100)
+    usd_cny = Decimal("7" * 100)
+    cash = CashInput(Decimal("0"), usd_cash, usd_cny)
+    assets = (
+        AssetInput(
+            "a",
+            "A",
+            "CNY",
+            usd_cny,
+            Decimal("0.5"),
+            Decimal("1"),
+            Decimal("1"),
+            Decimal("0"),
+        ),
+        AssetInput(
+            "b",
+            "B",
+            "USD",
+            Decimal("0"),
+            Decimal("0.5"),
+            usd_cny,
+            Decimal("1"),
+            Decimal("0"),
+        ),
+    )
+
+    result = rebalance(
+        assets,
+        cash,
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    usd_buy = next(trade for trade in result.trades if trade.symbol == "B")
+    assert usd_buy.amount_trade_currency == Decimal("1")
+    with localcontext() as context:
+        context.prec = 250
+        assert result.remaining_usd == usd_cash - Decimal("1")
+
+
+def test_result_metadata_and_weights_come_from_the_certified_candidate() -> None:
+    result = rebalance(
+        (
+            _asset("b", "BBB", "CNY", "60", "0.5", "10"),
+            _asset("a", "AAA", "CNY", "40", "0.5", "10"),
+        ),
+        CashInput(Decimal("20"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0"), False, False),
+    )
+
+    assert result.feasible
+    assert result.max_drift_before == Decimal("0.1")
+    assert result.max_drift_after == 0
+    assert result.buy_only_max_drift == result.max_drift_after
+    assert result.optimization_precision == OPTIMIZATION_EPSILON
+    assert result.optimization_certified
+    assert result.optimality_gap == Decimal("0.0001")
+    assert not result.sell_phase_used
+    assert [weight.asset_class_id for weight in result.projected_weights] == ["a", "b"]
+    assert result.projected_weights[0].before == Decimal("0.4")
+    assert result.projected_weights[0].after == Decimal("0.5")
+
+
+def test_zero_portfolio_returns_a_stable_certified_best_effort() -> None:
+    result = rebalance(
+        (
+            _asset("a", "AAA", "CNY", "0", "0.5", "10", max_sell_quantity="0"),
+            _asset("b", "BBB", "USD", "0", "0.5", "10", max_sell_quantity="0"),
+        ),
+        CashInput(Decimal("0"), Decimal("0"), Decimal("7.2")),
+        RebalanceOptions(Decimal("0.02"), True, True),
+    )
+
+    assert not result.feasible
     assert result.max_drift_before == Decimal("0.5")
     assert result.max_drift_after == Decimal("0.5")
-    assert result.feasible is False
+    assert result.trades == ()
+    assert result.net_fx_direction == "none"
 
 
-def test_types_are_immutable_and_rebalance_does_not_mutate_inputs() -> None:
+def test_public_types_are_immutable_and_rebalance_does_not_mutate_inputs() -> None:
     assets = [
         _asset("a", "AAA", "CNY", "40", "0.5", "10"),
         _asset("b", "BBB", "CNY", "60", "0.5", "10"),
     ]
     original = list(assets)
     cash = CashInput(Decimal("20"), Decimal("0"), Decimal("7.2"))
-    options = RebalanceOptions(Decimal("0.01"), Decimal("0"), False, False)
+    options = RebalanceOptions(Decimal("0.01"), False, False)
 
-    rebalance(assets, cash, options)
+    result = rebalance(assets, cash, options)
 
     assert assets == original
     with pytest.raises(FrozenInstanceError):
         assets[0].symbol = "CHANGED"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        result.remaining_cny = Decimal("0")  # type: ignore[misc]
 
 
 def test_result_is_independent_of_ambient_decimal_precision() -> None:
-    assets = [
-        _asset(
-            "a",
-            "AAA",
-            "CNY",
-            "1234567890123456.123456789012",
-            "0.5",
-            "0.000000000123",
-            "100",
-        ),
-        _asset(
-            "b",
-            "BBB",
-            "USD",
-            "1234567890123455.123456789012",
-            "0.5",
-            "987654321.123456789012",
-        ),
-    ]
-    cash = CashInput(
-        Decimal("999999999999.999999999999"),
-        Decimal("1.234567890123"),
-        Decimal("7.123456789012"),
+    assets = (
+        _asset("a", "AAA", "CNY", "123456789.123456", "0.5", "0.001", "100", "0"),
+        _asset("b", "BBB", "USD", "123456788.123456", "0.5", "98765.4321", "0.01", "0"),
     )
-    options = RebalanceOptions(Decimal("0.02"), Decimal("0.01"), True, True)
+    cash = CashInput(Decimal("999.999999"), Decimal("1.234567"), Decimal("7.123456"))
+    options = RebalanceOptions(Decimal("0.02"), False, True)
     expected = rebalance(assets, cash, options)
 
     with localcontext() as context:
         context.prec = 4
+        actual = rebalance(assets, cash, options)
+
+    assert actual == expected
+
+
+def test_result_is_independent_of_ambient_decimal_rounding() -> None:
+    assets = (
+        _asset("a", "A", "CNY", "2", "0.5", "1", max_sell_quantity="0"),
+        _asset("b", "B", "USD", "0", "0.25", "1", max_sell_quantity="0"),
+        _asset("c", "C", "USD", "0", "0.25", "1", max_sell_quantity="0"),
+    )
+    cash = CashInput(Decimal("0"), Decimal("1"), Decimal("3"))
+    options = RebalanceOptions(Decimal("0"), False, False)
+
+    with localcontext() as context:
+        context.rounding = ROUND_HALF_EVEN
+        expected = rebalance(assets, cash, options)
+    with localcontext() as context:
+        context.rounding = ROUND_DOWN
         actual = rebalance(assets, cash, options)
 
     assert actual == expected
@@ -494,6 +525,8 @@ def test_result_is_independent_of_ambient_decimal_precision() -> None:
         ("unit_price_cny", Decimal("-1")),
         ("lot_size", Decimal("0")),
         ("lot_size", Decimal("NaN")),
+        ("max_sell_quantity", Decimal("-1")),
+        ("max_sell_quantity", Decimal("Infinity")),
     ],
 )
 def test_asset_input_rejects_invalid_decimals(field: str, value: Decimal) -> None:
@@ -505,11 +538,52 @@ def test_asset_input_rejects_invalid_decimals(field: str, value: Decimal) -> Non
         "target_weight": Decimal("1"),
         "unit_price_cny": Decimal("10"),
         "lot_size": Decimal("1"),
+        "max_sell_quantity": Decimal("10"),
     }
     values[field] = value
 
     with pytest.raises(ValueError, match=field):
-        AssetInput(**values)
+        AssetInput(**values)  # type: ignore[arg-type]
+
+
+def test_asset_input_accepts_fractional_preferred_inventory() -> None:
+    asset = _asset(
+        "a",
+        "AAA",
+        "CNY",
+        "100",
+        "1",
+        "10",
+        lot_size="2",
+        max_sell_quantity="3.5",
+    )
+
+    assert asset.max_sell_quantity == Decimal("3.5")
+
+
+def test_rebalance_options_and_result_expose_the_minimax_contract() -> None:
+    assert set(RebalanceOptions.__dataclass_fields__) == {
+        "tolerance",
+        "allow_sell",
+        "allow_fx",
+    }
+    assert set(RebalanceResult.__dataclass_fields__) == {
+        "feasible",
+        "max_drift_before",
+        "max_drift_after",
+        "buy_only_max_drift",
+        "optimization_precision",
+        "optimization_certified",
+        "optimality_gap",
+        "sell_phase_used",
+        "net_fx_direction",
+        "net_fx_amount_cny",
+        "fx_required_cny",
+        "remaining_cny",
+        "remaining_usd",
+        "projected_weights",
+        "trades",
+    }
 
 
 @pytest.mark.parametrize(
@@ -518,18 +592,8 @@ def test_asset_input_rejects_invalid_decimals(field: str, value: Decimal) -> Non
         (lambda: CashInput(Decimal("-1"), Decimal("0"), Decimal("7.2")), "cny"),
         (lambda: CashInput(Decimal("0"), Decimal("NaN"), Decimal("7.2")), "usd"),
         (lambda: CashInput(Decimal("0"), Decimal("0"), Decimal("0")), "usd_cny"),
-        (
-            lambda: RebalanceOptions(
-                Decimal("-0.1"), Decimal("0"), False, False
-            ),
-            "tolerance",
-        ),
-        (
-            lambda: RebalanceOptions(
-                Decimal("0.1"), Decimal("Infinity"), False, False
-            ),
-            "minimum_trade_cny",
-        ),
+        (lambda: RebalanceOptions(Decimal("-0.1"), False, False), "tolerance"),
+        (lambda: RebalanceOptions(Decimal("Infinity"), False, False), "tolerance"),
     ],
 )
 def test_cash_and_options_reject_invalid_decimals(constructor, match: str) -> None:
@@ -539,77 +603,29 @@ def test_cash_and_options_reject_invalid_decimals(constructor, match: str) -> No
 
 def test_rebalance_rejects_duplicate_classes_symbols_and_invalid_weights() -> None:
     valid_cash = CashInput(Decimal("0"), Decimal("0"), Decimal("7.2"))
-    options = RebalanceOptions(Decimal("0.02"), Decimal("0"), False, False)
+    options = RebalanceOptions(Decimal("0.02"), False, False)
 
     with pytest.raises(ValueError, match="duplicate asset_class_id"):
         rebalance(
-            [
+            (
                 _asset("a", "AAA", "CNY", "1", "0.5", "1"),
                 _asset("a", "BBB", "CNY", "1", "0.5", "1"),
-            ],
+            ),
             valid_cash,
             options,
         )
     with pytest.raises(ValueError, match="duplicate symbol"):
         rebalance(
-            [
+            (
                 _asset("a", "AAA", "CNY", "1", "0.5", "1"),
                 _asset("b", "AAA", "USD", "1", "0.5", "1"),
-            ],
+            ),
             valid_cash,
             options,
         )
     with pytest.raises(ValueError, match="target weights must sum to 1"):
         rebalance(
-            [_asset("a", "AAA", "CNY", "1", "0.9", "1")],
+            (_asset("a", "AAA", "CNY", "1", "0.9", "1"),),
             valid_cash,
             options,
-        )
-
-
-def test_rebalance_schema_serializes_domain_result_as_decimal_strings() -> None:
-    result = rebalance(
-        [_asset("a", "AAA", "CNY", "100", "1", "10", "3")],
-        CashInput(Decimal("20"), Decimal("0"), Decimal("7.2")),
-        RebalanceOptions(Decimal("0.02"), Decimal("0"), False, False),
-    )
-
-    payload = RebalanceResultResponse.model_validate(result).model_dump(mode="json")
-
-    assert payload["remaining_cny"] == "20"
-    assert payload["projected_weights"][0] == {
-        "asset_class_id": "a",
-        "before": "1",
-        "after": "1",
-        "target": "1",
-    }
-
-
-def test_rebalance_preview_request_is_frozen_normalized_and_validated() -> None:
-    request = RebalancePreviewRequest(
-        session_token="browser-session-1",
-        request_token="preview-request-1",
-        available_cny="20000",
-        available_usd="0",
-        valuation_basis="actual",
-        allow_sell=True,
-        allow_fx=True,
-        tolerance="0.02",
-        minimum_trade_cny="500",
-    )
-
-    assert request.available_cny == Decimal("20000")
-    with pytest.raises(ValidationError):
-        request.available_cny = Decimal("1")  # type: ignore[misc]
-    with pytest.raises(ValidationError):
-        RebalancePreviewRequest(
-            session_token="browser-session-1",
-            request_token="preview-request-2",
-            available_cny="NaN",
-            available_usd="0",
-            valuation_basis="actual",
-            allow_sell=False,
-            allow_fx=False,
-            tolerance="0.02",
-            minimum_trade_cny="500",
         )

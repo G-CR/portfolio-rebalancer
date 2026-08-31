@@ -23,6 +23,12 @@ from app.services.snapshots import create_daily_snapshot_if_complete
 
 logger = logging.getLogger(__name__)
 
+_OPTIMIZER_INTENT_REASON_CODES = {
+    "REDUCE_MAX_DRIFT",
+    "REDUCE_TOTAL_DRIFT",
+    "REALLOCATE_OUTSIDE_TOLERANCE",
+}
+
 
 def _esc(value: object) -> str:
     return escape(str(value))
@@ -153,6 +159,10 @@ def build_digest_html(
     }
 
     if rebalance is not None and rebalance.result.trades:
+        show_optimizer_reasons = any(
+            trade.reason_code in _OPTIMIZER_INTENT_REASON_CODES
+            for trade in rebalance.result.trades
+        )
         trade_rows = []
         for trade in rebalance.result.trades:
             holding_name = holding_names.get(trade.symbol)
@@ -161,16 +171,20 @@ def build_digest_html(
                 if holding_name and holding_name != trade.symbol
                 else trade.symbol
             )
-            trade_rows.append(
-                [
-                    _esc(trade_label),
-                    "买入" if trade.action == "buy" else "卖出",
-                    _one_decimal(trade.quantity),
-                    _money(trade.amount_cny),
-                ]
-            )
+            row = [
+                _esc(trade_label),
+                "买入" if trade.action == "buy" else "卖出",
+                _one_decimal(trade.quantity),
+                _money(trade.amount_cny),
+            ]
+            if show_optimizer_reasons:
+                row.append(_esc(trade.reason))
+            trade_rows.append(row)
+        headers = ["标的", "方向", "数量", "金额 (CNY)"]
+        if show_optimizer_reasons:
+            headers.append("原因")
         rebalance_html = _table(
-            ["标的", "方向", "数量", "金额 (CNY)"],
+            headers,
             trade_rows,
         )
     elif rebalance is not None:

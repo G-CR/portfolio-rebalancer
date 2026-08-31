@@ -9,7 +9,11 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
     api_client,
     db_session,
 ) -> None:
+    setting = await db_session.scalar(select(Setting).limit(1))
+    setting.minimum_trade_amount_cny = Decimal("675")
+    await db_session.commit()
     initial = await api_client.get("/api/settings/rebalance-defaults")
+    openapi = (await api_client.get("/openapi.json")).json()
 
     assert initial.status_code == 200, initial.text
     assert initial.json() | {"updated_at": None} == {
@@ -17,11 +21,19 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
         "available_usd": "0",
         "valuation_basis": "actual",
         "tolerance": "0.02",
-        "minimum_trade_cny": "500",
+        "minimum_trade_cny": "675",
         "allow_sell": True,
         "allow_fx": True,
         "updated_at": None,
     }
+    assert (
+        "minimum_trade_cny"
+        not in openapi["components"]["schemas"]["RebalanceDefaultsUpdate"]["properties"]
+    )
+    assert (
+        "minimum_trade_amount_cny"
+        not in openapi["components"]["schemas"]["GeneralSettingsUpdate"]["properties"]
+    )
 
     saved = await api_client.put(
         "/api/settings/rebalance-defaults",
@@ -30,7 +42,6 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
             "available_usd": "800.25",
             "valuation_basis": "fx_neutral",
             "tolerance": "0.035",
-            "minimum_trade_cny": "900",
             "allow_sell": False,
             "allow_fx": False,
         },
@@ -42,16 +53,16 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
 
     general = await api_client.get("/api/settings/general")
     assert general.json()["default_tolerance"] == "0.035"
-    assert general.json()["minimum_trade_amount_cny"] == "900"
+    assert general.json()["minimum_trade_amount_cny"] == "675"
     assert general.json()["allow_sell"] is False
     assert general.json()["allow_fx"] is False
 
     updated_general = await api_client.put(
         "/api/settings/general",
         json={
-            **general.json(),
+            "refresh_time": general.json()["refresh_time"],
+            "provider_priority": general.json()["provider_priority"],
             "default_tolerance": "0.01",
-            "minimum_trade_amount_cny": "300",
             "allow_sell": True,
             "allow_fx": True,
         },
@@ -67,12 +78,13 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
     assert fetched.json()["available_usd"] == "800.25"
     assert fetched.json()["valuation_basis"] == "fx_neutral"
     assert fetched.json()["tolerance"] == "0.01"
-    assert fetched.json()["minimum_trade_cny"] == "300"
+    assert fetched.json()["minimum_trade_cny"] == "675"
     assert fetched.json()["allow_sell"] is True
     assert fetched.json()["allow_fx"] is True
     assert stored.rebalance_available_cny == Decimal("12000.5")
     assert stored.rebalance_available_usd == Decimal("800.25")
     assert stored.rebalance_valuation_basis == "fx_neutral"
+    assert stored.minimum_trade_amount_cny == Decimal("675")
 
 
 async def test_rebalance_defaults_reject_invalid_values(api_client) -> None:
@@ -83,7 +95,6 @@ async def test_rebalance_defaults_reject_invalid_values(api_client) -> None:
             "available_usd": "0",
             "valuation_basis": "actual",
             "tolerance": "0.02",
-            "minimum_trade_cny": "500",
             "allow_sell": True,
             "allow_fx": True,
         },
@@ -95,7 +106,6 @@ async def test_rebalance_defaults_reject_invalid_values(api_client) -> None:
             "available_usd": "0",
             "valuation_basis": "nominal",
             "tolerance": "0.02",
-            "minimum_trade_cny": "500",
             "allow_sell": True,
             "allow_fx": True,
         },
@@ -139,7 +149,6 @@ async def test_general_settings_round_trip_decimal_strings(api_client, db_sessio
                 "alpha_vantage",
             ],
             "default_tolerance": "0.025",
-            "minimum_trade_amount_cny": "800",
             "allow_sell": False,
             "allow_fx": True,
         },
@@ -153,10 +162,11 @@ async def test_general_settings_round_trip_decimal_strings(api_client, db_sessio
     assert fetched.json() == response.json()
     assert response.json()["refresh_time"] == "09:15"
     assert response.json()["default_tolerance"] == "0.025"
-    assert response.json()["minimum_trade_amount_cny"] == "800"
+    assert response.json()["minimum_trade_amount_cny"] == "500"
     assert stored.refresh_hour == 9
     assert stored.refresh_minute == 15
     assert stored.default_tolerance == Decimal("0.025")
+    assert stored.minimum_trade_amount_cny == Decimal("500")
 
 
 async def test_legacy_provider_priority_inserts_sina_after_yahoo(

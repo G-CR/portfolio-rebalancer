@@ -9,6 +9,8 @@ from app.core.config import get_settings
 from app.core.secrets import SecretStore
 from app.db.models import MarketData
 from app.db.models import AssetClass, EncryptedSecret, Holding, Setting
+from app.schemas.rebalance import TradeSuggestionResponse
+from app.services import email_digest as email_digest_service
 from app.services.email_digest import (
     run_manual_digest,
     send_daily_digest_if_configured,
@@ -139,7 +141,28 @@ async def test_digest_sends_full_analysis_email(api_client, db_session, monkeypa
     await _enable_email(api_client, db_session)
     await _seed_portfolio(api_client, db_session)
     send = AsyncMock()
+    original_preview = email_digest_service.preview_rebalance_with_defaults
+
+    async def preview_with_optimizer_reason(session):
+        preview = await original_preview(session)
+        trade = TradeSuggestionResponse(
+            symbol="510100",
+            action="buy",
+            quantity="10",
+            amount_cny="10",
+            amount_trade_currency="10",
+            reason_code="REDUCE_MAX_DRIFT",
+            reason="该交易用于降低投资组合的最大配置偏离。",
+        )
+        return preview.model_copy(
+            update={"result": preview.result.model_copy(update={"trades": (trade,)})}
+        )
+
     monkeypatch.setattr("app.services.email_digest.send_email", send)
+    monkeypatch.setattr(
+        "app.services.email_digest.preview_rebalance_with_defaults",
+        preview_with_optimizer_reason,
+    )
 
     await send_daily_digest_if_configured(
         db_session,
@@ -153,6 +176,9 @@ async def test_digest_sends_full_analysis_email(api_client, db_session, monkeypa
     assert "总市值" in html
     assert "份额" in html
     assert "再平衡建议" in html
+    assert "标的0（510100）" in html
+    assert "该交易用于降低投资组合的最大配置偏离。" in html
+    assert "UNDERWEIGHT_WITH_CASH" not in html
 
 
 async def test_digest_skipped_for_empty_portfolio(api_client, db_session, monkeypatch) -> None:
