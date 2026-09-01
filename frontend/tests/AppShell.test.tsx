@@ -85,6 +85,15 @@ describe("AppShell", () => {
     expect(screen.getByRole("heading", { name: "总览" })).toBeInTheDocument();
   });
 
+  it("does not expose manual snapshot capture as a global command", () => {
+    installMatchMedia(false);
+    renderShell();
+
+    expect(screen.queryByRole("button", { name: "保存快照" })).not.toBeInTheDocument();
+    expect(screen.queryByTitle("保存当前快照")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+  });
+
   it("focuses the first route and isolates the background when mobile navigation opens", async () => {
     installMatchMedia(true);
     const user = userEvent.setup();
