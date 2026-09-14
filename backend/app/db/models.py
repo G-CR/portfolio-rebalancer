@@ -349,6 +349,32 @@ class RebalancePlan(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class RebalancePreviewJob(Base):
+    __tablename__ = "rebalance_preview_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'refreshing', 'calculating', 'succeeded', 'failed')",
+            name="ck_rebalance_preview_jobs_status",
+        ),
+        Index("ix_rebalance_preview_jobs_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    request_token: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    error: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Setting(Base):
     __tablename__ = "settings"
     __table_args__ = (

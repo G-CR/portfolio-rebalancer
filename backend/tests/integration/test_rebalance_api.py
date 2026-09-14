@@ -21,6 +21,7 @@ from app.services.backup_export import export_database_backup
 from app.services.backup_restore import restore_validated_backup
 from app.services.backup_storage import BackupStorage
 from app.services.backup_validation import validate_backup
+import app.worker as worker_module
 
 NOW = datetime(2026, 7, 14, 8, 0, tzinfo=UTC)
 
@@ -163,6 +164,39 @@ def _preview_payload(
     }
 
 
+async def test_preview_job_creation_returns_queued_status_without_running_preview(
+    api_client,
+) -> None:
+    response = await api_client.post("/api/rebalance/preview-jobs", json=_preview_payload())
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["result"] is None
+    assert payload["error"] is None
+
+
+async def test_worker_completes_a_queued_preview_job(api_client, db_session, monkeypatch) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+
+    async def no_refresh(_session) -> None:
+        return None
+
+    monkeypatch.setattr(worker_module, "refresh_all_required_data", no_refresh)
+    created = await api_client.post(
+        "/api/rebalance/preview-jobs",
+        json=_preview_payload(request_token="worker-preview-job"),
+    )
+    assert created.status_code == 202, created.text
+
+    assert await worker_module.run_preview_job_once() is True
+
+    status = await api_client.get(f"/api/rebalance/preview-jobs/{created.json()['id']}")
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "succeeded"
+    assert status.json()["result"]["status"] == "ok"
+
+
 async def test_preview_refreshes_once_per_browser_session_and_includes_basis_comparison(
     api_client,
     db_session,
@@ -179,10 +213,16 @@ async def test_preview_refreshes_once_per_browser_session_and_includes_basis_com
         _record_refresh,
     )
 
-    first = await api_client.post("/api/rebalance/preview", json=_preview_payload())
+    first = await api_client.post(
+        "/api/rebalance/preview",
+        json=_preview_payload(session_token="refresh-once-session"),
+    )
     second = await api_client.post(
         "/api/rebalance/preview",
-        json=_preview_payload(request_token="preview-request-2"),
+        json=_preview_payload(
+            session_token="refresh-once-session",
+            request_token="preview-request-2",
+        ),
     )
 
     assert first.status_code == 200, first.text
@@ -190,7 +230,7 @@ async def test_preview_refreshes_once_per_browser_session_and_includes_basis_com
     assert len(refresh_calls) == 1
 
     payload = first.json()
-    assert payload["session_token"] == "browser-session-1"
+    assert payload["session_token"] == "refresh-once-session"
     assert payload["request_token"] == "preview-request-1"
     assert payload["status"] == "ok"
     assert payload["data_status"] == "valid"
@@ -305,10 +345,10 @@ async def test_preview_caps_sell_inventory_at_the_preferred_holding_quantity(
     captured: list[tuple[Decimal, Decimal]] = []
     run_optimizer = rebalancing_service.rebalance
 
-    def _capture_inventory(assets, cash, options):
+    def _capture_inventory(assets, cash, options, **kwargs):
         cny_asset = next(item for item in assets if item.symbol == "CNY-FUND")
         captured.append((cny_asset.current_value_cny, cny_asset.max_sell_quantity))
-        return run_optimizer(assets, cash, options)
+        return run_optimizer(assets, cash, options, **kwargs)
 
     async def _record_refresh(_session) -> None:
         return None
@@ -398,6 +438,40 @@ async def test_preview_maps_optimizer_certification_failure_to_typed_service_err
         "message": "无法在 1bp 精度内生成可认证的再平衡方案。",
         "explored_nodes": 250_000,
         "optimality_gap": "0.0002",
+    }
+
+
+async def test_preview_maps_optimizer_timeout_to_a_distinct_typed_service_error(
+    api_client,
+    db_session,
+    monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+
+    async def _record_refresh(_session) -> None:
+        return None
+
+    def _timeout_optimization(*_args, **_kwargs):
+        raise OptimizationFailure(
+            "REBALANCE_OPTIMIZATION_TIMEOUT",
+            explored_nodes=42,
+            gap=Decimal("0.001"),
+        )
+
+    monkeypatch.setattr(rebalancing_service, "refresh_all_required_data", _record_refresh)
+    monkeypatch.setattr(rebalancing_service, "rebalance", _timeout_optimization)
+
+    response = await api_client.post(
+        "/api/rebalance/preview",
+        json=_preview_payload(session_token="timeout-session"),
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == {
+        "code": "REBALANCE_OPTIMIZATION_TIMEOUT",
+        "message": "再平衡计算超出时间预算。",
+        "explored_nodes": 42,
+        "optimality_gap": "0.001",
     }
 
 

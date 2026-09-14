@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
-import type { RebalancePlan, RebalancePreview, RebalancePreviewPayload } from "../../api/types";
+import type { RebalancePlan, RebalancePreviewJob, RebalancePreviewPayload } from "../../api/types";
 
 export const rebalancePlansQueryKey = ["rebalance", "plans"] as const;
 
@@ -14,10 +14,22 @@ export function useRebalancePlans() {
 
 export function useRebalancePreview() {
   return useMutation({
-    mutationFn: (payload: RebalancePreviewPayload) => apiRequest<RebalancePreview>("/api/rebalance/preview", {
+    mutationFn: (payload: RebalancePreviewPayload) => apiRequest<RebalancePreviewJob>("/api/rebalance/preview-jobs", {
       method: "POST",
       body: jsonBody(payload),
     }),
+  });
+}
+
+export function useRebalancePreviewJob(jobId: string | null) {
+  return useQuery({
+    queryKey: ["rebalance", "preview-job", jobId],
+    enabled: jobId !== null,
+    queryFn: () => apiRequest<RebalancePreviewJob>(`/api/rebalance/preview-jobs/${jobId}`),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "succeeded" || status === "failed" ? false : 1000;
+    },
   });
 }
 

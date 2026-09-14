@@ -26,6 +26,10 @@ function previewHandlers() {
   ];
 }
 
+function succeededPreviewJob(result = rebalancePreviewFixture) {
+  return { id: "preview-job-test", status: "succeeded", result, error: null };
+}
+
 it("loads persisted defaults without starting a preview", async () => {
   let previewRequests = 0;
   renderWithProviders(<RebalancePage />, {
@@ -72,9 +76,9 @@ it("saves the current defaults before calculating", async () => {
         savedDefaults = await request.json() as Record<string, unknown>;
         return HttpResponse.json({ ...savedDefaults, updated_at: "2026-07-15T00:00:00Z" });
       }),
-      http.post("/api/rebalance/preview", async ({ request }) => {
+      http.post("/api/rebalance/preview-jobs", async ({ request }) => {
         previewPayload = await request.json() as Record<string, unknown>;
-        return HttpResponse.json(rebalancePreviewFixture);
+        return HttpResponse.json(succeededPreviewJob());
       }),
     ],
   });
@@ -110,7 +114,7 @@ it("continues calculating when persisted defaults cannot be saved", async () => 
       http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
       http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
       http.put("/api/settings/rebalance-defaults", () => HttpResponse.json({ detail: "failed" }, { status: 500 })),
-      http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
+      http.post("/api/rebalance/preview-jobs", () => HttpResponse.json(succeededPreviewJob())),
     ],
   });
   const user = userEvent.setup();
@@ -118,7 +122,7 @@ it("continues calculating when persisted defaults cannot be saved", async () => 
   await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
-  expect(screen.getByText("测算成功，但默认配置保存失败。")).toBeInTheDocument();
+  expect(screen.getByText("测算任务已提交，但默认配置保存失败。")).toBeInTheDocument();
 });
 
 it("waits for an explicit command before the first preview", async () => {
@@ -128,9 +132,9 @@ it("waits for an explicit command before the first preview", async () => {
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
       http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
       http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
-      http.post("/api/rebalance/preview", () => {
+      http.post("/api/rebalance/preview-jobs", () => {
         previewRequests += 1;
-        return HttpResponse.json(rebalancePreviewFixture);
+        return HttpResponse.json(succeededPreviewJob());
       }),
     ],
   });
@@ -218,10 +222,10 @@ it("keeps valuation-basis changes local until calculation is requested", async (
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
       http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
       http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
-      http.post("/api/rebalance/preview", async ({ request }) => {
+      http.post("/api/rebalance/preview-jobs", async ({ request }) => {
         const payload = await request.json() as { valuation_basis: string };
         requestedBases.push(payload.valuation_basis);
-        return HttpResponse.json({ ...rebalancePreviewFixture, valuation_basis: payload.valuation_basis });
+        return HttpResponse.json(succeededPreviewJob({ ...rebalancePreviewFixture, valuation_basis: payload.valuation_basis }));
       }),
     ],
   });
@@ -241,14 +245,17 @@ it("requires stale-data acknowledgement before saving", async () => {
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
       http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
       http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
-      http.post("/api/rebalance/preview", () => HttpResponse.json({
-        detail: {
+      http.post("/api/rebalance/preview-jobs", () => HttpResponse.json({
+        id: "preview-job-stale",
+        status: "failed",
+        result: null,
+        error: {
           code: "REBALANCE_STALE_DATA_ACK_REQUIRED",
           message: "Stale market data requires explicit acknowledgement before previewing a rebalance plan.",
           status: "stale",
           items: ["price:SPY"],
         },
-      }, { status: 409 })),
+      })),
     ],
   });
   const user = userEvent.setup();

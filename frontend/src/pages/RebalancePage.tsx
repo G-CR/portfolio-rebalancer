@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
-import type { RebalanceDefaultsUpdate, RebalancePlan, RebalancePreview, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
+import type { ApiErrorDetail, RebalanceDefaultsUpdate, RebalancePlan, RebalancePreview, RebalancePreviewJobStatus, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
 import { useAssetClasses } from "../features/assetClasses/api";
 import { formatPercent } from "../features/analytics/format";
 import { useHoldings } from "../features/holdings/api";
@@ -14,6 +14,7 @@ import {
   useCreateRebalancePlan,
   useRebalancePlans,
   useRebalancePreview,
+  useRebalancePreviewJob,
   useStartRebalancePlan,
 } from "../features/rebalance/api";
 import { ProjectedAllocation } from "../features/rebalance/ProjectedAllocation";
@@ -89,6 +90,12 @@ function previewFromPlan(plan: RebalancePlan): RebalancePreview {
   };
 }
 
+function previewJobMessage(status: RebalancePreviewJobStatus | undefined) {
+  if (status === "refreshing") return "正在刷新行情";
+  if (status === "calculating") return "正在计算方案";
+  return "正在排队测算";
+}
+
 export function RebalancePage() {
   const sessionToken = useRef(token("rebalance-session"));
   const [form, setForm] = useState(initialForm);
@@ -98,6 +105,10 @@ export function RebalancePage() {
   const [defaultsWarning, setDefaultsWarning] = useState<string | null>(null);
   const [defaultsReady, setDefaultsReady] = useState(false);
   const preview = useRebalancePreview();
+  const [previewJobId, setPreviewJobId] = useState<string | null>(null);
+  const [previewResult, setPreviewResult] = useState<RebalancePreview | null>(null);
+  const [previewJobFailure, setPreviewJobFailure] = useState<ApiErrorDetail | null>(null);
+  const previewJob = useRebalancePreviewJob(previewJobId);
   const plans = useRebalancePlans();
   const refreshVersion = useMarketDataRefreshVersion().data;
   const observedRefreshVersion = useRef(refreshVersion);
@@ -126,11 +137,27 @@ export function RebalancePage() {
     if (refreshVersion === observedRefreshVersion.current) return;
     observedRefreshVersion.current = refreshVersion;
     preview.reset();
+    setPreviewResult(null);
+    setPreviewJobId(null);
+    setPreviewJobFailure(null);
     setPlan((current) => current?.status === "in_progress" ? current : null);
     setIsDirty(false);
     setOperationError(null);
     setDefaultsWarning(null);
   }, [refreshVersion]);
+
+  useEffect(() => {
+    const job = previewJob.data;
+    if (!job) return;
+    if (job.status === "succeeded" && job.result) {
+      setPreviewResult(job.result);
+      setPreviewJobId(null);
+      setIsDirty(false);
+    } else if (job.status === "failed" && job.error) {
+      setPreviewJobFailure(job.error);
+      setPreviewJobId(null);
+    }
+  }, [previewJob.data]);
 
   useEffect(() => {
     if (defaultsHydrated.current || (!defaults.data && !defaults.isError)) return;
@@ -160,10 +187,19 @@ export function RebalancePage() {
       defaultsSaveFailed = true;
     }
     try {
-      await preview.mutateAsync(payloadFor(nextForm, sessionToken.current));
-      if (defaultsSaveFailed) setDefaultsWarning("测算成功，但默认配置保存失败。");
+      const job = await preview.mutateAsync(payloadFor(nextForm, sessionToken.current));
+      setPreviewResult(null);
+      setPreviewJobFailure(null);
+      if (job.status === "succeeded" && job.result) {
+        setPreviewResult(job.result);
+        setIsDirty(false);
+      } else if (job.status === "failed" && job.error) {
+        setPreviewJobFailure(job.error);
+      } else {
+        setPreviewJobId(job.id);
+      }
+      if (defaultsSaveFailed) setDefaultsWarning("测算任务已提交，但默认配置保存失败。");
       setPlan(null);
-      setIsDirty(false);
     } catch {
       // Mutation state renders the actionable API error.
     }
@@ -222,9 +258,13 @@ export function RebalancePage() {
     }
   };
 
-  const staleError = preview.error instanceof ApiError && preview.error.code === "REBALANCE_STALE_DATA_ACK_REQUIRED";
-  const generalError = preview.error instanceof ApiError && !staleError ? preview.error.message : null;
-  const currentPreview = preview.data ?? (plan ? previewFromPlan(plan) : undefined);
+  const previewJobError = previewJobFailure ?? (previewJob.data?.status === "failed" ? previewJob.data.error : null);
+  const staleError = (preview.error instanceof ApiError && preview.error.code === "REBALANCE_STALE_DATA_ACK_REQUIRED")
+    || previewJobError?.code === "REBALANCE_STALE_DATA_ACK_REQUIRED";
+  const generalError = previewJobError && !staleError
+    ? previewJobError.message
+    : (preview.error instanceof ApiError && !staleError ? preview.error.message : null);
+  const currentPreview = previewResult ?? (plan ? previewFromPlan(plan) : undefined);
   const activePlan = plan?.status === "in_progress" ? plan : null;
   const planLookupPending = !planRestoreCompleted && !plans.isError;
   const displayedForm = activePlan ? {
@@ -251,14 +291,14 @@ export function RebalancePage() {
       </header>
       <div className={styles.workspace}>
         {!defaultsReady ? <div className={styles.defaultsLoading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入上次使用的资金与约束</div> : <>
-          <RebalanceInputs value={displayedForm} pending={preview.isPending || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
+          <RebalanceInputs value={displayedForm} pending={preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
           <main className={styles.results}>
           {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
           {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
-          {!preview.isPending && !currentPreview && !preview.error ? <div className={styles.previewPrompt}>
+          {!preview.isPending && !previewJobId && !currentPreview && !preview.error && !previewJobError ? <div className={styles.previewPrompt}>
             <Calculator size={18} aria-hidden="true" /><div><strong>配置本次资金与约束后开始测算</strong><span>行情刷新将在你点击开始测算后执行。</span></div>
           </div> : null}
-          {preview.isPending && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入行情并计算方案</div> : null}
+          {(preview.isPending || previewJobId) && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />{previewJobMessage(previewJob.data?.status)}</div> : null}
           {staleError ? <section className={styles.stale} role="alert">
             <AlertTriangle size={20} aria-hidden="true" /><div><h2>部分行情数据已过期</h2><p>保存正式方案前，需要明确确认使用当前旧值。重新测算后，结果会保留过期数据标记。</p><label><input type="checkbox" checked={form.acknowledgeStaleData} onChange={(event) => { setForm({ ...form, acknowledgeStaleData: event.target.checked }); setIsDirty(true); }} />我已了解数据时效风险</label></div>
           </section> : null}

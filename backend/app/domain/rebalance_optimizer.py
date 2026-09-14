@@ -11,6 +11,7 @@ from decimal import (
     localcontext,
 )
 from heapq import heappop, heappush
+from time import monotonic
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -1129,6 +1130,7 @@ def optimize_discrete(
     *,
     allow_sell: bool,
     allow_fx: bool,
+    deadline: float | None = None,
 ) -> CertifiedPlan:
     """Return a deterministic executable plan with a certified drift gap."""
     ordered_assets = tuple(sorted(assets, key=_asset_key))
@@ -1146,6 +1148,12 @@ def optimize_discrete(
 
     with localcontext() as context:
         context.prec = _calculation_precision(decimal_inputs)
+        if deadline is not None and monotonic() >= deadline:
+            raise OptimizationFailure(
+                "REBALANCE_OPTIMIZATION_TIMEOUT",
+                explored_nodes=0,
+                gap=Decimal("0"),
+            )
         root_bound = continuous_relaxation(
             ordered_assets,
             cash,
@@ -1177,6 +1185,12 @@ def optimize_discrete(
         push_node(root_bound.lot_bounds)
         explored_nodes = 0
         while heap:
+            if deadline is not None and monotonic() >= deadline:
+                best_open_bound = min(node.bound.max_drift for _, _, node in heap)
+                gap = max(Decimal("0"), incumbent.max_drift - best_open_bound)
+                raise OptimizationFailure(
+                    "REBALANCE_OPTIMIZATION_TIMEOUT", explored_nodes, gap
+                )
             if explored_nodes == NODE_BUDGET:
                 best_open_bound = min(node.bound.max_drift for _, _, node in heap)
                 gap = max(Decimal("0"), incumbent.max_drift - best_open_bound)

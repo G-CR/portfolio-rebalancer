@@ -420,6 +420,15 @@ export interface RebalancePreview {
   fx_comparison: RebalanceComparison;
 }
 
+export type RebalancePreviewJobStatus = "queued" | "refreshing" | "calculating" | "succeeded" | "failed";
+
+export interface RebalancePreviewJob {
+  id: string;
+  status: RebalancePreviewJobStatus;
+  result: RebalancePreview | null;
+  error: ApiErrorDetail | null;
+}
+
 export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | "request_token" | "status" | "refresh_attempted" | "acknowledge_stale_data"> {
   id: string;
   status: "draft" | "in_progress" | "completed" | "cancelled";

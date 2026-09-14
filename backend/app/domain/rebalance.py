@@ -240,6 +240,8 @@ def rebalance(
     assets: Sequence[AssetInput],
     cash: CashInput,
     options: RebalanceOptions,
+    *,
+    deadline: float | None = None,
 ) -> RebalanceResult:
     asset_list = tuple(
         sorted(assets, key=lambda item: (item.asset_class_id, item.symbol))
@@ -283,6 +285,7 @@ def rebalance(
             cash,
             allow_sell=False,
             allow_fx=options.allow_fx,
+            deadline=deadline,
         )
         selected = buy_only
         sell_phase_used = False
@@ -292,6 +295,7 @@ def rebalance(
                 cash,
                 allow_sell=True,
                 allow_fx=options.allow_fx,
+                deadline=deadline,
             )
             sell_phase_used = True
 

@@ -19,6 +19,7 @@ BUSINESS_TABLES = (
     "market_data_overrides",
     "market_data",
     "rebalance_plans",
+    "rebalance_preview_jobs",
     "encrypted_secrets",
     "settings",
     "snapshots",

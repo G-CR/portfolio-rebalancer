@@ -15,11 +15,24 @@ from app.db.models import Setting
 from app.db.session import SessionFactory
 from app.services.email_digest import send_daily_digest_if_configured
 from app.services.market_data import refresh_all_required_data
+from app.services.rebalance_preview_jobs import (
+    claim_next_preview_job,
+    complete_preview_job,
+    fail_preview_job,
+    mark_preview_job_calculating,
+    requeue_abandoned_preview_jobs,
+)
+from app.services.rebalancing import preview_rebalance_from_current_data
+from app.schemas.rebalance import RebalancePreviewRequest
+from app.services.errors import ServiceError
 from app.services.snapshots import create_daily_snapshot_if_complete
 
 logger = logging.getLogger(__name__)
 
 REFRESH_SCHEDULE_POLL_SECONDS = 30
+PREVIEW_JOB_POLL_SECONDS = 1
+PREVIEW_JOB_RECOVERY_SECONDS = 120
+PREVIEW_JOB_OPTIMIZATION_SECONDS = 15
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +63,56 @@ async def scheduled_refresh() -> None:
                 await send_daily_digest_if_configured(session)
     except Exception:
         logger.exception("Daily email digest failed after successful market refresh")
+
+
+async def run_preview_job_once() -> bool:
+    async with SessionFactory() as session:
+        async with session.begin():
+            await requeue_abandoned_preview_jobs(
+                session,
+                recovery_seconds=PREVIEW_JOB_RECOVERY_SECONDS,
+            )
+            job = await claim_next_preview_job(session)
+    if job is None:
+        return False
+
+    try:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await refresh_all_required_data(session)
+                await mark_preview_job_calculating(session, job.id)
+        async with SessionFactory() as session:
+            async with session.begin():
+                result = await preview_rebalance_from_current_data(
+                    session,
+                    RebalancePreviewRequest.model_validate(job.payload),
+                    optimization_deadline_seconds=PREVIEW_JOB_OPTIMIZATION_SECONDS,
+                )
+                await complete_preview_job(session, job.id, result)
+    except ServiceError as exc:
+        async with SessionFactory() as session:
+            async with session.begin():
+                await fail_preview_job(session, job.id, exc.to_detail())
+    except Exception:
+        logger.exception("Rebalance preview job failed job_id=%s", job.id)
+        async with SessionFactory() as session:
+            async with session.begin():
+                await fail_preview_job(
+                    session,
+                    job.id,
+                    {
+                        "code": "REBALANCE_PREVIEW_JOB_FAILED",
+                        "message": "Rebalance preview job failed.",
+                    },
+                )
+    return True
+
+
+async def watch_preview_jobs() -> None:
+    while True:
+        processed = await run_preview_job_once()
+        if not processed:
+            await asyncio.sleep(PREVIEW_JOB_POLL_SECONDS)
 
 
 def configure_refresh_job(
@@ -134,12 +197,16 @@ async def _run() -> None:
     )
     scheduler.start()
     watcher = asyncio.create_task(watch_refresh_schedule(scheduler, schedule))
+    preview_watcher = asyncio.create_task(watch_preview_jobs())
     try:
         await asyncio.Event().wait()
     finally:
         watcher.cancel()
+        preview_watcher.cancel()
         with suppress(asyncio.CancelledError):
             await watcher
+        with suppress(asyncio.CancelledError):
+            await preview_watcher
         scheduler.shutdown(wait=False)
 
 

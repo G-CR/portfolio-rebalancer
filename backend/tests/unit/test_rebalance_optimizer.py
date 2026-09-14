@@ -50,6 +50,19 @@ SMALL_ASSETS = (
 SMALL_CASH = CashInput(Decimal("30"), Decimal("20") / Decimal("7"), Decimal("7"))
 
 
+def test_optimizer_stops_when_the_monotonic_deadline_has_expired() -> None:
+    with pytest.raises(OptimizationFailure) as raised:
+        optimize_discrete(
+            SMALL_ASSETS,
+            SMALL_CASH,
+            allow_sell=True,
+            allow_fx=True,
+            deadline=0,
+        )
+
+    assert raised.value.code == "REBALANCE_OPTIMIZATION_TIMEOUT"
+
+
 def _representative_large_assets() -> tuple[AssetInput, ...]:
     return (
         AssetInput(

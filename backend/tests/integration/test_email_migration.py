@@ -93,7 +93,7 @@ async def test_settings_email_migration_round_trip(_reset_database) -> None:
 
         await _run_alembic_upgrade("head")
         after_upgrade = await _email_settings_migration_state()
-        assert after_upgrade["revision"] == "20260803_0008"
+        assert after_upgrade["revision"] == "20260915_0009"
         assert EXPECTED_EMAIL_COLUMNS <= after_upgrade["columns"]
         assert "ck_settings_ck_settings_email_smtp_security" in after_upgrade["constraints"]
 

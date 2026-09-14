@@ -293,7 +293,7 @@ async def test_run_cancels_and_awaits_watcher_before_scheduler_shutdown(monkeypa
     with pytest.raises(asyncio.CancelledError):
         await worker_module._run()
 
-    assert lifecycle == ["cancel", "await", "shutdown"]
+    assert lifecycle == ["cancel", "cancel", "await", "await", "shutdown"]
 
 
 def test_compose_worker_has_restart_policy() -> None:

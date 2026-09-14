@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
@@ -167,6 +167,24 @@ class RebalancePreviewResponse(BaseModel):
     valuation_basis: Literal["actual", "fx_neutral"]
     result: RebalanceResultResponse
     fx_comparison: RebalanceComparisonResponse
+
+
+RebalancePreviewJobStatus = Literal[
+    "queued",
+    "refreshing",
+    "calculating",
+    "succeeded",
+    "failed",
+]
+
+
+class RebalancePreviewJobStatusResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    status: RebalancePreviewJobStatus
+    result: RebalancePreviewResponse | None = None
+    error: dict[str, Any] | None = None
 
 
 class RebalancePlanResponse(BaseModel):

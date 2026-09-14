@@ -12,10 +12,12 @@ from app.schemas.rebalance import (
     RebalancePlanCreateRequest,
     RebalancePlanResponse,
     RebalancePlanTransitionRequest,
+    RebalancePreviewJobStatusResponse,
     RebalancePreviewRequest,
     RebalancePreviewResponse,
 )
 from app.services.errors import ServiceError
+from app.services.rebalance_preview_jobs import create_preview_job, get_preview_job
 from app.services.rebalancing import (
     cancel_rebalance_plan,
     complete_rebalance_plan,
@@ -28,6 +30,26 @@ from app.services.rebalancing import (
 
 router = APIRouter(prefix="/rebalance", tags=["rebalance"])
 logger = logging.getLogger(__name__)
+
+
+@router.post("/preview-jobs", response_model=RebalancePreviewJobStatusResponse, status_code=202)
+async def post_rebalance_preview_job(
+    payload: RebalancePreviewRequest,
+    http_response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> RebalancePreviewJobStatusResponse:
+    response, created = await _run_write(session, lambda: create_preview_job(session, payload))
+    if not created:
+        http_response.status_code = 200
+    return response
+
+
+@router.get("/preview-jobs/{job_id}", response_model=RebalancePreviewJobStatusResponse)
+async def get_rebalance_preview_job(
+    job_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> RebalancePreviewJobStatusResponse:
+    return await _run_read(lambda: get_preview_job(session, job_id))
 
 
 @router.post("/preview", response_model=RebalancePreviewResponse)

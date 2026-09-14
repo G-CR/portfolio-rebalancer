@@ -7,6 +7,7 @@ import type { ReactElement, ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 
 import { createQueryClient } from "../src/app/providers";
+import { rebalancePreviewFixture } from "./fixtures";
 
 export const server = setupServer(
   http.get("/api/settings/rebalance-defaults", () => HttpResponse.json({
@@ -24,6 +25,18 @@ export const server = setupServer(
     updated_at: "2026-07-15T00:00:00Z",
   })),
   http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
+  http.post("/api/rebalance/preview-jobs", () => HttpResponse.json({
+    id: "preview-job-test",
+    status: "succeeded",
+    result: rebalancePreviewFixture,
+    error: null,
+  })),
+  http.get("/api/rebalance/preview-jobs/:jobId", () => HttpResponse.json({
+    id: "preview-job-test",
+    status: "succeeded",
+    result: rebalancePreviewFixture,
+    error: null,
+  })),
   http.get("/api/analytics/portfolio", () => HttpResponse.json({
     as_of: null,
     data_status: "setup",

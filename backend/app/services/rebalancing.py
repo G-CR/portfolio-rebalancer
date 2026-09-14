@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 import logging
+from time import monotonic
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -142,6 +143,31 @@ async def preview_rebalance(
         payload=payload,
         prepared=prepared,
         refresh_attempted=refresh_attempted,
+    )
+
+
+async def preview_rebalance_from_current_data(
+    session: AsyncSession,
+    payload: RebalancePreviewRequest,
+    *,
+    optimization_deadline_seconds: float | None = None,
+) -> RebalancePreviewResponse:
+    async with _SESSION_REFRESH_LOCK:
+        _REFRESHED_PREVIEW_SESSIONS.add(payload.session_token)
+    prepared = await _prepare_rebalance(
+        session,
+        payload=payload,
+        allow_stale=payload.acknowledge_stale_data,
+        optimization_deadline=(
+            monotonic() + optimization_deadline_seconds
+            if optimization_deadline_seconds is not None
+            else None
+        ),
+    )
+    return _preview_response(
+        payload=payload,
+        prepared=prepared,
+        refresh_attempted=True,
     )
 
 
@@ -387,6 +413,7 @@ async def _prepare_rebalance(
     *,
     payload: RebalancePreviewRequest,
     allow_stale: bool,
+    optimization_deadline: float | None = None,
 ) -> _PreparedRebalance:
     context = await _load_rebalance_context(session)
     statuses = {item.status for item in context["effective_inputs"].values()}
@@ -441,6 +468,7 @@ async def _prepare_rebalance(
         tolerance=resolved_constraints.tolerance,
         allow_sell=resolved_constraints.allow_sell,
         allow_fx=resolved_constraints.allow_fx,
+        optimization_deadline=optimization_deadline,
     )
     alternate_basis: Literal["actual", "fx_neutral"] = (
         "fx_neutral" if payload.valuation_basis == "actual" else "actual"
@@ -455,6 +483,7 @@ async def _prepare_rebalance(
         tolerance=resolved_constraints.tolerance,
         allow_sell=resolved_constraints.allow_sell,
         allow_fx=resolved_constraints.allow_fx,
+        optimization_deadline=optimization_deadline,
     )
     return _PreparedRebalance(
         data_status=data_status,
@@ -782,6 +811,7 @@ def _run_engine(
     tolerance: Decimal,
     allow_sell: bool,
     allow_fx: bool,
+    optimization_deadline: float | None = None,
 ) -> RebalanceResult:
     holdings_by_class: dict[UUID, list[Holding]] = defaultdict(list)
     for holding in holdings:
@@ -841,8 +871,16 @@ def _run_engine(
                 allow_sell=allow_sell,
                 allow_fx=allow_fx,
             ),
+            deadline=optimization_deadline,
         )
     except OptimizationFailure as exc:
+        if exc.code == "REBALANCE_OPTIMIZATION_TIMEOUT":
+            raise ServiceError(
+                422,
+                "REBALANCE_OPTIMIZATION_TIMEOUT",
+                "再平衡计算超出时间预算。",
+                {"explored_nodes": exc.explored_nodes, "optimality_gap": format(exc.gap, "f")},
+            ) from exc
         raise ServiceError(
             422,
             "REBALANCE_OPTIMIZATION_UNCERTIFIED",
