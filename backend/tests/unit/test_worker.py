@@ -28,6 +28,10 @@ class _FakeScheduler:
         self.shutdown_calls.append(wait)
 
 
+def test_preview_job_uses_a_five_minute_optimization_budget() -> None:
+    assert worker_module.PREVIEW_JOB_OPTIMIZATION_SECONDS == 300
+
+
 def test_build_scheduler_uses_configured_timezone_and_single_instance(monkeypatch) -> None:
     fake_scheduler = _FakeScheduler(timezone="unused")
     monkeypatch.setattr(
