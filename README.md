@@ -88,3 +88,4 @@ The frontend bundles Noto Sans SC and IBM Plex Mono through Fontsource packages 
 
 - [User guide](docs/user-guide.md)
 - [Operations and recovery](docs/operations.md)
+- [Backend code deployment](docs/backend-deployment.md)
