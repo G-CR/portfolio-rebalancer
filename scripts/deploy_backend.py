@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Deploy backend code over the current server image without storing server details.
+"""基于服务器当前镜像部署后端代码，不在仓库保存服务器连接信息。
 
-Requires ``python -m pip install paramiko`` on the operator's computer.
-See ``docs/backend-deployment.md`` before running.
+先在本机运行 ``python -m pip install paramiko``。
+使用前请阅读 ``docs/backend-deployment.md``。
 """
 
 from __future__ import annotations
@@ -316,7 +316,7 @@ def main() -> int:
     client.set_missing_host_key_policy(VerifyHostKey())
     password = None
     if not args.identity_file and not args.use_agent:
-        password = getpass.getpass("SSH password (not saved): ")
+        password = getpass.getpass("SSH 密码（不会保存）：")
     try:
         client.connect(
             args.host,
