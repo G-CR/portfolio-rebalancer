@@ -39,6 +39,18 @@ class SinaProvider:
         )
         return self.normalize_price(symbol, payload, fetched_at=fetched_at)
 
+    async def fetch_domestic_price(self, symbol: str, market: str) -> MarketQuote:
+        identifier = _domestic_identifier(symbol, market)
+        fetched_at = datetime.now(UTC)
+        query = urlencode({"list": identifier})
+        payload = await asyncio.to_thread(
+            self._blocking_get_text,
+            f"https://hq.sinajs.cn/?{query}",
+        )
+        return self.normalize_domestic_price(
+            symbol, market, payload, fetched_at=fetched_at
+        )
+
     async def fetch_fx(self, base: str, quote: str) -> MarketQuote:
         if (base.upper(), quote.upper()) != ("USD", "CNY"):
             raise ProviderNotConfigured("Sina currently supports only USD/CNY FX.")
@@ -69,6 +81,32 @@ class SinaProvider:
             currency="USD",
             source=self.source,
             as_of=_parse_shanghai_timestamp(fields[3]),
+            fetched_at=fetched_at or datetime.now(UTC),
+        )
+
+    def normalize_domestic_price(
+        self,
+        symbol: str,
+        market: str,
+        payload: str,
+        *,
+        fetched_at: datetime | None = None,
+    ) -> MarketQuote:
+        identifier = _domestic_identifier(symbol, market)
+        prefix = f'var hq_str_{identifier}="'
+        if not payload.strip().startswith(prefix):
+            raise ProviderPayloadError("Sina payload quote identifier did not match.")
+        fields = _payload_fields(payload)
+        if len(fields) < 32:
+            raise ProviderPayloadError("Sina payload did not include a domestic quote.")
+
+        return MarketQuote(
+            key=f"price:{symbol}",
+            symbol=symbol,
+            value=decimal_from_value(fields[3]),
+            currency="CNY",
+            source=self.source,
+            as_of=_parse_shanghai_timestamp(f"{fields[30]} {fields[31]}"),
             fetched_at=fetched_at or datetime.now(UTC),
         )
 
@@ -108,6 +146,17 @@ def _payload_fields(payload: str) -> list[str]:
     if match is None or not match.group(1):
         raise ProviderPayloadError("Sina payload did not include quote data.")
     return match.group(1).split(",")
+
+
+def _domestic_identifier(symbol: str, market: str) -> str:
+    exchange = {"SH": "sh", "SSE": "sh", "SZ": "sz", "SZSE": "sz"}.get(
+        market.upper()
+    )
+    if exchange is None:
+        raise ProviderNotConfigured("Sina domestic quote requires SH or SZ market.")
+    if re.fullmatch(r"[0-9]{6}", symbol) is None:
+        raise ProviderPayloadError("Sina domestic quote requires a six-digit symbol.")
+    return f"{exchange}{symbol}"
 
 
 def _parse_shanghai_timestamp(value: str) -> datetime:

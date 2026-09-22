@@ -35,7 +35,7 @@ from app.services.settings import load_provider_credential_reader
 
 _ONE = Decimal("1")
 _ERROR_SUMMARY_LIMIT = 200
-_DOMESTIC_PROVIDER_ORDER = ("akshare", "tushare")
+_DOMESTIC_PROVIDER_ORDER = ("akshare", "sina", "tushare")
 _INTERNATIONAL_PROVIDER_ORDER = ("yahoo", "sina", "alpha_vantage")
 _FX_PROVIDER_ORDER = ("yahoo", "sina", "alpha_vantage")
 _PROVIDER_NAMES = frozenset(
@@ -156,6 +156,10 @@ class ProviderRegistry:
         ):
             provider = self._providers[provider_name]
             try:
+                if provider_name == "sina" and market.upper() in {
+                    "SH", "SZ", "SSE", "SZSE", "CN",
+                }:
+                    return await provider.fetch_domestic_price(symbol, market)
                 return await provider.fetch_price(symbol)
             except ProviderError as exc:
                 attempts.append(

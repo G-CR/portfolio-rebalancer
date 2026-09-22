@@ -44,6 +44,20 @@ class _FailedPriceProvider:
         raise self.error
 
 
+class _DomesticPriceProvider:
+    def __init__(self, quote: MarketQuote | None = None, error: Exception | None = None) -> None:
+        self.quote = quote
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+
+    async def fetch_domestic_price(self, symbol: str, market: str) -> MarketQuote:
+        self.calls.append((symbol, market))
+        if self.error is not None:
+            raise self.error
+        assert self.quote is not None
+        return self.quote
+
+
 def test_yahoo_normalizes_spy_close() -> None:
     payload = {
         "chart": {
@@ -145,6 +159,54 @@ def test_sina_normalizes_usd_cny_quote() -> None:
     assert quote.as_of == datetime(
         2026, 7, 15, 11, 13, 41, tzinfo=ZoneInfo("Asia/Shanghai")
     )
+
+
+def _domestic_sina_payload(identifier: str = "sh510300", price: str = "4.613") -> str:
+    fields = [
+        "沪深300ETF", "4.636", "4.608", price, *(["0"] * 26),
+        "2026-09-22", "15:34:59", "00",
+    ]
+    return f'var hq_str_{identifier}="{",".join(fields)}";'
+
+
+def test_sina_domestic_normalizes_etf_quote() -> None:
+    quote = SinaProvider().normalize_domestic_price(
+        "510300", "SH", _domestic_sina_payload()
+    )
+    assert quote.key == "price:510300"
+    assert quote.symbol == "510300"
+    assert quote.value == Decimal("4.613")
+    assert quote.currency == "CNY"
+    assert quote.source == "sina"
+    assert quote.as_of == datetime(
+        2026, 9, 22, 15, 34, 59, tzinfo=ZoneInfo("Asia/Shanghai")
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _domestic_sina_payload(identifier="sz510300"),
+        _domestic_sina_payload(price=""),
+        _domestic_sina_payload(price="0"),
+    ],
+)
+def test_sina_domestic_rejects_invalid_quote(payload: str) -> None:
+    with pytest.raises(ProviderPayloadError):
+        SinaProvider().normalize_domestic_price("510300", "SH", payload)
+
+
+@pytest.mark.asyncio
+async def test_sina_domestic_fetches_exchange_qualified_symbol(monkeypatch) -> None:
+    requested = []
+    monkeypatch.setattr(
+        SinaProvider,
+        "_blocking_get_text",
+        lambda self, url: requested.append(url) or _domestic_sina_payload(),
+    )
+    quote = await SinaProvider().fetch_domestic_price("510300", "SSE")
+    assert requested == ["https://hq.sinajs.cn/?list=sh510300"]
+    assert quote.value == Decimal("4.613")
 
 
 def test_sina_sends_required_headers(monkeypatch) -> None:
@@ -355,6 +417,9 @@ async def test_provider_selection_keeps_primary_failure_when_backup_is_unconfigu
     registry._providers["tushare"] = _FailedPriceProvider(
         ProviderNotConfigured("token SECRET is missing")
     )
+    registry._providers["sina"] = _DomesticPriceProvider(
+        error=ProviderRequestError("Sina temporarily unavailable")
+    )
 
     with pytest.raises(ProviderSelectionError) as exc_info:
         await registry.fetch_price("563020", market="SH")
@@ -365,14 +430,35 @@ async def test_provider_selection_keeps_primary_failure_when_backup_is_unconfigu
         for item in exc_info.value.attempts
     ] == [
         ("akshare", "provider_request_failed"),
+        ("sina", "provider_request_failed"),
         ("tushare", "provider_not_configured"),
     ]
     summary = _safe_failure_summary(exc_info.value)
     assert summary == (
-        "akshare: provider_request_failed; tushare: provider_not_configured"
+        "akshare: provider_request_failed; sina: provider_request_failed; "
+        "tushare: provider_not_configured"
     )
     assert "secret.invalid" not in summary
     assert "SECRET" not in summary
+
+
+@pytest.mark.asyncio
+async def test_domestic_fallback_uses_sina_after_akshare_failure() -> None:
+    registry = ProviderRegistry()
+    registry._providers["akshare"] = _FailedPriceProvider(
+        ProviderRequestError("Eastmoney disconnected")
+    )
+    quote = SinaProvider().normalize_domestic_price(
+        "510300", "SH", _domestic_sina_payload()
+    )
+    sina = _DomesticPriceProvider(quote=quote)
+    registry._providers["sina"] = sina
+    result = await registry.fetch_price("510300", market="SH")
+    assert result == quote
+    assert sina.calls == [("510300", "SH")]
+    assert _provider_order_for_price(
+        market="SH", preferred_source=None, provider_priority=[]
+    ) == ["akshare", "sina", "tushare"]
 
 
 def test_international_default_order_uses_sina_before_alpha_vantage() -> None:
