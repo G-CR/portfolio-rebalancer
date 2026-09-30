@@ -12,4 +12,4 @@
 - [x] 在 `frontend/src/features/settings/api.ts` 给手动发送设置 mutation key 和一小时缓存，通过 `useMutationState` 暴露共享状态，并在提交时拒绝重复 pending 请求。
 - [x] 在 `frontend/src/features/settings/EmailSettingsForm.tsx` 使用有共享状态的提交方法，避免未处理的失败 Promise。
 - [x] 运行邮件表单测试、前端全套测试和生产构建，检查 diff。210 个测试通过；TypeScript 的 19 项原有诊断没有增加。
-- [ ] 提交并推送代码，部署前端镜像；在公网页面用拦截的发送接口验证站内切页恢复，避免验收时发送实际邮件。
+- [x] 提交并推送代码，部署前端镜像；在公网页面用拦截的发送接口验证站内切页恢复，避免验收时发送实际邮件。公网浏览器已验证进行中状态、离开期间成功和失败、旧结果被新请求替换及重复提交保护，3 次验收请求全部被拦截。
