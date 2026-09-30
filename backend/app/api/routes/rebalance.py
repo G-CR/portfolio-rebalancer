@@ -17,7 +17,7 @@ from app.schemas.rebalance import (
     RebalancePreviewResponse,
 )
 from app.services.errors import ServiceError
-from app.services.rebalance_preview_jobs import create_preview_job, get_preview_job
+from app.services.rebalance_preview_jobs import create_preview_job, get_latest_preview_job, get_preview_job
 from app.services.rebalancing import (
     cancel_rebalance_plan,
     complete_rebalance_plan,
@@ -42,6 +42,13 @@ async def post_rebalance_preview_job(
     if not created:
         http_response.status_code = 200
     return response
+
+
+@router.get("/preview-jobs/latest", response_model=RebalancePreviewJobStatusResponse | None)
+async def get_latest_rebalance_preview_job(
+    session: AsyncSession = Depends(get_session),
+) -> RebalancePreviewJobStatusResponse | None:
+    return await _run_read(lambda: get_latest_preview_job(session))
 
 
 @router.get("/preview-jobs/{job_id}", response_model=RebalancePreviewJobStatusResponse)

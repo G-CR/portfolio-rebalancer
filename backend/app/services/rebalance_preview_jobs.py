@@ -14,6 +14,7 @@ from app.schemas.rebalance import (
     RebalancePreviewResponse,
 )
 from app.services.errors import ServiceError
+from app.services.rebalancing import current_preview_input_signature
 
 
 async def create_preview_job(
@@ -47,7 +48,34 @@ async def get_preview_job(
             "REBALANCE_PREVIEW_JOB_NOT_FOUND",
             "Rebalance preview job was not found.",
         )
-    return _status_response(job)
+    return await _status_with_current(session, job)
+
+
+async def get_latest_preview_job(
+    session: AsyncSession,
+) -> RebalancePreviewJobStatusResponse | None:
+    job = await session.scalar(
+        select(RebalancePreviewJob)
+        .order_by(RebalancePreviewJob.created_at.desc(), RebalancePreviewJob.id.desc())
+        .limit(1)
+    )
+    if job is None:
+        return None
+    return await _status_with_current(session, job)
+
+
+async def _status_with_current(
+    session: AsyncSession, job: RebalancePreviewJob
+) -> RebalancePreviewJobStatusResponse:
+    response = _status_response(job)
+    if job.status != "succeeded" or response.result is None:
+        return response
+    signature = response.result.input_signature
+    is_current = bool(
+        signature is not None
+        and signature == await current_preview_input_signature(session)
+    )
+    return response.model_copy(update={"is_current": is_current})
 
 
 def _status_response(job: RebalancePreviewJob) -> RebalancePreviewJobStatusResponse:
@@ -56,6 +84,9 @@ def _status_response(job: RebalancePreviewJob) -> RebalancePreviewJobStatusRespo
         status=job.status,
         result=job.result,
         error=job.error,
+        payload=job.payload,
+        created_at=job.created_at,
+        finished_at=job.finished_at,
     )
 
 

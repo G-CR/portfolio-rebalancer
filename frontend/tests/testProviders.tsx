@@ -25,6 +25,7 @@ export const server = setupServer(
     updated_at: "2026-07-15T00:00:00Z",
   })),
   http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
+  http.get("/api/rebalance/preview-jobs/latest", () => HttpResponse.json(null)),
   http.post("/api/rebalance/preview-jobs", () => HttpResponse.json({
     id: "preview-job-test",
     status: "succeeded",

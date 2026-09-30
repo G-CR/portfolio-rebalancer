@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -56,6 +57,7 @@ class RebalancePreviewRequest(BaseModel):
 
 class RebalancePlanCreateRequest(RebalancePreviewRequest):
     idempotency_key: str
+    expected_input_signature: str | None = None
 
 
 class RebalancePlanTransitionRequest(BaseModel):
@@ -167,6 +169,7 @@ class RebalancePreviewResponse(BaseModel):
     valuation_basis: Literal["actual", "fx_neutral"]
     result: RebalanceResultResponse
     fx_comparison: RebalanceComparisonResponse
+    input_signature: str | None = None
 
 
 RebalancePreviewJobStatus = Literal[
@@ -185,6 +188,10 @@ class RebalancePreviewJobStatusResponse(BaseModel):
     status: RebalancePreviewJobStatus
     result: RebalancePreviewResponse | None = None
     error: dict[str, Any] | None = None
+    payload: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
+    is_current: bool | None = None
 
 
 class RebalancePlanResponse(BaseModel):

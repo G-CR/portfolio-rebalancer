@@ -12,6 +12,7 @@ import {
   useCancelRebalancePlan,
   useCompleteRebalancePlan,
   useCreateRebalancePlan,
+  useLatestRebalancePreviewJob,
   useRebalancePlans,
   useRebalancePreview,
   useRebalancePreviewJob,
@@ -90,6 +91,18 @@ function previewFromPlan(plan: RebalancePlan): RebalancePreview {
   };
 }
 
+function formFromPreviewPayload(payload: RebalancePreviewPayload): RebalanceFormState {
+  return {
+    availableCny: payload.available_cny,
+    availableUsd: payload.available_usd,
+    tolerance: percentFromRatio(payload.tolerance),
+    allowSell: payload.allow_sell,
+    allowFx: payload.allow_fx,
+    valuationBasis: payload.valuation_basis,
+    acknowledgeStaleData: payload.acknowledge_stale_data,
+  };
+}
+
 function previewJobMessage(status: RebalancePreviewJobStatus | undefined) {
   if (status === "refreshing") return "正在刷新行情";
   if (status === "calculating") return "正在计算方案";
@@ -108,7 +121,14 @@ export function RebalancePage() {
   const [previewJobId, setPreviewJobId] = useState<string | null>(null);
   const [previewResult, setPreviewResult] = useState<RebalancePreview | null>(null);
   const [previewJobFailure, setPreviewJobFailure] = useState<ApiErrorDetail | null>(null);
+  const [restoredOutdated, setRestoredOutdated] = useState(false);
+  const [restoreHandled, setRestoreHandled] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const restoreHandledRef = useRef(false);
+  const hasSubmitted = useRef(false);
+  const restoredJobId = useRef<string | null>(null);
   const previewJob = useRebalancePreviewJob(previewJobId);
+  const latestPreviewJob = useLatestRebalancePreviewJob();
   const plans = useRebalancePlans();
   const refreshVersion = useMarketDataRefreshVersion().data;
   const observedRefreshVersion = useRef(refreshVersion);
@@ -140,6 +160,7 @@ export function RebalancePage() {
     setPreviewResult(null);
     setPreviewJobId(null);
     setPreviewJobFailure(null);
+    setRestoredOutdated(false);
     setPlan((current) => current?.status === "in_progress" ? current : null);
     setIsDirty(false);
     setOperationError(null);
@@ -147,10 +168,39 @@ export function RebalancePage() {
   }, [refreshVersion]);
 
   useEffect(() => {
+    if (
+      restoreHandledRef.current || !defaultsReady || !planRestoreCompleted
+      || latestPreviewJob.isFetching
+      || (latestPreviewJob.data === undefined && !latestPreviewJob.isError)
+    ) return;
+    restoreHandledRef.current = true;
+    setRestoreHandled(true);
+    const job = latestPreviewJob.data;
+    if (hasSubmitted.current || plan?.status === "in_progress" || !job) return;
+    if (job.payload) {
+      sessionToken.current = job.payload.session_token;
+      setForm(formFromPreviewPayload(job.payload));
+    }
+    if (job.status === "succeeded" && job.result) {
+      setPreviewResult(job.result);
+      setRestoredOutdated(job.is_current !== true);
+    } else if (job.status === "failed" && job.error) {
+      setPreviewJobFailure(job.error);
+    } else if (job.status !== "succeeded" && job.status !== "failed") {
+      restoredJobId.current = job.id;
+      setPreviewJobId(job.id);
+    }
+  }, [defaultsReady, latestPreviewJob.data, latestPreviewJob.isError, latestPreviewJob.isFetching, plan?.status, planRestoreCompleted]);
+
+  useEffect(() => {
     const job = previewJob.data;
     if (!job) return;
     if (job.status === "succeeded" && job.result) {
       setPreviewResult(job.result);
+      setRestoredOutdated(
+        job.is_current === false
+        || (restoredJobId.current === job.id && job.is_current !== true)
+      );
       setPreviewJobId(null);
       setIsDirty(false);
     } else if (job.status === "failed" && job.error) {
@@ -178,6 +228,13 @@ export function RebalancePage() {
 
   const runPreview = async (nextForm = form) => {
     if ((!planRestoreCompleted && !plans.isError) || plan?.status === "in_progress") return;
+    hasSubmitted.current = true;
+    restoredJobId.current = null;
+    setSubmitting(true);
+    setPreviewResult(null);
+    setPreviewJobId(null);
+    setPreviewJobFailure(null);
+    setRestoredOutdated(false);
     setOperationError(null);
     setDefaultsWarning(null);
     let defaultsSaveFailed = false;
@@ -188,8 +245,6 @@ export function RebalancePage() {
     }
     try {
       const job = await preview.mutateAsync(payloadFor(nextForm, sessionToken.current));
-      setPreviewResult(null);
-      setPreviewJobFailure(null);
       if (job.status === "succeeded" && job.result) {
         setPreviewResult(job.result);
         setIsDirty(false);
@@ -202,13 +257,15 @@ export function RebalancePage() {
       setPlan(null);
     } catch {
       // Mutation state renders the actionable API error.
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const changeBasis = (valuationBasis: RebalanceValuationBasis) => {
     if ((!planRestoreCompleted && !plans.isError) || plan?.status === "in_progress") return;
     setForm((current) => ({ ...current, valuationBasis }));
-    setIsDirty(Boolean(preview.data));
+    setIsDirty(Boolean(previewResult));
     setPlan(null);
   };
 
@@ -218,11 +275,16 @@ export function RebalancePage() {
       const saved = await createPlan.mutateAsync({
         ...payloadFor(form, sessionToken.current),
         idempotency_key: token("save-plan"),
+        expected_input_signature: previewResult?.input_signature ?? undefined,
       });
       setPlan(saved);
+      setPreviewResult(null);
+      setRestoredOutdated(false);
       return saved;
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "方案保存失败。");
+      setOperationError(error instanceof ApiError && error.code === "REBALANCE_PREVIEW_OUTDATED"
+        ? "持仓或行情已变化，请重新测算后再保存。"
+        : error instanceof Error ? error.message : "方案保存失败。");
       return null;
     }
   };
@@ -264,9 +326,11 @@ export function RebalancePage() {
   const generalError = previewJobError && !staleError
     ? previewJobError.message
     : (preview.error instanceof ApiError && !staleError ? preview.error.message : null);
-  const currentPreview = previewResult ?? (plan ? previewFromPlan(plan) : undefined);
+  const currentPreview = plan?.status === "in_progress"
+    ? previewFromPlan(plan)
+    : previewResult ?? (plan ? previewFromPlan(plan) : undefined);
   const activePlan = plan?.status === "in_progress" ? plan : null;
-  const planLookupPending = !planRestoreCompleted && !plans.isError;
+  const planLookupPending = (!planRestoreCompleted && !plans.isError) || !restoreHandled;
   const displayedForm = activePlan ? {
     ...form,
     availableCny: activePlan.available_cny,
@@ -281,7 +345,7 @@ export function RebalancePage() {
   const holdingNames = Object.fromEntries(
     (holdings.data ?? []).map((holding) => [holding.symbol, holding.name]),
   );
-  const lifecycleDisabled = planLookupPending || isDirty || !currentPreview || staleError || (currentPreview.data_status === "stale" && !plan && !form.acknowledgeStaleData);
+  const lifecycleDisabled = planLookupPending || isDirty || restoredOutdated || !currentPreview || staleError || (currentPreview.data_status === "stale" && !plan && !form.acknowledgeStaleData);
 
   return (
     <section className={styles.page} aria-label="再平衡工作台">
@@ -291,18 +355,19 @@ export function RebalancePage() {
       </header>
       <div className={styles.workspace}>
         {!defaultsReady ? <div className={styles.defaultsLoading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入上次使用的资金与约束</div> : <>
-          <RebalanceInputs value={displayedForm} pending={preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
+          <RebalanceInputs value={displayedForm} pending={submitting || preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
           <main className={styles.results}>
           {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
           {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
-          {!preview.isPending && !previewJobId && !currentPreview && !preview.error && !previewJobError ? <div className={styles.previewPrompt}>
+          {!submitting && !preview.isPending && !previewJobId && !currentPreview && !preview.error && !previewJobError ? <div className={styles.previewPrompt}>
             <Calculator size={18} aria-hidden="true" /><div><strong>配置本次资金与约束后开始测算</strong><span>行情刷新将在你点击开始测算后执行。</span></div>
           </div> : null}
-          {(preview.isPending || previewJobId) && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />{previewJobMessage(previewJob.data?.status)}</div> : null}
+          {(submitting || preview.isPending || previewJobId) && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />{previewJobMessage(previewJob.data?.status)}</div> : null}
           {staleError ? <section className={styles.stale} role="alert">
             <AlertTriangle size={20} aria-hidden="true" /><div><h2>部分行情数据已过期</h2><p>保存正式方案前，需要明确确认使用当前旧值。重新测算后，结果会保留过期数据标记。</p><label><input type="checkbox" checked={form.acknowledgeStaleData} onChange={(event) => { setForm({ ...form, acknowledgeStaleData: event.target.checked }); setIsDirty(true); }} />我已了解数据时效风险</label></div>
           </section> : null}
           {generalError ? <p className={styles.error} role="alert">{generalError}</p> : null}
+          {restoredOutdated && currentPreview ? <p className={styles.dirtyNotice}>上次测算结果仅供参考：持仓或行情已变化，请重新测算后再保存或开始方案。</p> : null}
           {isDirty && currentPreview ? <p className={styles.dirtyNotice}>参数已修改，请重新测算后再保存或开始方案。</p> : null}
           {assetClasses.isError ? <p className={styles.error} role="alert">资产类别名称载入失败。</p> : null}
           {currentPreview ? <>

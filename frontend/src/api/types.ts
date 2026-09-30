@@ -418,6 +418,7 @@ export interface RebalancePreview {
   valuation_basis: RebalanceValuationBasis;
   result: RebalanceResult;
   fx_comparison: RebalanceComparison;
+  input_signature?: string | null;
 }
 
 export type RebalancePreviewJobStatus = "queued" | "refreshing" | "calculating" | "succeeded" | "failed";
@@ -427,6 +428,10 @@ export interface RebalancePreviewJob {
   status: RebalancePreviewJobStatus;
   result: RebalancePreview | null;
   error: ApiErrorDetail | null;
+  payload?: RebalancePreviewPayload | null;
+  created_at?: string | null;
+  finished_at?: string | null;
+  is_current?: boolean | null;
 }
 
 export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | "request_token" | "status" | "refresh_attempted" | "acknowledge_stale_data"> {

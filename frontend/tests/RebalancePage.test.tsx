@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import axe from "axe-core";
+import { useState } from "react";
 
 import { RebalancePage } from "../src/pages/RebalancePage";
 import { assetClassFixtures, holdingFixture, rebalanceDefaultsFixture, rebalancePreviewFixture } from "./fixtures";
@@ -29,6 +30,69 @@ function previewHandlers() {
 function succeededPreviewJob(result = rebalancePreviewFixture) {
   return { id: "preview-job-test", status: "succeeded", result, error: null };
 }
+
+function restorableJob(status: "calculating" | "succeeded", isCurrent: boolean | null = null) {
+  return {
+    id: "restored-preview-job",
+    status,
+    result: status === "succeeded" ? { ...rebalancePreviewFixture, input_signature: "signature-1" } : null,
+    error: null,
+    payload: {
+      session_token: "original-session",
+      request_token: "original-request",
+      available_cny: "2468",
+      available_usd: "0",
+      valuation_basis: "actual",
+      allow_sell: true,
+      allow_fx: true,
+      tolerance: "0.02",
+      acknowledge_stale_data: false,
+    },
+    created_at: "2026-09-30T10:00:00Z",
+    finished_at: status === "succeeded" ? "2026-09-30T10:01:00Z" : null,
+    is_current: isCurrent,
+  };
+}
+
+it("continues showing a background job after leaving and returning", async () => {
+  let latest = restorableJob("calculating");
+  function PageSwitcher() {
+    const [visible, setVisible] = useState(true);
+    return <><button onClick={() => setVisible((value) => !value)}>切换页面</button>{visible ? <RebalancePage /> : <p>其他页面</p>}</>;
+  }
+  renderWithProviders(<PageSwitcher />, {
+    handlers: [
+      ...previewHandlers(),
+      http.get("/api/rebalance/preview-jobs/latest", () => HttpResponse.json(latest)),
+      http.get("/api/rebalance/preview-jobs/:jobId", () => HttpResponse.json(latest)),
+    ],
+  });
+  const user = userEvent.setup();
+
+  expect(await screen.findByText("正在计算方案")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "切换页面" }));
+  expect(screen.getByText("其他页面")).toBeInTheDocument();
+  latest = restorableJob("succeeded", true);
+  await user.click(screen.getByRole("button", { name: "切换页面" }));
+
+  expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
+  expect(screen.getByLabelText("人民币")).toHaveValue("2468");
+});
+
+it("restores the last result and blocks formal actions when its inputs changed", async () => {
+  renderWithProviders(<RebalancePage />, {
+    handlers: [
+      ...previewHandlers(),
+      http.get("/api/rebalance/preview-jobs/latest", () => HttpResponse.json(restorableJob("succeeded", false))),
+    ],
+  });
+
+  expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
+  expect(screen.getByLabelText("人民币")).toHaveValue("2468");
+  expect(screen.getByText(/上次测算结果/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "开始本次再平衡" })).toBeDisabled();
+});
 
 it("loads persisted defaults without starting a preview", async () => {
   let previewRequests = 0;
@@ -84,7 +148,8 @@ it("saves the current defaults before calculating", async () => {
   });
   const user = userEvent.setup();
 
-  await user.clear(await screen.findByLabelText("人民币"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "开始测算" })).toBeEnabled());
+  await user.clear(screen.getByLabelText("人民币"));
   await user.type(screen.getByLabelText("人民币"), "25000");
   await user.click(screen.getByRole("checkbox", { name: /允许卖出/ }));
   await user.click(await screen.findByRole("radio", { name: "剔汇率口径" }));
@@ -140,7 +205,7 @@ it("waits for an explicit command before the first preview", async () => {
   });
   const user = userEvent.setup();
 
-  expect(await screen.findByRole("button", { name: "开始测算" })).toBeEnabled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "开始测算" })).toBeEnabled());
   expect(screen.getByText("配置本次资金与约束后开始测算")).toBeInTheDocument();
   expect(previewRequests).toBe(0);
 
@@ -156,6 +221,7 @@ it("keeps inputs visible after recalculation", async () => {
   const user = userEvent.setup();
   const cny = await screen.findByLabelText("人民币");
 
+  await waitFor(() => expect(cny).toBeEnabled());
   await user.clear(cny);
   await user.type(cny, "20000");
   await user.click(screen.getByRole("button", { name: "开始测算" }));

@@ -4,6 +4,7 @@ import { apiRequest, jsonBody } from "../../api/client";
 import type { RebalancePlan, RebalancePreviewJob, RebalancePreviewPayload } from "../../api/types";
 
 export const rebalancePlansQueryKey = ["rebalance", "plans"] as const;
+export const latestRebalancePreviewJobQueryKey = ["rebalance", "preview-job", "latest"] as const;
 
 export function useRebalancePlans() {
   return useQuery({
@@ -21,6 +22,13 @@ export function useRebalancePreview() {
   });
 }
 
+export function useLatestRebalancePreviewJob() {
+  return useQuery({
+    queryKey: latestRebalancePreviewJobQueryKey,
+    queryFn: () => apiRequest<RebalancePreviewJob | null>("/api/rebalance/preview-jobs/latest"),
+  });
+}
+
 export function useRebalancePreviewJob(jobId: string | null) {
   return useQuery({
     queryKey: ["rebalance", "preview-job", jobId],
@@ -35,7 +43,7 @@ export function useRebalancePreviewJob(jobId: string | null) {
 
 export function useCreateRebalancePlan() {
   return useMutation({
-    mutationFn: (payload: RebalancePreviewPayload & { idempotency_key: string }) => apiRequest<RebalancePlan>("/api/rebalance/plans", {
+    mutationFn: (payload: RebalancePreviewPayload & { idempotency_key: string; expected_input_signature?: string }) => apiRequest<RebalancePlan>("/api/rebalance/plans", {
       method: "POST",
       body: jsonBody(payload),
     }),

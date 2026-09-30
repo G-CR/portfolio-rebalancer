@@ -176,6 +176,84 @@ async def test_preview_job_creation_returns_queued_status_without_running_previe
     assert payload["error"] is None
 
 
+async def test_latest_preview_job_restores_newest_task_and_original_inputs(api_client) -> None:
+    empty = await api_client.get("/api/rebalance/preview-jobs/latest")
+    assert empty.status_code == 200
+    assert empty.json() is None
+
+    first = await api_client.post(
+        "/api/rebalance/preview-jobs",
+        json=_preview_payload(request_token="first-preview"),
+    )
+    second_payload = _preview_payload(request_token="second-preview")
+    second_payload["available_cny"] = "1234"
+    second = await api_client.post("/api/rebalance/preview-jobs", json=second_payload)
+    assert first.status_code == second.status_code == 202
+
+    latest = await api_client.get("/api/rebalance/preview-jobs/latest")
+    assert latest.status_code == 200
+    assert latest.json()["id"] == second.json()["id"]
+    assert latest.json()["status"] == "queued"
+    assert latest.json()["payload"]["available_cny"] == "1234"
+    assert latest.json()["created_at"] is not None
+
+
+async def test_completed_preview_restores_result_and_detects_changed_market_value(
+    api_client, db_session, monkeypatch,
+) -> None:
+    await _configure_two_class_portfolio(api_client, db_session)
+
+    async def no_refresh(_session) -> None:
+        return None
+
+    monkeypatch.setattr(worker_module, "refresh_all_required_data", no_refresh)
+    created = await api_client.post(
+        "/api/rebalance/preview-jobs",
+        json=_preview_payload(request_token="restorable-preview"),
+    )
+    assert created.status_code == 202
+    assert await worker_module.run_preview_job_once() is True
+
+    current = await api_client.get("/api/rebalance/preview-jobs/latest")
+    assert current.status_code == 200
+    assert current.json()["result"]["status"] == "ok"
+    assert current.json()["is_current"] is True
+    signature = current.json()["result"]["input_signature"]
+    assert signature
+
+    valid_save = await api_client.post(
+        "/api/rebalance/plans",
+        json={
+            **_preview_payload(request_token="save-current-preview"),
+            "idempotency_key": "save-current-preview",
+            "expected_input_signature": signature,
+        },
+    )
+    assert valid_save.status_code == 201, valid_save.text
+
+    row = await db_session.scalar(
+        select(MarketData).where(MarketData.symbol == "CNY-FUND")
+    )
+    row.value = Decimal("101")
+    await db_session.commit()
+
+    outdated = await api_client.get("/api/rebalance/preview-jobs/latest")
+    assert outdated.status_code == 200
+    assert outdated.json()["result"]["input_signature"] == signature
+    assert outdated.json()["is_current"] is False
+
+    save = await api_client.post(
+        "/api/rebalance/plans",
+        json={
+            **_preview_payload(request_token="save-old-preview"),
+            "idempotency_key": "save-old-preview",
+            "expected_input_signature": signature,
+        },
+    )
+    assert save.status_code == 409
+    assert save.json()["detail"]["code"] == "REBALANCE_PREVIEW_OUTDATED"
+
+
 async def test_worker_completes_a_queued_preview_job(api_client, db_session, monkeypatch) -> None:
     await _configure_two_class_portfolio(api_client, db_session)
 

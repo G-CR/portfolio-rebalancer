@@ -31,7 +31,7 @@ from app.schemas.rebalance import (
 from app.services.baseline import reset_baseline_fx
 from app.services.errors import ServiceError
 from app.services.market_data import refresh_all_required_data
-from app.services.rebalance_version import rebalance_data_version
+from app.services.rebalance_version import rebalance_data_version, rebalance_preview_input_signature
 from app.services.snapshots import (
     EventSnapshotCapture,
     EventSnapshotItemCapture,
@@ -111,6 +111,7 @@ class _PreparedRebalance:
     comparison: RebalanceComparisonResponse
     effective_fx_items: tuple[tuple[str, Decimal], ...]
     resolved_constraints: _ResolvedConstraints
+    input_signature: str
 
     @property
     def market_data_record_ids(self) -> dict[str, str]:
@@ -187,7 +188,28 @@ def _preview_response(
         valuation_basis=payload.valuation_basis,
         result=_serialize_result(prepared.result),
         fx_comparison=prepared.comparison,
+        input_signature=prepared.input_signature,
     )
+
+
+def _input_signature_for_context(context: dict[str, object]) -> str:
+    return rebalance_preview_input_signature(
+        effective_inputs={
+            key: (
+                format(item.value, "f") if item.value is not None else None,
+                item.status,
+                item.source_id,
+                item.currency,
+            )
+            for key, item in context["effective_inputs"].items()
+        },
+        holding_versions=context["holding_versions"],
+        asset_class_targets=context["asset_class_targets"],
+    )
+
+
+async def current_preview_input_signature(session: AsyncSession) -> str:
+    return _input_signature_for_context(await _load_rebalance_context(session))
 
 
 async def create_rebalance_plan(
@@ -201,17 +223,36 @@ async def create_rebalance_plan(
         return (_plan_response(existing), False)
 
     preview_payload = RebalancePreviewRequest(
-        **payload.model_dump(exclude={"idempotency_key"})
+        **payload.model_dump(exclude={"idempotency_key", "expected_input_signature"})
     )
-    refresh_attempted = await _refresh_before_first_preview(
-        session,
-        preview_payload.session_token,
+    if (
+        payload.expected_input_signature is not None
+        and await current_preview_input_signature(session) != payload.expected_input_signature
+    ):
+        raise ServiceError(
+            409,
+            "REBALANCE_PREVIEW_OUTDATED",
+            "Portfolio inputs changed after the preview. Calculate again before saving.",
+        )
+    refresh_attempted = (
+        await _refresh_before_first_preview(session, preview_payload.session_token)
+        if payload.expected_input_signature is None
+        else False
     )
     prepared = await _prepare_rebalance(
         session,
         payload=preview_payload,
         allow_stale=preview_payload.acknowledge_stale_data,
     )
+    if (
+        payload.expected_input_signature is not None
+        and prepared.input_signature != payload.expected_input_signature
+    ):
+        raise ServiceError(
+            409,
+            "REBALANCE_PREVIEW_OUTDATED",
+            "Portfolio inputs changed after the preview. Calculate again before saving.",
+        )
     preview = _preview_response(
         payload=preview_payload,
         prepared=prepared,
@@ -223,7 +264,7 @@ async def create_rebalance_plan(
         asset_class_targets=prepared.asset_class_targets,
     )
     input_summary = {
-        **payload.model_dump(exclude={"idempotency_key"}),
+        **payload.model_dump(exclude={"idempotency_key", "expected_input_signature"}),
         "minimum_trade_cny": None,
         "holding_versions": prepared.holding_versions,
         "market_data_record_ids": prepared.market_data_record_ids,
@@ -497,6 +538,7 @@ async def _prepare_rebalance(
         ),
         effective_fx_items=tuple(sorted(context["effective_fx"].items())),
         resolved_constraints=resolved_constraints,
+        input_signature=_input_signature_for_context(context),
     )
 
 
