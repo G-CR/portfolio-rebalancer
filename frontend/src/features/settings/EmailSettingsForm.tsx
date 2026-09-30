@@ -88,7 +88,7 @@ export function EmailSettingsForm() {
         <FormField label="发件人（可选）"><input type="email" value={fromAddress} onChange={(event) => setFromAddress(event.target.value)} /></FormField>
       </div> : null}
       <div className={styles.providerActions}>
-        <button type="button" className={styles.secondary} onClick={() => void digest.mutateAsync()} disabled={digest.isPending || save.isPending || test.isPending}><Mail size={15} aria-hidden="true" />{digest.isPending ? "正在刷新并发送..." : "立即发送日报"}</button>
+        <button type="button" className={styles.secondary} onClick={() => digest.mutate()} disabled={digest.isPending || save.isPending || test.isPending}><Mail size={15} aria-hidden="true" />{digest.isPending ? "正在刷新并发送..." : "立即发送日报"}</button>
         <button type="button" className={styles.secondary} onClick={() => void test.mutateAsync()} disabled={test.isPending || save.isPending}><Send size={15} aria-hidden="true" />{test.isPending ? "正在发送" : "发送测试邮件"}</button>
         <button type="button" className={styles.primary} onClick={() => void submit()} disabled={save.isPending}><Save size={16} aria-hidden="true" />保存邮件设置</button>
       </div>

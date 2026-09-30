@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
 import type {
@@ -17,6 +17,7 @@ export const providerSettingsQueryKey = ["settings", "providers"] as const;
 export const generalSettingsQueryKey = ["settings", "general"] as const;
 export const rebalanceDefaultsQueryKey = ["settings", "rebalance-defaults"] as const;
 export const emailSettingsQueryKey = ["settings", "email"] as const;
+const emailDigestMutationKey = ["email", "digest"] as const;
 
 export function useProviderSettings() {
   return useQuery({
@@ -138,7 +139,32 @@ export function useTestEmailSettings() {
 }
 
 export function useTriggerEmailDigest() {
-  return useMutation({
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationKey: emailDigestMutationKey,
+    gcTime: 60 * 60 * 1000,
     mutationFn: () => apiRequest<EmailDigestTriggerResult>("/api/email/digest", { method: "POST" }),
   });
+  const states = useMutationState({
+    filters: { mutationKey: emailDigestMutationKey, exact: true },
+    select: (item) => ({
+      status: item.state.status,
+      data: item.state.data as EmailDigestTriggerResult | undefined,
+      error: item.state.error,
+    }),
+  });
+  const latest = states.at(-1);
+
+  return {
+    isPending: latest?.status === "pending",
+    isError: latest?.status === "error",
+    data: latest?.data,
+    error: latest?.error,
+    mutate: () => {
+      const pending = queryClient.getMutationCache().find({
+        mutationKey: emailDigestMutationKey, exact: true, status: "pending",
+      });
+      if (!pending) mutation.mutate();
+    },
+  };
 }

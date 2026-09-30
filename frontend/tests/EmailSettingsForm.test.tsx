@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { useState } from "react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 
@@ -11,6 +12,70 @@ function handlers() {
     http.get("/api/settings/email", () => HttpResponse.json(emailSettingsFixture)),
   ];
 }
+
+function PageSwitcher() {
+  const [visible, setVisible] = useState(true);
+  return <><button onClick={() => setVisible((value) => !value)}>切换页面</button>{visible ? <EmailSettingsForm /> : <p>其他页面</p>}</>;
+}
+
+function responseGate() {
+  let finish!: () => void;
+  const promise = new Promise<void>((resolve) => { finish = resolve; });
+  return { promise, finish };
+}
+
+it("restores a pending digest after navigation and prevents duplicate submission", async () => {
+  const gate = responseGate();
+  let requests = 0;
+  let aborted = false;
+  renderWithProviders(<PageSwitcher />, { handlers: [
+    ...handlers(),
+    http.post("/api/email/digest", async ({ request }) => {
+      requests += 1;
+      request.signal.addEventListener("abort", () => { aborted = true; });
+      await gate.promise;
+      return HttpResponse.json({ status: "sent", sent_at: "2026-09-30T00:00:00Z" });
+    }),
+  ] });
+  const user = userEvent.setup();
+  try {
+    await user.click(screen.getByRole("button", { name: "立即发送日报" }));
+    await screen.findByRole("button", { name: "正在刷新并发送..." });
+    await user.click(screen.getByRole("button", { name: "切换页面" }));
+    await user.click(screen.getByRole("button", { name: "切换页面" }));
+    const pending = screen.getByRole("button", { name: "正在刷新并发送..." });
+    expect(pending).toBeDisabled();
+    await user.click(pending);
+    expect(requests).toBe(1);
+    expect(aborted).toBe(false);
+  } finally {
+    gate.finish();
+  }
+  expect(await screen.findByText("日报已发送")).toBeInTheDocument();
+});
+
+it.each(["success", "error"] as const)("restores a digest %s that completed while away", async (outcome) => {
+  const gate = responseGate();
+  const { queryClient } = renderWithProviders(<PageSwitcher />, { handlers: [
+    ...handlers(),
+    http.post("/api/email/digest", async () => {
+      await gate.promise;
+      return outcome === "success"
+        ? HttpResponse.json({ status: "sent", sent_at: "2026-09-30T00:00:00Z" })
+        : HttpResponse.json({ detail: { code: "SMTP_FAILED", message: "SMTP 连接失败" } }, { status: 502 });
+    }),
+  ] });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "立即发送日报" }));
+  await screen.findByRole("button", { name: "正在刷新并发送..." });
+  await user.click(screen.getByRole("button", { name: "切换页面" }));
+  gate.finish();
+  await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+  await user.click(screen.getByRole("button", { name: "切换页面" }));
+
+  expect(await screen.findByText(outcome === "success" ? "日报已发送" : "SMTP 连接失败")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "立即发送日报" })).toBeEnabled();
+});
 
 it("renders the email notification form and saves the payload", async () => {
   let received: Record<string, unknown> | null = null;
