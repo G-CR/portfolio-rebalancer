@@ -161,7 +161,7 @@ export function AppShell() {
         aria-modal={modalNavigationOpen ? true : undefined}
       >
         <div className={styles.brand}>
-          <span className={styles.brandMark} aria-hidden="true">±</span>
+          <img className={styles.brandMark} src="/favicon.svg?v=coin-20260930" alt="" width={28} height={28} aria-hidden="true" />
           <span className={styles.brandText}>组合校准台</span>
           {modalNavigationOpen ? (
             <button
