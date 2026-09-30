@@ -17,7 +17,7 @@ const basis = {
 };
 
 describe("sale, correction, and history drawers", () => {
-  it("uses a distinct sale command and never presents realized P&L", async () => {
+  it("uses a distinct sale command with actual transaction information", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SaleDrawer holding={holdingFixture} open onClose={() => undefined} />, {
       handlers: [
@@ -37,7 +37,9 @@ describe("sale, correction, and history drawers", () => {
     await user.type(screen.getByRole("textbox", { name: "卖出份额" }), "2");
     await user.click(screen.getByRole("button", { name: "预览卖出调整" }));
     expect(await screen.findByRole("button", { name: "确认卖出调整" })).toBeEnabled();
-    expect(screen.queryByText(/已实现|realized/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/按平均原币成本计算已实现盈亏/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/成交日期/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', {name: '成交价格'})).toBeInTheDocument();
   });
 
   it("clears a stale sale preview and invalidates affected caches", async () => {

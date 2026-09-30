@@ -9,7 +9,12 @@ import { MemoryRouter } from "react-router-dom";
 import { createQueryClient } from "../src/app/providers";
 import { rebalancePreviewFixture } from "./fixtures";
 
+export const decisionFixture = { status: "normal", title: "配置正常", reason: "全部类别在允许偏离区间内。", classes: [], issues: [], has_manual_data: false, latest_valid_date: "2026-09-30", last_checked_at: null, active_plan_id: null, review_date: "2026-10-01", review_due: false, last_reviewed_at: null };
 export const server = setupServer(
+  http.get('/api/ledger/entries', () => HttpResponse.json([])),
+  http.get('/api/ledger/statistics', () => HttpResponse.json({period: null, currencies: [], reference_pnl_cny: null, incomplete_reasons: [], holdings: []})),
+  http.get("/api/decision", () => HttpResponse.json(decisionFixture)),
+  http.get("/api/decision/settings", () => HttpResponse.json({ review_day: 1, notification_mode: "daily", monthly_email: false, last_checked_at: null, last_reviewed_at: null })),
   http.get("/api/settings/rebalance-defaults", () => HttpResponse.json({
     available_cny: "0",
     available_usd: "0",

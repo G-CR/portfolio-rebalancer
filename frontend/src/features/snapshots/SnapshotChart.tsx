@@ -1,6 +1,7 @@
 import { ReferenceArea, ReferenceDot, Line, LineChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { SnapshotSummary } from "../../api/types";
+import type { LedgerEntry } from "../ledger/api";
 import { normalizeDecimalSeries } from "../analytics/chartScale";
 import { formatAmount, formatPercent, formatSignedAmount } from "../analytics/format";
 import { formatSnapshotDate } from "./dateTime";
@@ -36,7 +37,7 @@ function eventLabel(type: SnapshotSummary["snapshot_type"]) {
   return null;
 }
 
-export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; metric: SnapshotMetric }) {
+export function SnapshotChart({ items, metric, events = [] }: { items: SnapshotSummary[]; metric: SnapshotMetric; events?: LedgerEntry[] }) {
   const ordered = [...items].sort((a, b) => a.captured_at.localeCompare(b.captured_at));
   const normalized = normalizeDecimalSeries(ordered.map((item) => metricValue(item, metric)));
   const chartData = ordered.map((item, index) => ({
@@ -55,6 +56,12 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
     }
   }
   const config = metricConfig[metric];
+  const reversed = new Set(events.map(event => event.reverses_id).filter(Boolean));
+  const eventNames = {purchase: '买入', sale: '卖出', dividend: '现金分红', split: '份额折算'};
+  const dates = chartData.map(item => item.local_date).sort();
+  const visibleEvents = events.filter(event => event.kind in eventNames && !reversed.has(event.id) && event.occurred_on >= dates[0] && event.occurred_on <= dates[dates.length - 1]);
+  const markers = chartData.filter((item, index) => chartData.findIndex(other => other.local_date === item.local_date) === index)
+    .map(item => ({item, events: visibleEvents.filter(event => event.occurred_on === item.local_date)})).filter(marker => marker.events.length);
   const format = (value: string) => config.percent
     ? formatPercent(value, 2)
     : config.signed ? formatSignedAmount(value, 2) : formatAmount(value, 2);
@@ -73,6 +80,7 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
             <YAxis hide domain={["dataMin", "dataMax"]} />
             <Tooltip formatter={(_value, _name, item) => [format(item.payload.originalValue), config.label]} />
             {pairs.map(({ before, after }) => <ReferenceArea key={`${before.id}-${after.id}`} x1={before.captured_at} x2={after.captured_at} fill="var(--color-target)" fillOpacity={0.08} />)}
+            {markers.map(({item, events: dayEvents}) => <ReferenceDot key={`ledger-${item.id}`} x={item.captured_at} y={item.chartValue} r={5} fill="var(--color-fx)" stroke="var(--color-surface)" label={{value: `投资事件 ${dayEvents.length} 笔`, position: 'bottom', fontSize: 10}} />)}
             {chartData.filter((item) => eventLabel(item.snapshot_type)).map((item) => (
               <ReferenceDot
                 key={item.id}
@@ -88,6 +96,10 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
           </LineChart>
         </ResponsiveContainer>
       </div>
+      {visibleEvents.length ? <section aria-label="投资事件" className={styles.rebalancePair}>
+        <p>投资事件按发生日期标记同日快照；快照市值变化包含交易现金流，不代表投资收益。</p>
+        <ul>{visibleEvents.map(event => <li key={event.id}>{event.occurred_on} · {event.symbol} · {eventNames[event.kind as keyof typeof eventNames]} · {event.kind === 'dividend' ? `${event.currency} ${event.amount}` : event.kind === 'split' ? `× ${event.ratio}` : `${event.quantity} × ${event.price} ${event.currency}`}</li>)}</ul>
+      </section> : null}
       {pairs.length ? (
         <div className={styles.rebalancePair} aria-label="再平衡事件配对">
           {pairs.map(({ before, after }) => <div className={styles.pairRow} key={`${before.id}-${after.id}`}><span><i className={styles.beforeMark} />再平衡前<small>{before.note || before.label}</small></span><b aria-hidden="true" /><span><i className={styles.afterMark} />再平衡后<small>{after.note || after.label}</small></span></div>)}

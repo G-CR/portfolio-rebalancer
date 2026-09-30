@@ -48,6 +48,7 @@ const routeNames = [
   "总览",
   "资产配置",
   "持仓与成本",
+  "投资记录",
   "盈亏分析",
   "再平衡",
   "历史快照",
@@ -75,7 +76,7 @@ describe("AppShell", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the seven confirmed routes as labelled links", () => {
+  it("renders the confirmed routes including the investment ledger as labelled links", () => {
     installMatchMedia(false);
     renderShell();
 

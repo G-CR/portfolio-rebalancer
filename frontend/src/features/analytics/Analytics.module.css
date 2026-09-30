@@ -30,5 +30,9 @@
 .pnlValues dd { margin: 0; font-family: var(--font-data); }
 .priceKey, .fxKey { width: 7px; height: 7px; background: var(--color-actual); }
 .fxKey { background: var(--color-fx); }
+.monthlyReview { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); padding: var(--space-4) var(--space-7); border-bottom: 1px solid var(--color-rule); }
+.monthlyReview p { margin: 0 0 var(--space-2); }
+.monthlyReview small { color: var(--color-muted); }
+.monthlyReview button { padding: 8px 16px; border: 1px solid var(--color-rule); border-radius: 3px; background: var(--color-surface); cursor: pointer; }
 @media (max-width: 900px) { .decision { grid-template-columns: auto minmax(0, 1fr) auto; } .decisionFacts { grid-column: 2; } .decisionAction { grid-column: 3; grid-row: 1 / span 2; } }
 @media (max-width: 760px) { .decision { grid-template-columns: auto minmax(0, 1fr); padding: var(--space-4); } .decisionFacts, .decisionAction { grid-column: 1 / -1; } .decisionAction { grid-row: auto; justify-content: center; } .metrics { grid-template-columns: repeat(2, 1fr); } .metrics div:nth-child(2) { border-right: 0; } .metrics div:nth-child(-n+2) { border-bottom: 1px solid var(--color-rule); } .metrics dd { font-size: 17px; } .pnl { padding: var(--space-4); } .pnlValues { grid-template-columns: 1fr; gap: var(--space-2); } }

@@ -222,7 +222,7 @@ async def test_safety_list_download_and_explicit_delete_confirmation(api_client)
             "id": str(backup_id),
             "exported_at": "2026-08-23T00:00:00Z",
             "source_application_version": "api-test",
-            "format_version": 1,
+            "format_version": 2,
             "size_bytes": storage.safety_path(backup_id).stat().st_size,
             "record_counts": {member: 0 for member in DATA_MEMBERS},
         }
@@ -428,8 +428,8 @@ async def test_upload_streams_validates_and_never_mutates_database(
     assert await _business_table_hashes() == before
     preview = response.json()
     assert preview["source_application_version"] == "api-upload-test"
-    assert preview["source_format_version"] == 1
-    assert preview["current_format_version"] == 1
+    assert preview["source_format_version"] == 2
+    assert preview["current_format_version"] == 2
     assert preview["record_counts"]["credentials.json"] == 1
     assert preview["current_record_counts"]["data/asset_classes.json"] >= 1
     assert preview["count_comparison"]["credentials.json"] == {

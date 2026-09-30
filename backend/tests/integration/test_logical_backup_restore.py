@@ -29,7 +29,19 @@ from app.services.backup_storage import BackupStorage
 from app.services.backup_validation import validate_backup
 from tests.conftest import BUSINESS_TABLES
 from tests.conftest import SessionFactory, TEST_BACKUP_ROOT
-from tests.unit.test_backup_validation import _source as _validated_source
+from tests.unit.test_backup_validation import _ledger_source as _ledger_validated_source
+
+def _validated_source():
+    source = _ledger_validated_source()
+    source["data/decision_policy.json"] = [{"id": 1, "review_day": 1, "notification_mode": "attention", "monthly_email": True, "acknowledged_month": "2026-08", "last_reviewed_at": NOW, "rule_fingerprint": "f" * 64, "streaks": {}, "anomalies": {}, "last_checked_at": NOW, "latest_valid_date": "2026-08-24"}]
+    source["data/decision_observations.json"] = [{"local_date": "2026-08-24", "valid": True, "has_manual_data": False, "rule_fingerprint": "f" * 64, "classes": [], "anomaly_keys": [], "captured_at": NOW}]
+    source["data/notification_outbox.json"] = [{"event_key": "review:2026-08", "subject": "Review", "html": "Review", "status": "sent", "attempts": 1, "last_error": None, "created_at": NOW, "sent_at": NOW}]
+    # Include a forward audit link to exercise two-pass insertion independent of UUID ordering.
+    second = {**source["data/ledger_entries.json"][0], "id": UUID(int=105), "sequence": 2, "idempotency_key": "entry-key-2", "kind": "dividend", "quantity": "0.000000000000"}
+    source["data/ledger_entries.json"][0]["linked_entry_id"] = second["id"]
+    source["data/ledger_entries.json"].append(second)
+    return source
+
 
 
 NOW = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)

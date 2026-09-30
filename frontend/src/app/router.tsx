@@ -5,6 +5,7 @@ import { AppShell } from "../components/AppShell/AppShell";
 import { AssetClassesPage } from "../pages/AssetClassesPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { HoldingsPage } from "../pages/HoldingsPage";
+import { LedgerPage } from "../pages/LedgerPage";
 import { MarketDataPage } from "../pages/MarketDataPage";
 import { PnlPage } from "../pages/PnlPage";
 import { RebalancePage } from "../pages/RebalancePage";
@@ -56,6 +57,8 @@ const router = createBrowserRouter([
           ? <AssetClassesPage />
           : route.path === "/holdings"
             ? <HoldingsPage />
+            : route.path === "/ledger"
+              ? <LedgerPage />
             : route.path === "/analysis"
               ? <PnlPage />
               : route.path === "/rebalance"

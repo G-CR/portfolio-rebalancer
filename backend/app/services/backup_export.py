@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -82,7 +82,7 @@ class DatabaseLogicalSource:
                 continue
             path = workspace / contract.member.replace("/", "_")
             with path.open("wb") as staged_rows:
-                last_id: UUID | None = None
+                last_id: UUID | int | str | date | None = None
                 while True:
                     batch = await self._fetch_batch(contract, last_id)
                     if not batch:
@@ -91,7 +91,7 @@ class DatabaseLogicalSource:
                         staged_rows.write(canonical_source_row_bytes(contract, row))
                         staged_rows.write(b"\n")
                     last_id = batch[-1][contract.order_key]
-                    if not isinstance(last_id, UUID):
+                    if not isinstance(last_id, (UUID, int, str, date)):
                         raise BackupExportError("logical backup row identity is invalid")
                     if len(batch) < self.batch_size:
                         break
@@ -103,7 +103,7 @@ class DatabaseLogicalSource:
         contract: TableContract,
     ) -> list[dict[str, object]]:
         credentials: list[dict[str, object]] = []
-        last_id: UUID | None = None
+        last_id: UUID | int | str | date | None = None
         while True:
             batch = await self._fetch_batch(contract, last_id)
             if not batch:
@@ -118,7 +118,7 @@ class DatabaseLogicalSource:
     async def _fetch_batch(
         self,
         contract: TableContract,
-        last_id: UUID | None,
+        last_id: UUID | int | str | date | None,
     ) -> list[dict[str, object]]:
         statement = self._batch_statement(contract, last_id)
         result = await self.session.execute(statement)
@@ -151,7 +151,7 @@ class DatabaseLogicalSource:
     def _batch_statement(
         self,
         contract: TableContract,
-        last_id: UUID | None,
+        last_id: UUID | int | str | date | None,
     ) -> Select[Any]:
         model = contract.model
         selected_columns = []

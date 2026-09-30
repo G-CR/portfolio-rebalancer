@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { portfolioAnalyticsKey } from "../../api/queryKeys";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
 import type { RebalancePlan, RebalancePreviewJob, RebalancePreviewPayload } from "../../api/types";
@@ -60,13 +61,16 @@ function transition(path: "start" | "cancel" | "complete") {
 }
 
 export function useStartRebalancePlan() {
-  return useMutation({ mutationFn: transition("start") });
+  const client = useQueryClient();
+  return useMutation({ mutationFn: transition("start"), onSuccess: () => { void client.invalidateQueries({ queryKey: portfolioAnalyticsKey }); void client.invalidateQueries({ queryKey: rebalancePlansQueryKey }); } });
 }
 
 export function useCancelRebalancePlan() {
-  return useMutation({ mutationFn: transition("cancel") });
+  const client = useQueryClient();
+  return useMutation({ mutationFn: transition("cancel"), onSuccess: () => { void client.invalidateQueries({ queryKey: portfolioAnalyticsKey }); void client.invalidateQueries({ queryKey: rebalancePlansQueryKey }); } });
 }
 
 export function useCompleteRebalancePlan() {
-  return useMutation({ mutationFn: transition("complete") });
+  const client = useQueryClient();
+  return useMutation({ mutationFn: transition("complete"), onSuccess: () => { void client.invalidateQueries({ queryKey: portfolioAnalyticsKey }); void client.invalidateQueries({ queryKey: rebalancePlansQueryKey }); } });
 }

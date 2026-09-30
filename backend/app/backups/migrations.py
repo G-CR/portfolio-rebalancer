@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from app.backups.constants import CURRENT_FORMAT_VERSION
+from app.backups.constants import CURRENT_FORMAT_VERSION, NEW_TABLE_MEMBERS
 
 
 class BackupMigrationError(Exception):
@@ -36,6 +36,8 @@ class MigratedArchive:
         return self.source.path
 
     def iter_rows(self, member: str) -> Iterator[dict[str, Any]]:
+        if self.source.format_version == 1 and member in NEW_TABLE_MEMBERS:
+            return
         for source_row in self.source.iter_source_rows(member):
             row = source_row
             for transform in self.transforms:
@@ -48,7 +50,7 @@ Migration = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 # Each entry upgrades exactly one version.  Current-version archives need no
 # transform; older versions are streamed through these ordered row transforms.
-MIGRATIONS: dict[int, Migration] = {}
+MIGRATIONS: dict[int, Migration] = {1: lambda member, row: row}
 
 
 def require_migration_path(source_version: int) -> None:

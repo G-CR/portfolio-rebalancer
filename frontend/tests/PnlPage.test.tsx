@@ -8,6 +8,15 @@ import { renderWithProviders } from "./testProviders";
 
 
 describe("PnlPage", () => {
+  it("keeps original currency period results visible when current FX is missing", async () => {
+    renderWithProviders(<PnlPage />, { handlers: [
+      http.get('/api/analytics/portfolio', () => HttpResponse.json({detail: {code: 'PORTFOLIO_DATA_INCOMPLETE', message: 'Missing FX', items: []}}, {status: 409})),
+      http.get('/api/ledger/statistics', () => HttpResponse.json({period: {id: 'p', opened_on: '2026-10-01'}, currencies: [{currency: 'USD', unrealized: '10', realized: '3', dividends: '2', opening_unrealized: '4', period_pnl: '11', complete: true, incomplete_reasons: []}], reference_pnl_cny: null, incomplete_reasons: []})),
+    ]});
+    expect(await screen.findByRole('heading', {name: '期间投资损益 · 原币口径'})).toBeInTheDocument();
+    expect(screen.getByRole('rowheader', {name: 'USD'})).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('盈亏数据不完整');
+  });
   it("states the exact scope and switches between CNY and trading-currency views", async () => {
     const user = userEvent.setup();
     renderWithProviders(<PnlPage />, {

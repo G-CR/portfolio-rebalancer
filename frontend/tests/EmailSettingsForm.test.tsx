@@ -98,7 +98,7 @@ it("renders the email notification form and saves the payload", async () => {
   const user = userEvent.setup();
 
   await screen.findByLabelText("收件人");
-  await user.click(screen.getByRole("checkbox", { name: "启用每日邮件" }));
+  await user.click(screen.getByRole("checkbox", { name: "启用邮件通知" }));
   await user.type(screen.getByLabelText("收件人"), "owner@example.com");
   await user.type(screen.getByLabelText("SMTP 服务器"), "smtp.qq.com");
   await user.type(screen.getByLabelText("账号"), "owner@qq.com");

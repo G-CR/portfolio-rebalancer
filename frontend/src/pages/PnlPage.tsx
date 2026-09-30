@@ -9,6 +9,7 @@ import { decimalSign, formatAmount, formatPercent, formatSignedAmount } from "..
 import { usePortfolioAnalytics } from "../features/analytics/api";
 import styles from "./PnlPage.module.css";
 import { PageError } from "./PageState";
+import { PeriodPnl } from '../features/ledger/PeriodPnl';
 
 type View = "cny" | "trade";
 
@@ -24,6 +25,10 @@ function formatSignedCurrency(value: string, currency: string) {
 }
 
 export function PnlPage() {
+  return <><PeriodPnl /><CurrentHoldingPnl /></>;
+}
+
+function CurrentHoldingPnl() {
   const [view, setView] = useState<View>("cny");
   const portfolio = usePortfolioAnalytics();
   if (portfolio.isPending) return <section className={styles.loading} role="status">正在载入盈亏分析</section>;
@@ -50,7 +55,7 @@ export function PnlPage() {
   return (
     <section className={styles.page} aria-labelledby="pnl-title">
       <header className={styles.header}>
-        <div><p>P&amp;L ANALYSIS</p><h2 id="pnl-title">盈亏分析</h2><span>当前持仓，不含已实现盈亏</span></div>
+        <div><p>P&amp;L ANALYSIS</p><h2 id="pnl-title">盈亏分析</h2><span>当前持仓，不含已实现盈亏</span><small>人民币成本与价格／汇率拆分沿用旧成本汇率历史估算，不表示实际换汇盈亏。</small></div>
       </header>
       <dl className={styles.metrics}>
         <div><dt>总成本</dt><dd>{formatAmount(data.cost_cny, 2)}<small>CNY</small></dd></div>

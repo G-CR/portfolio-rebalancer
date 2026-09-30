@@ -11,6 +11,8 @@ from app.api.routes.market_data import router as market_data_router
 from app.api.routes.rebalance import router as rebalance_router
 from app.api.routes.settings import router as settings_router
 from app.api.routes.snapshots import router as snapshots_router
+from app.api.routes.decision import router as decision_router
+from app.api.routes.ledger import router as ledger_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(analytics_router)
@@ -24,3 +26,5 @@ api_router.include_router(market_data_router)
 api_router.include_router(rebalance_router)
 api_router.include_router(settings_router)
 api_router.include_router(snapshots_router)
+api_router.include_router(decision_router)
+api_router.include_router(ledger_router)

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { PurchaseDrawer } from "../src/features/holdings/PurchaseDrawer";
 import { holdingFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
+import { shanghaiDate } from '../src/features/ledger/api';
 
 const context = {
   holding_id: holdingFixture.id,
@@ -41,16 +42,14 @@ const preview = {
 };
 
 function currentLocalDate() {
-  const date = new Date();
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
+  return shanghaiDate();
 }
 
 async function fillTransaction(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByRole("textbox", { name: "新增份额" }), "5.000000000001");
   expect(screen.getByLabelText(/成交日期/)).toHaveValue(currentLocalDate());
   await user.type(screen.getByRole("textbox", { name: "成交价" }), "650.200000000001");
-  await user.type(screen.getByRole("textbox", { name: "本次汇率" }), "7.185000000001");
+  expect(screen.queryByRole('textbox', {name: '本次汇率'})).not.toBeInTheDocument();
 }
 
 describe("PurchaseDrawer", () => {
@@ -90,7 +89,7 @@ describe("PurchaseDrawer", () => {
     expect(previewBodies[0]).toMatchObject({
       quantity: "5.000000000001",
       price: "650.200000000001",
-      fx: "7.185000000001",
+      occurred_on: shanghaiDate(),
       actual_fee: "2.300000000001",
       commission_rate: "0.0005",
       minimum_commission: "1.00",

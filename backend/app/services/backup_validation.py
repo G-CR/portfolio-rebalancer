@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -67,6 +67,9 @@ _ENUM_FIELDS: dict[tuple[str, str], set[str]] = {
     },
     ("data/settings.json", "rebalance_valuation_basis"): {"actual", "fx_neutral"},
     ("data/settings.json", "email_smtp_security"): {"ssl", "starttls"},
+    ("data/ledger_entries.json", "kind"): {"purchase", "sale", "dividend", "split", "manual_correction", "reversal"},
+    ("data/decision_policy.json", "notification_mode"): {"daily", "attention"},
+    ("data/notification_outbox.json", "status"): {"pending", "sent"},
     ("credentials.json", "provider"): {*_PROVIDERS, "smtp"},
     ("credentials.json", "validation_status"): {"valid", "failed"},
 }
@@ -485,7 +488,82 @@ def _validate_scalars(member: str, row: dict[str, JsonValue]) -> None:
         ):
             if _decimal(row[field]) < 0:
                 raise _Incompatible
+    _validate_v2_scalars(member, row)
     _require_json_shape(member, row)
+
+
+def _validate_v2_scalars(member: str, row: dict[str, JsonValue]) -> None:
+    currencies = {
+        "data/ledger_openings.json": ("trade_currency",),
+        "data/ledger_entries.json": ("currency", "fee_currency"),
+        "data/reference_fx_days.json": ("currency",),
+    }
+    for field in currencies.get(member, ()):
+        currency = row[field]
+        if not isinstance(currency, str) or len(currency) != 3 or not currency.isascii() or not currency.isalpha() or currency.upper() != currency:
+            raise _Incompatible
+    nonnegative = {
+        "data/ledger_openings.json": ("quantity", "average_cost_price", "original_cost", "legacy_cost_fx", "baseline_fx", "market_price", "reference_value_cny"),
+        "data/ledger_entries.json": ("quantity", "price", "amount", "fee", "fee_original"),
+    }
+    for field in nonnegative.get(member, ()):
+        if row[field] is not None and _decimal(row[field]) < 0:
+            raise _Incompatible
+    for field in ("reference_fx", "ratio", "rate"):
+        if field in row and row[field] is not None and _decimal(row[field]) <= 0:
+            raise _Incompatible
+    if member in {"data/ledger_openings.json", "data/ledger_entries.json"} and not isinstance(row["reference_details"], dict):
+        raise _Incompatible
+    if member == "data/ledger_periods.json" and (row["singleton"] != 1 or not row["idempotency_key"]):
+        raise _Incompatible
+    if member == "data/ledger_entries.json":
+        if int(row["sequence"]) < 1 or not row["idempotency_key"]:
+            raise _Incompatible
+    if member == "data/reference_fx_revisions.json":
+        if not isinstance(row["before"], dict) or not isinstance(row["after"], dict):
+            raise _Incompatible
+        if (row["entry_id"] is None) == (row["opening_id"] is None):
+            raise _Incompatible
+    if member == "data/reference_fx_days.json":
+        days = (date.fromisoformat(str(row["local_date"])) - date.fromisoformat(str(row["actual_date"]))).days
+        if not 0 <= days <= 7 or bool(row["is_fallback"]) != (days > 0):
+            raise _Incompatible
+    if member == "data/decision_policy.json":
+        if row["id"] != 1 or not 1 <= int(row["review_day"]) <= 31:
+            raise _Incompatible
+        if row["acknowledged_month"] is not None:
+            try:
+                value = str(row["acknowledged_month"])
+                if date.fromisoformat(value + "-01").strftime("%Y-%m") != value:
+                    raise ValueError
+            except ValueError:
+                raise _Incompatible from None
+        for field in ("streaks", "anomalies"):
+            states = row[field]
+            if not isinstance(states, dict):
+                raise _Incompatible
+            for key, state in states.items():
+                if not isinstance(state, dict) or isinstance(state.get("count"), bool) or not isinstance(state.get("count"), int) or not 0 <= state["count"] <= 2**31 - 1:
+                    raise _Incompatible
+                if field == "streaks" and state.get("direction") not in {-1, 0, 1}:
+                    raise _Incompatible
+                try:
+                    date.fromisoformat(str(state["started"]))
+                except (ValueError, KeyError):
+                    raise _Incompatible from None
+    if member == "data/decision_observations.json":
+        if not isinstance(row["classes"], list) or not isinstance(row["anomaly_keys"], list) or any(not isinstance(key, str) for key in row["anomaly_keys"]):
+            raise _Incompatible
+        for item in row["classes"]:
+            if not isinstance(item, dict) or not {"id", "name", "target_weight", "actual_weight", "drift"}.issubset(item):
+                raise _Incompatible
+            for field in ("target_weight", "actual_weight", "drift"):
+                value = _decimal(item[field])
+                if not fits_numeric_28_12(value) or (field != "drift" and not 0 <= value <= 1):
+                    raise _Incompatible
+    if member == "data/notification_outbox.json":
+        if not row["event_key"] or int(row["attempts"]) < 0 or (row["status"] == "sent") != (row["sent_at"] is not None):
+            raise _Incompatible
 
 
 def _insert_unique(
@@ -619,7 +697,7 @@ def _index_row(
     row: dict[str, JsonValue],
 ) -> str | None:
     _validate_scalars(member, row)
-    owner_id = str(row["id"])
+    owner_id = str(row[CONTRACTS_BY_MEMBER[member].order_key])
     try:
         connection.execute(
             "INSERT INTO identities(member, id) VALUES (?, ?)", (member, owner_id)
@@ -664,6 +742,26 @@ def _index_row(
         if row["create_idempotency_key"] is not None:
             _insert_unique(connection, "rebalance_create_key", row["create_idempotency_key"], owner_id)
         _validate_rebalance(connection, row)
+    elif member in {"data/ledger_openings.json", "data/ledger_entries.json"}:
+        _add_ref(connection, member, owner_id, "data/ledger_periods.json", row["period_id"], "fk")
+        _add_ref(connection, member, owner_id, "data/holdings.json", row["holding_id"], "fk")
+        if member == "data/ledger_openings.json":
+            _insert_unique(connection, "ledger_opening", [row["period_id"], row["holding_id"]], owner_id)
+        else:
+            _insert_unique(connection, "ledger_entry_key", row["idempotency_key"], owner_id)
+            for field in ("reverses_id", "replaces_id", "linked_entry_id"):
+                if row[field] == owner_id:
+                    raise _RelationshipInvalid
+                _add_ref(connection, member, owner_id, member, row[field], field)
+    elif member == "data/ledger_periods.json":
+        _insert_unique(connection, "ledger_singleton", row["singleton"], owner_id)
+        _insert_unique(connection, "ledger_period_key", row["idempotency_key"], owner_id)
+    elif member == "data/reference_fx_days.json":
+        _insert_unique(connection, "reference_fx_day", [row["currency"], row["local_date"]], owner_id)
+        _add_ref(connection, member, owner_id, "data/market_data.json", row["quote_id"], "fk")
+    elif member == "data/reference_fx_revisions.json":
+        _add_ref(connection, member, owner_id, "data/ledger_entries.json", row["entry_id"], "fk")
+        _add_ref(connection, member, owner_id, "data/ledger_openings.json", row["opening_id"], "fk")
     elif member == "credentials.json":
         _insert_unique(connection, "credential_provider", row["provider"], owner_id)
         return str(row["provider"])
@@ -721,6 +819,35 @@ def _verify_relationships(connection: sqlite3.Connection) -> None:
     ).fetchone()
     if invalid_snapshot is not None:
         raise _RelationshipInvalid
+    invalid_ledger_date = connection.execute(
+        """
+        SELECT 1 FROM current_rows AS entry
+        JOIN current_rows AS period
+          ON period.member = 'data/ledger_periods.json'
+         AND period.order_key = json_extract(entry.payload, '$.period_id')
+        WHERE entry.member = 'data/ledger_entries.json'
+          AND json_extract(entry.payload, '$.occurred_on') < json_extract(period.payload, '$.opened_on')
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_ledger_date is not None:
+        raise _RelationshipInvalid
+    invalid_audit_link = connection.execute(
+        """
+        SELECT 1 FROM refs AS reference
+        JOIN current_rows AS owner
+          ON owner.member = reference.owner_member AND owner.order_key = reference.owner_id
+        JOIN current_rows AS target
+          ON target.member = reference.target_member AND target.order_key = reference.target_id
+        WHERE reference.owner_member = 'data/ledger_entries.json'
+          AND reference.kind IN ('reverses_id', 'replaces_id')
+          AND (json_extract(owner.payload, '$.period_id') != json_extract(target.payload, '$.period_id')
+            OR json_extract(owner.payload, '$.holding_id') != json_extract(target.payload, '$.holding_id'))
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_audit_link is not None:
+        raise _RelationshipInvalid
     weights = (
         Decimal(value)
         for (value,) in connection.execute(
@@ -731,10 +858,10 @@ def _verify_relationships(connection: sqlite3.Connection) -> None:
         raise _RelationshipInvalid
 
 
-def _current_checksum(connection: sqlite3.Connection) -> str:
+def _current_checksum(connection: sqlite3.Connection, members: tuple[str, ...] = DATA_MEMBERS) -> str:
     digest = hashlib.sha256()
     digest.update(b"{")
-    for member_index, member in enumerate(sorted(DATA_MEMBERS)):
+    for member_index, member in enumerate(sorted(members)):
         if member_index:
             digest.update(b",")
         digest.update(canonical_json_bytes(member))
@@ -784,7 +911,7 @@ def validate_backup(
                             if category is not None:
                                 categories.add(category)
                         record_counts[member] = count
-                        if count != inspected.manifest.record_counts[member]:
+                        if count != inspected.manifest.record_counts.get(member, 0):
                             raise _Incompatible
                     if connection.execute(
                         "SELECT COUNT(*) FROM identities WHERE member = 'data/settings.json'"

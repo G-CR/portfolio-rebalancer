@@ -20,6 +20,7 @@ export function PnlBreakdown({ portfolio }: { portfolio: PortfolioAnalytics }) {
         <div><dt><span className={styles.fxKey} />汇率影响</dt><dd>{formatSignedAmount(portfolio.fx_effect)}</dd></div>
         <div><dt>浮动盈亏</dt><dd>{formatSignedAmount(portfolio.unrealized_pnl)}</dd></div>
       </dl>
+      <p>旧成本汇率为历史估算，以上拆分不代表实际换汇盈亏。启用后期间损益请查看投资记录。</p>
     </section>
   );
 }

@@ -15,6 +15,7 @@ import { SnapshotTable, snapshotTypeLabel } from "../features/snapshots/Snapshot
 import { snapshotCompletenessLabel } from "../features/snapshots/completeness";
 import { formatSnapshotCapturedAt, snapshotRangeStart, type SnapshotRange } from "../features/snapshots/dateTime";
 import { PageError } from "./PageState";
+import { useLedgerEntries } from "../features/ledger/api";
 
 const metrics: { id: SnapshotMetric; label: string }[] = [
   { id: "market", label: "核心池市值" },
@@ -47,6 +48,7 @@ export function SnapshotsPage() {
     assetClass: assetClass || undefined,
   }), [range, snapshotType, assetClass]);
   const snapshots = useSnapshots(filters);
+  const investmentEvents = useLedgerEntries({date_from: filters.fromDate ?? ''});
   const assetClasses = useAssetClasses();
   const detail = useSnapshotDetail(selectedId);
   const createManual = useCreateManualSnapshot();
@@ -99,7 +101,7 @@ export function SnapshotsPage() {
         <div className={styles.filterGroup}><label htmlFor="snapshot-asset-class">资产类别</label><select id="snapshot-asset-class" value={assetClass} onChange={(event) => setAssetClass(event.target.value)}><option value="">全部类别</option>{assetClasses.data?.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></div>
       </div>
       <div className={styles.metrics} role="group" aria-label="主要分析口径">{metrics.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => setMetric(item.id)}>{item.label}</button>)}</div>
-      {snapshots.data.items.length === 0 ? <section className={styles.empty}><strong>还没有历史快照</strong><p>完成一次有效数据刷新，或记录当前时点后，这里会出现可复核的时点记录。</p></section> : <><SnapshotChart items={snapshots.data.items} metric={metric} /><SnapshotTable items={snapshots.data.items} page={tablePage} pageSize={EVENT_PAGE_SIZE} onPageChange={setTablePage} onSelect={setSelectedId} /></>}
+      {snapshots.data.items.length === 0 ? <section className={styles.empty}><strong>还没有历史快照</strong><p>完成一次有效数据刷新，或记录当前时点后，这里会出现可复核的时点记录。</p></section> : <><SnapshotChart items={snapshots.data.items} metric={metric} events={assetClass ? [] : investmentEvents.data} />{investmentEvents.isError ? <p role="alert">投资事件载入失败，快照仍可查看。<button onClick={() => void investmentEvents.refetch()}>重试投资事件</button></p> : null}<SnapshotTable items={snapshots.data.items} page={tablePage} pageSize={EVENT_PAGE_SIZE} onPageChange={setTablePage} onSelect={setSelectedId} /></>}
       </>}
 
       <WorkDrawer open={Boolean(selectedId)} title="快照详情" onClose={() => setSelectedId(null)}>

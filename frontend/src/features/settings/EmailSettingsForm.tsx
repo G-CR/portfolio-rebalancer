@@ -1,3 +1,4 @@
+import { DecisionNotificationSettings } from "../decision/DecisionNotificationSettings";
 import { Mail, Save, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -74,7 +75,7 @@ export function EmailSettingsForm() {
     <section className={styles.generalSettings} aria-labelledby="email-settings-title">
       <header className={styles.sectionHeading}>
         <div><p>EMAIL NOTIFICATION</p><h2 id="email-settings-title">邮件通知</h2></div>
-        <label className={styles.enabled}><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用每日邮件</label>
+        <label className={styles.enabled}><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用邮件通知</label>
       </header>
       {settings.isPending ? <p className={styles.muted}>正在载入邮件设置...</p> : null}
       {settings.isError ? <p className={styles.error} role="alert">邮件设置加载失败。</p> : null}
@@ -87,6 +88,7 @@ export function EmailSettingsForm() {
         <FormField label="授权码"><input type="password" autoComplete="new-password" value={password} placeholder={settings.data.password_masked ?? "输入授权码"} onChange={(event) => setPassword(event.target.value)} /></FormField>
         <FormField label="发件人（可选）"><input type="email" value={fromAddress} onChange={(event) => setFromAddress(event.target.value)} /></FormField>
       </div> : null}
+      <DecisionNotificationSettings />
       <div className={styles.providerActions}>
         <button type="button" className={styles.secondary} onClick={() => digest.mutate()} disabled={digest.isPending || save.isPending || test.isPending}><Mail size={15} aria-hidden="true" />{digest.isPending ? "正在刷新并发送..." : "立即发送日报"}</button>
         <button type="button" className={styles.secondary} onClick={() => void test.mutateAsync()} disabled={test.isPending || save.isPending}><Send size={15} aria-hidden="true" />{test.isPending ? "正在发送" : "发送测试邮件"}</button>
@@ -96,7 +98,7 @@ export function EmailSettingsForm() {
       {digest.data ? <small className={styles.validationGood}>{DIGEST_RESULT_LABELS[digest.data.status]}</small> : null}
       {digest.isError ? <small className={styles.validationBad}>{digest.error instanceof Error ? digest.error.message : "日报发送失败。"}</small> : null}
       {save.isError ? <small className={styles.validationBad}>{save.error instanceof Error ? save.error.message : "邮件设置保存失败。"}</small> : null}
-      <small className={styles.muted}><Mail size={12} aria-hidden="true" /> 每日刷新完成后，在工作日自动发送盈亏分析与再平衡建议邮件。</small>
+      <small className={styles.muted}><Mail size={12} aria-hidden="true" /> 每日邮件在工作日刷新后发送；仅需关注模式在持续越界或持续数据异常时通知。立即发送日报始终可用。</small>
     </section>
   );
 }

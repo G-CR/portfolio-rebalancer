@@ -1,3 +1,4 @@
+import { decisionQueryKey } from "../src/features/decision/api";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
@@ -19,6 +20,7 @@ import { server } from "./testProviders";
 function renderMutationHook<TResult>(hook: () => TResult) {
   const queryClient = createQueryClient();
   queryClient.setQueryData(portfolioAnalyticsKey, portfolioFixture);
+  queryClient.setQueryData(decisionQueryKey, {});
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
@@ -27,6 +29,7 @@ function renderMutationHook<TResult>(hook: () => TResult) {
 
 function expectAnalyticsInvalidated(queryClient: ReturnType<typeof createQueryClient>) {
   expect(queryClient.getQueryState(portfolioAnalyticsKey)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(decisionQueryKey)?.isInvalidated).toBe(true);
 }
 
 const createPayload = {

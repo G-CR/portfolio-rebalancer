@@ -9,6 +9,13 @@ import yaml
 import app.worker as worker_module
 
 
+@pytest.fixture(autouse=True)
+def isolate_investing_maintenance(monkeypatch):
+    # This file tests the pre-existing refresh lifecycle; investing maintenance
+    # is exercised independently in test_investing_worker.py.
+    monkeypatch.setattr(worker_module, "scheduled_investing_updates", AsyncMock())
+
+
 class _FakeScheduler:
     def __init__(self, *, timezone: str) -> None:
         self.timezone = timezone
@@ -297,7 +304,7 @@ async def test_run_cancels_and_awaits_watcher_before_scheduler_shutdown(monkeypa
     with pytest.raises(asyncio.CancelledError):
         await worker_module._run()
 
-    assert lifecycle == ["cancel", "cancel", "await", "await", "shutdown"]
+    assert lifecycle == ["cancel", "cancel", "cancel", "await", "await", "await", "shutdown"]
 
 
 def test_compose_worker_has_restart_policy() -> None:

@@ -59,6 +59,16 @@ export async function seedPortfolio(
     const path = url.pathname;
     if (!path.startsWith("/api/")) return route.continue();
     if (path === "/api/asset-classes") return route.fulfill({ json: assetClassFixtures });
+    if (path === "/api/decision") return route.fulfill({ json: {
+      status: state === "empty" ? "setup" : "normal", title: state === "empty" ? "开始建立组合" : "配置正常",
+      reason: "按月复核配置，等待有效日终观察。", classes: [], issues: [], has_manual_data: false,
+      latest_valid_date: null, last_checked_at: null, active_plan_id: null,
+      review_date: "2026-10-01", review_due: false, last_reviewed_at: null,
+    } });
+    if (path === "/api/ledger/statistics") return route.fulfill({ json: {
+      period: null, currencies: [], reference_pnl_cny: null, incomplete_reasons: [], holdings: [],
+    } });
+    if (path === "/api/ledger/entries") return route.fulfill({ json: [] });
     if (path === "/api/holdings" && route.request().method() === "GET") {
       const includeArchived = url.searchParams.get("include_archived") === "true";
       return route.fulfill({ json: includeArchived ? holdings : holdings.filter((item: any) => item.is_active) });

@@ -26,6 +26,7 @@ from app.backups.canonical import (
 )
 from app.backups.constants import (
     ALLOWED_MEMBERS,
+    data_members_for_version,
     CURRENT_FORMAT_VERSION,
     DATA_MEMBERS,
     MANIFEST_MEMBER,
@@ -406,10 +407,10 @@ def _iter_payloads(connection: sqlite3.Connection, member: str) -> Iterator[byte
         yield bytes(payload)
 
 
-def _logical_checksum_from_store(connection: sqlite3.Connection) -> str:
+def _logical_checksum_from_store(connection: sqlite3.Connection, members: tuple[str, ...] = DATA_MEMBERS) -> str:
     digest = hashlib.sha256()
     digest.update(b"{")
-    for member_index, member in enumerate(sorted(DATA_MEMBERS)):
+    for member_index, member in enumerate(sorted(members)):
         if member_index:
             digest.update(b",")
         digest.update(canonical_json_bytes(member))
@@ -601,16 +602,16 @@ def _parse_manifest(document: dict[str, Any], version: int) -> BackupManifest:
         raise InvalidBackupDocument("logical checksum is invalid") from exc
 
     counts = document["record_counts"]
-    if not isinstance(counts, dict) or set(counts) != set(DATA_MEMBERS):
+    if not isinstance(counts, dict) or set(counts) != set(data_members_for_version(version)):
         raise InvalidBackupDocument("record counts do not match archive members")
     if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts.values()):
         raise InvalidBackupDocument("record count is invalid")
 
     raw_members = document["members"]
-    if not isinstance(raw_members, dict) or set(raw_members) != set(DATA_MEMBERS):
+    if not isinstance(raw_members, dict) or set(raw_members) != set(data_members_for_version(version)):
         raise InvalidBackupDocument("member metadata does not match archive members")
     members: dict[str, MemberDigest] = {}
-    for member in DATA_MEMBERS:
+    for member in data_members_for_version(version):
         details = raw_members[member]
         if not isinstance(details, dict) or set(details) != {"byte_length", "sha256"}:
             raise InvalidBackupDocument("member metadata is invalid")
@@ -655,13 +656,15 @@ def _verify_member_bytes(archive: ZipFile, info: ZipInfo, expected: MemberDigest
         raise InvalidBackupArchive("backup member checksum does not match its manifest")
 
 
-def _check_archive_metadata(compressed_size: int, infos: list[ZipInfo]) -> dict[str, ZipInfo]:
+def _check_archive_metadata(compressed_size: int, infos: list[ZipInfo], version: int | None = None) -> dict[str, ZipInfo]:
     if compressed_size > MAX_COMPRESSED_BYTES:
         raise ArchiveLimitExceeded("backup exceeds the compressed resource limit")
     names = [info.filename for info in infos]
     if len(names) != len(set(names)):
         raise InvalidBackupArchive("backup contains duplicate members")
-    if tuple(sorted(names)) != tuple(sorted(ALLOWED_MEMBERS)):
+    if MANIFEST_MEMBER not in names or any(name not in ALLOWED_MEMBERS for name in names):
+        raise InvalidBackupArchive("backup members do not match the allowlist")
+    if version is not None and set(names) != {MANIFEST_MEMBER, *data_members_for_version(version)}:
         raise InvalidBackupArchive("backup members do not match the allowlist")
     if any(_is_symlink(info) for info in infos):
         raise InvalidBackupArchive("backup contains a symbolic link")
@@ -708,8 +711,9 @@ def open_verified_archive(path: Path) -> InspectedArchive:
         by_name = _check_archive_metadata(compressed_size, infos)
         raw_manifest = _read_manifest(archive, by_name[MANIFEST_MEMBER])
         version = _format_version(raw_manifest)
+        _check_archive_metadata(compressed_size, infos, version)
         manifest = _parse_manifest(raw_manifest, version)
-        for member in DATA_MEMBERS:
+        for member in data_members_for_version(version):
             _verify_member_bytes(archive, by_name[member], manifest.members[member])
         require_migration_path(version)
         inspected = InspectedArchive(
@@ -721,6 +725,7 @@ def open_verified_archive(path: Path) -> InspectedArchive:
             _zip=archive,
             _verification_token=_VERIFIED_ARCHIVE_TOKEN,
         )
+        _verify_source_logical_checksum(inspected)
         owns_resources = False
         return inspected
     except (
@@ -745,6 +750,28 @@ def open_verified_archive(path: Path) -> InspectedArchive:
                     snapshot.close()
 
 
+def _verify_source_logical_checksum(inspected: InspectedArchive) -> None:
+    # Verify the original document before applying transformations or empty members.
+    with tempfile.TemporaryDirectory() as workspace:
+        connection = _open_row_store(Path(workspace) / "source.sqlite3")
+        try:
+            members = data_members_for_version(inspected.format_version)
+            for member in members:
+                contract = CONTRACTS_BY_MEMBER[member]
+                count = 0
+                for row in inspected.iter_source_rows(member):
+                    if contract.order_key not in row:
+                        raise InvalidBackupDocument("backup row identity is missing")
+                    _insert_row(connection, contract, row)
+                    count += 1
+                if count != inspected.manifest.record_counts[member]:
+                    raise InvalidBackupDocument("backup record count does not match manifest")
+            if _logical_checksum_from_store(connection, members) != inspected.manifest.logical_checksum:
+                raise InvalidBackupDocument("backup logical checksum does not match manifest")
+        finally:
+            connection.close()
+
+
 def inspect_archive(path: Path) -> InspectedArchive:
     inspected = open_verified_archive(path)
     try:
@@ -757,7 +784,7 @@ def inspect_archive(path: Path) -> InspectedArchive:
                     for row in iter_current_rows(migrated, member):
                         _insert_row(connection, CONTRACTS_BY_MEMBER[member], row)
                         count += 1
-                    if count != inspected.manifest.record_counts[member]:
+                    if count != inspected.manifest.record_counts.get(member, 0):
                         raise InvalidBackupDocument("backup record count does not match manifest")
                 connection.commit()
                 checksum = _logical_checksum_from_store(connection)

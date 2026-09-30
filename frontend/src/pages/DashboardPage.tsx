@@ -3,7 +3,8 @@ import { RefreshCw } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { PortfolioIncompleteItem } from "../api/types";
 import { CalibrationRail } from "../components/CalibrationRail/CalibrationRail";
-import { DecisionBanner } from "../features/analytics/DecisionBanner";
+import { LongTermDecisionBanner } from "../features/decision/LongTermDecisionBanner";
+import { useDecision } from "../features/decision/api";
 import { boundedRatioPercent, formatDataTime, formatDecimal, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
 import { PnlBreakdown } from "../features/analytics/PnlBreakdown";
 import { PortfolioMetrics } from "../features/analytics/PortfolioMetrics";
@@ -29,10 +30,12 @@ function IncompleteState({ error, onRetry }: { error: ApiError; onRetry: () => v
 
 export function DashboardPage() {
   const portfolio = usePortfolioAnalytics();
+  const decision = useDecision();
+  const banner = decision.data ? <LongTermDecisionBanner decision={decision.data} /> : decision.isError ? <PageError title="配置判断无法载入" message="请重试载入配置判断。" retryLabel="重试配置判断" onRetry={() => void decision.refetch()} /> : <p role="status">正在载入配置判断...</p>;
   if (portfolio.isPending) return <AnalyticsLoading />;
   if (portfolio.isError) {
     if (portfolio.error instanceof ApiError && portfolio.error.code === "PORTFOLIO_DATA_INCOMPLETE") {
-      return <IncompleteState error={portfolio.error} onRetry={() => void portfolio.refetch()} />;
+      return <section className={styles.page}>{banner}<IncompleteState error={portfolio.error} onRetry={() => void portfolio.refetch()} /></section>;
     }
     const message = portfolio.error instanceof ApiError ? portfolio.error.message : "组合分析载入失败。";
     return <PageError title="总览无法载入" message={message} retryLabel="重试载入分析" onRetry={() => void portfolio.refetch()} />;
@@ -40,7 +43,7 @@ export function DashboardPage() {
 
   const data = portfolio.data;
   if (data.decision.status === "setup") {
-    return <section className={styles.page}><DecisionBanner decision={data.decision} /></section>;
+    return <section className={styles.page}>{banner}</section>;
   }
 
   const domestic = data.data_inputs.filter((item) => item.input === "price" && /^price:\d/.test(item.key));
@@ -50,7 +53,7 @@ export function DashboardPage() {
 
   return (
     <section className={styles.page} aria-label="组合总览">
-      <DecisionBanner decision={data.decision} />
+      {banner}
       <PortfolioMetrics portfolio={data} />
       <section className={styles.rails} aria-labelledby="allocation-title">
         <div className={styles.sectionHeading}><div><p>ALLOCATION CALIBRATION</p><h2 id="allocation-title">资产配置校准</h2></div><span>允许偏离 ±{formatPercentagePoints(data.tolerance)}</span></div>

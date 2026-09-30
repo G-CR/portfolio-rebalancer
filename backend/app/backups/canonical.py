@@ -88,7 +88,7 @@ def _canonical_document(document: dict[str, object]) -> dict[str, JsonValue]:
             continue
         encoded_rows = encode_json_value(raw_rows)
         if isinstance(encoded_rows, list) and all(isinstance(row, dict) for row in encoded_rows):
-            encoded_rows = sorted(encoded_rows, key=lambda row: str(row.get("id", "")))
+            encoded_rows = sorted(encoded_rows, key=lambda row: str(row.get("id", row.get("local_date", row.get("event_key", "")))))
         result[member] = encoded_rows
     return result
 

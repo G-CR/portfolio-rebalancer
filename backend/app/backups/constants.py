@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-CURRENT_FORMAT_VERSION = 1
+CURRENT_FORMAT_VERSION = 2
 
 MANIFEST_MEMBER = "manifest.json"
 CREDENTIALS_MEMBER = "credentials.json"
-TABLE_MEMBERS = (
+V1_TABLE_MEMBERS = (
     "data/asset_classes.json",
     "data/holdings.json",
     "data/holding_defaults.json",
@@ -16,7 +16,24 @@ TABLE_MEMBERS = (
     "data/rebalance_plans.json",
     "data/settings.json",
 )
+V1_DATA_MEMBERS = (CREDENTIALS_MEMBER, *V1_TABLE_MEMBERS)
+NEW_TABLE_MEMBERS = (
+    "data/reference_fx_days.json",
+    "data/reference_fx_revisions.json",
+    "data/ledger_periods.json",
+    "data/ledger_openings.json",
+    "data/ledger_entries.json",
+    "data/decision_policy.json",
+    "data/decision_observations.json",
+    "data/notification_outbox.json",
+)
+TABLE_MEMBERS = (*V1_TABLE_MEMBERS, *NEW_TABLE_MEMBERS)
 DATA_MEMBERS = (CREDENTIALS_MEMBER, *TABLE_MEMBERS)
+
+def data_members_for_version(version: int) -> tuple[str, ...]:
+    # Unknown older versions still receive byte checks before migration rejection.
+    return V1_DATA_MEMBERS if version == 1 else DATA_MEMBERS
+
 ALLOWED_MEMBERS = (MANIFEST_MEMBER, *DATA_MEMBERS)
 
 MAX_COMPRESSED_BYTES = 500 * 1024 * 1024

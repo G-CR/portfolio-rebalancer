@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
+import { shanghaiDate } from '../ledger/api';
 
 type FeeMode = "estimated" | "actual";
 
@@ -24,9 +25,7 @@ type Props = {
 };
 
 function today() {
-  const date = new Date();
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
+  return shanghaiDate();
 }
 
 function messageFor(error: unknown) {
@@ -42,7 +41,6 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
   const [quantity, setQuantity] = useState("");
   const [tradeDate, setTradeDate] = useState(today);
   const [price, setPrice] = useState("");
-  const [fx, setFx] = useState(holding.trade_currency === "CNY" ? "1" : "");
   const [feeMode, setFeeMode] = useState<FeeMode>("estimated");
   const [feeCurrency, setFeeCurrency] = useState(holding.trade_currency);
   const [commissionRate, setCommissionRate] = useState("0");
@@ -77,7 +75,7 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
   const payload = useMemo<PurchasePayload>(() => ({
     quantity,
     price,
-    fx,
+    occurred_on: tradeDate,
     fee_currency: feeCurrency || null,
     commission_rate: commissionRate || null,
     minimum_commission: minimumCommission || null,
@@ -86,11 +84,11 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
     actual_fee: feeMode === "actual" ? actualFee || null : null,
     save_fee_defaults: saveDefaults,
     note: note.trim() || null,
-  }), [actualFee, commissionRate, feeCurrency, feeMode, fixedFee, fx, minimumCommission, note, perShareFee, price, quantity, saveDefaults]);
+  }), [actualFee, commissionRate, feeCurrency, feeMode, fixedFee, tradeDate, minimumCommission, note, perShareFee, price, quantity, saveDefaults]);
   const fingerprint = JSON.stringify(payload);
   const stale = Boolean(previewFingerprint && previewFingerprint !== fingerprint);
   const preview = stale ? null : previewMutation.data ?? null;
-  const validInputs = Boolean(quantity && price && fx && (feeMode === "estimated" || actualFee));
+  const validInputs = Boolean(quantity && price && tradeDate && (feeMode === "estimated" || actualFee));
   const canConfirm = Boolean(preview && previewIdentityMatches(preview) && !stale && !confirmMutation.isPending);
 
   async function generatePreview() {
@@ -113,6 +111,7 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
         expected_version: preview.holding_version,
         operation: "purchase",
         payload,
+        preview_token: preview.preview_token,
       });
       setSuccess(true);
       onUpdated?.();
@@ -152,7 +151,7 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
             <FormField label="新增份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
             <FormField label="成交日期" required><input type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></FormField>
             <FormField label="成交价" required suffix={holding.trade_currency}><input type="text" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /></FormField>
-            <FormField label="本次汇率" required hint="1 单位交易币种折合人民币"><input type="text" inputMode="decimal" value={fx} onChange={(event) => setFx(event.target.value)} /></FormField>
+            <p className={styles.muted}>参考汇率由系统按成交日自动选取；原币成本为主，人民币结果为参考。</p>
           </div>
         </section>
 

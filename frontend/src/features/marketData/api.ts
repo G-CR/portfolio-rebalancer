@@ -1,3 +1,5 @@
+import { decisionQueryKey } from "../decision/api";
+import { ledgerRoot } from "../ledger/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
@@ -32,6 +34,8 @@ export function useRefreshMarketData() {
     onSuccess: (data) => {
       queryClient.setQueryData(marketDataQueryKey, data);
       queryClient.setQueryData<number>(marketDataRefreshVersionKey, (current = 0) => current + 1);
+      void queryClient.invalidateQueries({ queryKey: decisionQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
       const hasIncompleteRequiredData = data.items.some(
         (item) => item.effective_value === null,
       );
@@ -51,7 +55,7 @@ export function useSetMarketDataOverride() {
       method: "POST",
       body: jsonBody(payload),
     }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: marketDataQueryKey }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: marketDataQueryKey }); void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey }); void queryClient.invalidateQueries({ queryKey: ledgerRoot }); },
   });
 }
 
@@ -59,6 +63,6 @@ export function useDeleteMarketDataOverride() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (key: string) => apiRequest<void>(`/api/market-data/${key}/override`, { method: "DELETE" }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: marketDataQueryKey }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: marketDataQueryKey }); void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey }); void queryClient.invalidateQueries({ queryKey: ledgerRoot }); },
   });
 }

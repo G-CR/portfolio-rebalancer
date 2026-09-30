@@ -148,11 +148,12 @@ def track_temporary_snapshots(
 
 
 def test_v1_constants_freeze_exact_archive_limits_and_members() -> None:
-    assert CURRENT_FORMAT_VERSION == 1
+    assert CURRENT_FORMAT_VERSION == 2
     assert MAX_COMPRESSED_BYTES == 500 * 1024 * 1024
     assert MAX_UNCOMPRESSED_BYTES == 2 * 1024 * 1024 * 1024
     assert MAX_AGGREGATE_COMPRESSION_RATIO == 100
-    assert ALLOWED_MEMBERS == (
+    from app.backups.constants import V1_DATA_MEMBERS
+    assert ("manifest.json", *V1_DATA_MEMBERS) == (
         "manifest.json",
         "credentials.json",
         "data/asset_classes.json",
@@ -168,8 +169,8 @@ def test_v1_constants_freeze_exact_archive_limits_and_members() -> None:
     )
 
 
-def test_v1_contract_covers_every_persisted_column() -> None:
-    assert len(TABLE_CONTRACTS) == 10
+def test_v2_contract_covers_every_persisted_column() -> None:
+    assert len(TABLE_CONTRACTS) == 18
     for contract in TABLE_CONTRACTS:
         assert tuple(column.name for column in contract.model.__table__.columns) == contract.columns
         assert len(contract.codecs) == len(contract.columns)
@@ -744,3 +745,28 @@ def test_single_logical_row_is_rejected_incrementally_before_materialization(
     with pytest.raises(ArchiveLimitExceeded):
         inspect_archive(path)
     assert validated is False
+
+
+def test_v1_migration_synthesizes_only_new_empty_collections() -> None:
+    from app.backups.constants import V1_DATA_MEMBERS
+    with inspect_archive(FIXTURE) as inspected:
+        assert set(inspected.manifest.members) == set(V1_DATA_MEMBERS)
+        for member in set(DATA_MEMBERS) - set(V1_DATA_MEMBERS):
+            assert list(iter_current_rows(inspected, member)) == []
+
+def test_v1_original_logical_checksum_is_verified(tmp_path: Path) -> None:
+    with ZipFile(FIXTURE) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    manifest["logical_checksum"] = "0" * 64
+    corrupt = rewrite_archive(FIXTURE, tmp_path / "old-corrupt.zip", replace={"manifest.json": canonical_json_bytes(manifest)})
+    with pytest.raises(InvalidBackupDocument):
+        inspect_archive(corrupt)
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_versioned_allowlist_rejects_missing_and_extra_members(tmp_path: Path, version: int) -> None:
+    source = FIXTURE if version == 1 else write_valid_archive(tmp_path)
+    missing = rewrite_archive(source, tmp_path / "missing.zip", omit={"data/holdings.json"})
+    extra = rewrite_archive(source, tmp_path / "extra.zip", additions=[("data/unknown.json", b"[]")])
+    for path in (missing, extra):
+        with pytest.raises(InvalidBackupArchive):
+            inspect_archive(path)

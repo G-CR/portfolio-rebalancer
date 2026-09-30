@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from app.db.base import Base
+from app.db.ledger_models import LedgerPeriod, LedgerOpening, LedgerEntry, ReferenceFxDay, ReferenceFxRevision
+from app.db.decision_models import DecisionPolicy, DecisionObservation, NotificationOutbox
 from app.db.models import (
     AssetClass,
     CostAdjustment,
@@ -58,13 +60,14 @@ DN = FieldCodec(Codec.DECIMAL, nullable=True)
 I = FieldCodec(Codec.INTEGER)
 B = FieldCodec(Codec.BOOLEAN)
 DA = FieldCodec(Codec.DATE)
+DAN = FieldCodec(Codec.DATE, nullable=True)
 DT = FieldCodec(Codec.DATETIME)
 DTN = FieldCodec(Codec.DATETIME, nullable=True)
 J = FieldCodec(Codec.JSON)
 JN = FieldCodec(Codec.JSON, nullable=True)
 
 
-TABLE_CONTRACTS = (
+V1_TABLE_CONTRACTS = (
     TableContract(
         "data/asset_classes.json",
         AssetClass,
@@ -170,6 +173,36 @@ TABLE_CONTRACTS = (
         (U, I, I, J, D, D, B, B, D, D, S, B, SN, SN, I, S, SN, SN, DT, DT),
     ),
 )
+
+# Explicit v2 field contracts: changes require an archive version decision.
+V2_TABLE_CONTRACTS = (
+    TableContract("data/reference_fx_days.json", ReferenceFxDay,
+        ('id', 'currency', 'local_date', 'rate', 'source', 'market_time', 'selected_at', 'quote_id', 'actual_date', 'is_fallback', 'is_final'),
+        (U, S, DA, D, S, DTN, DT, UN, DA, B, B), order_key="id"),
+    TableContract("data/reference_fx_revisions.json", ReferenceFxRevision,
+        ('id', 'entry_id', 'opening_id', 'before', 'after', 'reason', 'created_at'),
+        (U, UN, UN, J, J, S, DT), order_key="id"),
+    TableContract("data/ledger_periods.json", LedgerPeriod,
+        ('id', 'singleton', 'opened_on', 'idempotency_key', 'request_hash', 'created_at'),
+        (U, I, DA, S, S, DT), order_key="id"),
+    TableContract("data/ledger_openings.json", LedgerOpening,
+        ('id', 'period_id', 'holding_id', 'trade_currency', 'symbol', 'account_name', 'quantity', 'average_cost_price', 'original_cost', 'legacy_cost_fx', 'baseline_fx', 'market_price', 'reference_fx', 'reference_value_cny', 'reference_details'),
+        (U, U, U, S, S, S, D, D, D, D, D, DN, DN, DN, J), order_key="id"),
+    TableContract("data/ledger_entries.json", LedgerEntry,
+        ('id', 'period_id', 'holding_id', 'kind', 'occurred_on', 'sequence', 'currency', 'quantity', 'price', 'amount', 'fee', 'fee_currency', 'fee_original', 'ratio', 'reference_fx', 'reference_cash_flow_cny', 'reference_details', 'reverses_id', 'replaces_id', 'linked_entry_id', 'idempotency_key', 'request_hash', 'note', 'incomplete_reason', 'created_at'),
+        (U, U, U, S, DA, I, S, D, D, D, D, S, DN, D, DN, DN, J, UN, UN, UN, S, S, SN, SN, DT), order_key="id"),
+    TableContract("data/decision_policy.json", DecisionPolicy,
+        ('id', 'review_day', 'notification_mode', 'monthly_email', 'acknowledged_month', 'last_reviewed_at', 'rule_fingerprint', 'streaks', 'anomalies', 'last_checked_at', 'latest_valid_date'),
+        (I, I, S, B, SN, DTN, SN, J, J, DTN, DAN), order_key="id"),
+    TableContract("data/decision_observations.json", DecisionObservation,
+        ('local_date', 'valid', 'has_manual_data', 'rule_fingerprint', 'classes', 'anomaly_keys', 'captured_at'),
+        (DA, B, B, S, J, J, DT), order_key="local_date"),
+    TableContract("data/notification_outbox.json", NotificationOutbox,
+        ('event_key', 'subject', 'html', 'status', 'attempts', 'last_error', 'created_at', 'sent_at'),
+        (S, S, S, S, I, SN, DT, DTN), order_key="event_key"),
+)
+
+TABLE_CONTRACTS = (*V1_TABLE_CONTRACTS, *V2_TABLE_CONTRACTS)
 
 CREDENTIAL_CONTRACT = TableContract(
     "credentials.json",

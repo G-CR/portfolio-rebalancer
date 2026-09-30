@@ -116,8 +116,12 @@ async def preview_purchase(
 ) -> CostAdjustmentPreviewResponse:
     try:
         holding = await _get_active_holding(session, holding_id)
+        from app.services.ledger import get_period
+        from app.services.ledger_cost_bridge import ledger_preview, automatic_purchase_preview
+        if await get_period(session):
+            return await ledger_preview(session, holding, 'purchase', payload)
         defaults = await _get_holding_defaults(session, holding.id)
-        preview = _preview_purchase_from_holding(holding, defaults, payload)
+        preview = _preview_purchase_from_holding(holding, defaults, payload) if payload.fx is not None else await automatic_purchase_preview(session, holding, defaults, payload)
         return _preview_response(holding, preview)
     except InvalidOperation as exc:
         raise _numeric_range_error() from exc
@@ -130,6 +134,10 @@ async def preview_sell(
 ) -> CostAdjustmentPreviewResponse:
     try:
         holding = await _get_active_holding(session, holding_id)
+        from app.services.ledger import get_period
+        from app.services.ledger_cost_bridge import ledger_preview
+        if await get_period(session):
+            return await ledger_preview(session, holding, 'sell', payload)
         preview = _preview_sell_from_holding(holding, payload)
         return _preview_response(holding, preview)
     except InvalidOperation as exc:
@@ -169,6 +177,9 @@ async def confirm_adjustment(
     holding_id: UUID,
     request: CostAdjustmentConfirmRequest,
 ) -> CostAdjustmentPreviewResponse:
+    from app.services.ledger import get_period, confirm_entry
+    # Match ledger writer lock order: period first, then individual holding.
+    period = await get_period(session, lock=True)
     holding = await _get_active_holding(session, holding_id, lock=True)
     if holding.version != request.expected_version:
         raise ServiceError(
@@ -177,6 +188,19 @@ async def confirm_adjustment(
             "Holding was modified after the preview was generated.",
             {"current_version": holding.version},
         )
+
+    from app.services.ledger_cost_bridge import ledger_preview, request_for
+    if request.operation in {'purchase', 'sell'} and period:
+        payload_model = PurchasePreviewRequest if request.operation == 'purchase' else SellPreviewRequest
+        operation_payload = _validate_operation_payload(payload_model, request.payload)
+        ledger_request = await request_for(session, holding, request.operation, operation_payload, request.idempotency_key)
+        response = await ledger_preview(session, holding, request.operation, operation_payload, request.idempotency_key)
+        ledger_request = ledger_request.model_copy(update={'preview_token': request.preview_token or response.preview_token})
+        await confirm_entry(session, ledger_request)
+        if request.operation == 'purchase' and operation_payload.save_fee_defaults:
+            await _persist_fee_defaults(session, holding.id, operation_payload)
+        await session.flush()
+        return response.model_copy(update={'holding_version': holding.version})
 
     try:
         preview = await _preview_for_confirmation(session, holding, request)
@@ -209,6 +233,9 @@ async def confirm_adjustment(
         created_at=utcnow(),
     )
     session.add(adjustment)
+    if request.operation in {'manual_correction', 'restore'}:
+        from app.services.ledger_cost_bridge import record_external_change
+        await record_external_change(session, holding, '人工修正或恢复改变成本链，期间收益不完整。', preview.note)
     await session.flush()
 
     try:
@@ -257,6 +284,8 @@ async def record_full_sale(
     )
     session.add(adjustment)
     await session.flush()
+    from app.services.ledger_cost_bridge import record_external_change
+    await record_external_change(session, holding, '旧标的替换缺少卖出净收入，收益记录不完整。', normalized_note)
     return adjustment
 
 
@@ -268,6 +297,9 @@ async def _preview_for_confirmation(
     if request.operation == "purchase":
         defaults = await _get_holding_defaults(session, holding.id)
         payload = _validate_operation_payload(PurchasePreviewRequest, request.payload)
+        if payload.fx is None:
+            from app.services.ledger_cost_bridge import automatic_purchase_preview
+            return await automatic_purchase_preview(session, holding, defaults, payload)
         return _preview_purchase_from_holding(holding, defaults, payload)
     if request.operation == "sell":
         payload = _validate_operation_payload(SellPreviewRequest, request.payload)

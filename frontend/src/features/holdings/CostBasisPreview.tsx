@@ -7,7 +7,7 @@ import styles from "./Holdings.module.css";
 
 const COST_PRICE_KEYS = new Set(['average_cost_price']);
 const COST_FX_KEYS = new Set(['cost_fx_to_cny']);
-function fmtRawValue(key, value) {
+function fmtRawValue(key: string, value: string) {
   if (COST_PRICE_KEYS.has(key)) return formatDecimal(value, 3);
   if (COST_FX_KEYS.has(key)) return formatDecimal(value, 2);
   return value;
@@ -55,6 +55,8 @@ export function CostBasisPreview({ preview }: { preview: CostAdjustmentPreview }
           {preview.fee.mode === "actual" ? "实际费用" : "预估费用"} {preview.fee.amount} {preview.fee.currency}
         </p>
       ) : null}
+      {preview.original_cost ? <p className={styles.feeResult}>原币总成本 {preview.original_cost}</p> : null}
+      {preview.reference_label ? <p className={styles.muted}>{preview.reference_label}</p> : null}
       <div className={identityMatches ? styles.identityValid : styles.identityInvalid}>
         {identityMatches ? <CheckCircle2 size={16} aria-hidden="true" /> : <XCircle size={16} aria-hidden="true" />}
         <div>

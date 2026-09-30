@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import delete, insert, text
+from sqlalchemy import delete, insert, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backups.archive import ArchiveMetadata, iter_current_rows, open_verified_archive
@@ -19,6 +19,7 @@ from app.backups.constants import DATA_MEMBERS, STREAM_CHUNK_BYTES
 from app.backups.contracts import CREDENTIAL_CONTRACT, CONTRACTS_BY_MEMBER, Codec
 from app.backups.migrations import migrate_to_current
 from app.core.config import get_settings
+from app.db.ledger_models import LedgerEntry
 from app.core.secrets import SecretStore
 from app.schemas.backup import BackupStage
 from app.services.backup_export import build_export_metadata, export_logical_backup
@@ -33,6 +34,8 @@ from app.services.backup_validation import (
 
 RESTORE_ADVISORY_LOCK_KEY = 0x504F5254464F4C49
 RESTORE_TABLES = (
+    "reference_fx_revisions", "ledger_entries", "ledger_openings", "ledger_periods",
+    "reference_fx_days", "decision_policy", "decision_observations", "notification_outbox",
     "encrypted_secrets",
     "rebalance_plans",
     "snapshot_items",
@@ -46,6 +49,9 @@ RESTORE_TABLES = (
     "settings",
 )
 DELETE_MEMBERS = (
+    "data/reference_fx_revisions.json", "data/ledger_entries.json",
+    "data/ledger_openings.json", "data/ledger_periods.json", "data/reference_fx_days.json",
+    "data/decision_policy.json", "data/decision_observations.json", "data/notification_outbox.json",
     "credentials.json",
     "data/rebalance_plans.json",
     "data/snapshot_items.json",
@@ -70,6 +76,9 @@ INSERT_MEMBERS = (
     "data/rebalance_plans.json",
     "data/settings.json",
     "credentials.json",
+    "data/reference_fx_days.json", "data/ledger_periods.json",
+    "data/ledger_openings.json", "data/ledger_entries.json", "data/reference_fx_revisions.json",
+    "data/decision_policy.json", "data/decision_observations.json", "data/notification_outbox.json",
 )
 INSERT_BATCH_SIZE = 1000
 INSERT_BATCH_MAX_BYTES = 4 * 1024 * 1024
@@ -156,10 +165,18 @@ async def _insert_archive(
             await _run_sync(reader.begin_member, member)
             while batch := await _run_sync(reader.next_batch):
                 statement = _insert_statement(member)
+                if member == "data/ledger_entries.json":
+                    batch = [{**row, "reverses_id": None, "replaces_id": None, "linked_entry_id": None} for row in batch]
                 await session.execute(statement, batch)
                 if not inserted_batch:
                     inserted_batch = True
                     _restore_checkpoint("insert")
+        await _run_sync(reader.begin_member, "data/ledger_entries.json")
+        while batch := await _run_sync(reader.next_batch):
+            for row in batch:
+                links = {field: row[field] for field in ("reverses_id", "replaces_id", "linked_entry_id")}
+                if any(value is not None for value in links.values()):
+                    await session.execute(update(LedgerEntry.__table__).where(LedgerEntry.id == row["id"]).values(**links))
     finally:
         await _run_sync(reader.close)
 
@@ -302,6 +319,7 @@ async def restore_validated_backup(
                 safety_partial.unlink(missing_ok=True)
 
         await progress.set_stage(BackupStage.WRITING_DATA)
+        await session.execute(update(LedgerEntry).values(reverses_id=None, replaces_id=None, linked_entry_id=None))
         for index, member in enumerate(DELETE_MEMBERS):
             await session.execute(delete(CONTRACTS_BY_MEMBER[member].model))
             if index == 0:

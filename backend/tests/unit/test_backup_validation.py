@@ -187,7 +187,7 @@ def test_valid_backup_returns_bounded_descriptor_and_closes_snapshot(tmp_path: P
         expires_at=NOW + timedelta(minutes=30), workspace_root=tmp_path,
     )
 
-    assert validated.source_format_version == 1
+    assert validated.source_format_version == CURRENT_FORMAT_VERSION
     assert validated.current_format_version == CURRENT_FORMAT_VERSION
     assert validated.credential_categories == ("yahoo",)
     assert "synthetic-secret" not in repr(validated)
@@ -1220,3 +1220,111 @@ def test_upload_ttl_cleanup_waits_for_restore_source_lease(tmp_path: Path) -> No
     registry.cleanup_expired()
     assert not upload.exists()
     assert not journal.exists()
+
+
+@pytest.mark.parametrize("review_day", [0, 32])
+def test_v2_decision_policy_bounds(tmp_path: Path, review_day: int) -> None:
+    source = _source()
+    source["data/decision_policy.json"] = [{"id": 1, "review_day": review_day, "notification_mode": "attention", "monthly_email": True, "acknowledged_month": None, "last_reviewed_at": None, "rule_fingerprint": None, "streaks": {}, "anomalies": {}, "last_checked_at": None, "latest_valid_date": None}]
+    with pytest.raises(BackupValidationError):
+        _validate(tmp_path, source)
+
+def test_v2_non_uuid_keys_validate(tmp_path: Path) -> None:
+    source = _source()
+    source["data/decision_observations.json"] = [{"local_date": "2026-08-24", "valid": True, "has_manual_data": False, "rule_fingerprint": "f" * 64, "classes": [], "anomaly_keys": [], "captured_at": NOW}]
+    source["data/notification_outbox.json"] = [{"event_key": "review:2026-08", "subject": "Review", "html": "Review", "status": "pending", "attempts": 0, "last_error": None, "created_at": NOW, "sent_at": None}]
+    _validate(tmp_path, source)
+
+
+def _ledger_source() -> dict[str, list[dict[str, Any]]]:
+    source = _source()
+    period = UUID(int=100)
+    entry = UUID(int=101)
+    source["data/ledger_periods.json"] = [{"id": period, "singleton": 1, "opened_on": "2026-08-01", "idempotency_key": "opening-key", "request_hash": "a" * 64, "created_at": NOW}]
+    source["data/ledger_openings.json"] = [{"id": UUID(int=102), "period_id": period, "holding_id": IDS["holding"], "trade_currency": "USD", "symbol": "SYNTH", "account_name": "test", "quantity": "1", "average_cost_price": "1", "original_cost": "1", "legacy_cost_fx": "7", "baseline_fx": "7", "market_price": "1", "reference_fx": None, "reference_value_cny": None, "reference_details": {}}]
+    source["data/ledger_entries.json"] = [{"id": entry, "period_id": period, "holding_id": IDS["holding"], "kind": "purchase", "occurred_on": "2026-08-24", "sequence": 1, "currency": "USD", "quantity": "1", "price": "1", "amount": "1", "fee": "0", "fee_currency": "USD", "fee_original": "0", "ratio": "1", "reference_fx": None, "reference_cash_flow_cny": None, "reference_details": {}, "reverses_id": None, "replaces_id": None, "linked_entry_id": None, "idempotency_key": "entry-key", "request_hash": "b" * 64, "note": None, "incomplete_reason": None, "created_at": NOW}]
+    source["data/reference_fx_days.json"] = [{"id": UUID(int=103), "currency": "USD", "local_date": "2026-08-24", "rate": "7", "source": "test", "market_time": NOW, "selected_at": NOW, "quote_id": None, "actual_date": "2026-08-23", "is_fallback": True, "is_final": True}]
+    source["data/reference_fx_revisions.json"] = [{"id": UUID(int=104), "entry_id": entry, "opening_id": None, "before": {}, "after": {}, "reason": "Backfill", "created_at": NOW}]
+    from decimal import Decimal
+    from app.backups.contracts import CONTRACTS_BY_MEMBER, Codec
+    for member, rows in source.items():
+        for row in rows:
+            for field, codec in CONTRACTS_BY_MEMBER[member].field_codecs.items():
+                if codec.codec is Codec.DECIMAL and row[field] is not None:
+                    row[field] = format(Decimal(str(row[field])).quantize(Decimal("0.000000000001")), "f")
+    return source
+
+
+def test_populated_v2_ledger_with_pending_reference_validates(tmp_path: Path) -> None:
+    _validate(tmp_path, _ledger_source())
+
+
+@pytest.mark.parametrize(("member", "field", "invalid"), [
+    ("data/ledger_entries.json", "kind", "unknown"),
+    ("data/ledger_entries.json", "sequence", 0),
+    ("data/ledger_entries.json", "quantity", "-1"),
+    ("data/ledger_entries.json", "ratio", "0"),
+    ("data/reference_fx_days.json", "rate", "0"),
+    ("data/reference_fx_days.json", "actual_date", "2026-08-25"),
+    ("data/reference_fx_days.json", "actual_date", "2026-08-01"),
+    ("data/reference_fx_revisions.json", "entry_id", None),
+])
+def test_v2_ledger_semantic_bounds(tmp_path: Path, member: str, field: str, invalid: object) -> None:
+    source = _ledger_source()
+    source[member][0][field] = invalid
+    with pytest.raises(BackupValidationError):
+        _validate(tmp_path, source)
+
+
+@pytest.mark.parametrize("field", ["period_id", "holding_id", "reverses_id", "replaces_id", "linked_entry_id"])
+def test_v2_ledger_dangling_references(tmp_path: Path, field: str) -> None:
+    source = _ledger_source()
+    source["data/ledger_entries.json"][0][field] = UUID(int=999)
+    with pytest.raises(BackupValidationError) as exc:
+        _validate(tmp_path, source)
+    assert exc.value.code == "BACKUP_RELATIONSHIP_INVALID"
+
+
+def test_v2_ledger_unique_opening_rejected(tmp_path: Path) -> None:
+    source = _ledger_source()
+    duplicate = {**source["data/ledger_openings.json"][0], "id": UUID(int=999)}
+    source["data/ledger_openings.json"].append(duplicate)
+    with pytest.raises(BackupValidationError) as exc:
+        _validate(tmp_path, source)
+    assert exc.value.code == "BACKUP_RELATIONSHIP_INVALID"
+
+
+def test_v1_fixture_semantic_validation_migrates_empty_modules(tmp_path: Path) -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "backups" / "v1-minimal.portfolio-backup"
+    validated = validate_backup(fixture, path_id="server:test", workspace_root=tmp_path)
+    assert validated.source_format_version == 1
+    assert validated.current_format_version == 2
+    assert validated.record_counts["data/ledger_entries.json"] == 0
+    assert validated.record_counts["data/notification_outbox.json"] == 0
+
+
+def test_v2_entry_before_opening_rejected(tmp_path: Path) -> None:
+    source = _ledger_source()
+    source["data/ledger_entries.json"][0]["occurred_on"] = "2026-07-31"
+    with pytest.raises(BackupValidationError):
+        _validate(tmp_path, source)
+
+
+def test_v2_audit_link_between_different_holdings_rejected(tmp_path: Path) -> None:
+    source = _ledger_source()
+    second_holding = {**source["data/holdings.json"][0], "id": UUID(int=998), "symbol": "OTHER", "is_rebalance_preferred": False}
+    source["data/holdings.json"].append(second_holding)
+    second_entry = {**source["data/ledger_entries.json"][0], "id": UUID(int=999), "holding_id": second_holding["id"], "idempotency_key": "other-entry"}
+    source["data/ledger_entries.json"][0]["replaces_id"] = second_entry["id"]
+    source["data/ledger_entries.json"].append(second_entry)
+    with pytest.raises(BackupValidationError):
+        _validate(tmp_path, source)
+
+
+def test_v2_correction_audit_chain_shares_stable_sequence(tmp_path: Path) -> None:
+    source = _ledger_source()
+    original = source["data/ledger_entries.json"][0]
+    reversal = {**original, "id": UUID(int=105), "kind": "reversal", "idempotency_key": "reverse-key", "reverses_id": original["id"], "quantity": "0", "price": "0", "amount": "0", "fee": "0"}
+    replacement = {**original, "id": UUID(int=106), "idempotency_key": "replace-key", "replaces_id": original["id"], "price": "2"}
+    source["data/ledger_entries.json"].extend([reversal, replacement])
+    _validate(tmp_path, source)

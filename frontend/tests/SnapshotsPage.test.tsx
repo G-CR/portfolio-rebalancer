@@ -14,6 +14,8 @@ import {
   type SnapshotFilters,
 } from "../src/features/snapshots/api";
 import { SnapshotsPage } from "../src/pages/SnapshotsPage";
+import { SnapshotChart } from "../src/features/snapshots/SnapshotChart";
+import type { LedgerEntry } from "../src/features/ledger/api";
 import { assetClassFixtures } from "./fixtures";
 import { renderWithProviders, server } from "./testProviders";
 
@@ -444,4 +446,12 @@ it("invalidates every snapshot query after manual capture", async () => {
   await act(() => mutation.result.current.mutateAsync({ note: "季度复核" }));
 
   expect(queryClient.getQueryState([...snapshotsQueryRoot, { page: 1 }])?.isInvalidated).toBe(true);
+});
+
+it('annotates investment events and excludes reversed originals from history', () => {
+  const dividend = {id: 'd', holding_id: 'h', symbol: 'SPY', name: 'SPY', account_name: '长期账户', kind: 'dividend', occurred_on: '2026-07-14', created_at: '2026-07-14T02:00:00Z', currency: 'USD', quantity: '0', price: '0', amount: '8', fee: '0', fee_currency: 'USD', ratio: '1', note: null, reference_cash_flow_cny: null, replaces_id: null, reverses_id: null, linked_entry_id: null, reference_details: {}} satisfies LedgerEntry;
+  const cancelled = {...dividend, id: 'cancelled', amount: '99'};
+  renderWithProviders(<SnapshotChart items={[...summaries]} metric="market" events={[dividend, cancelled, {...dividend, id: 'reversal', kind: 'reversal', reverses_id: 'cancelled'}]} />);
+  expect(screen.getByRole('region', {name: '投资事件'})).toHaveTextContent('SPY · 现金分红 · USD 8');
+  expect(screen.getByRole('region', {name: '投资事件'})).not.toHaveTextContent('USD 99');
 });

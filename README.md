@@ -25,6 +25,15 @@ docker compose logs -f
 
 Stop services with `docker compose down`. Do not add `-v` unless you intentionally want to delete portfolio data and the credential key. Upgrade with `git pull`, `docker compose build`, and `docker compose up -d`; the API applies database migrations during startup.
 
+## Long-term investment records
+
+Use **投资记录** to preview and confirm today's opening balances, then record
+purchases, sales, dividends and splits. Existing balances are retained; opening
+unrealized gains are excluded from subsequent period profit. Original-currency
+results are shown separately, with automatic operation-day FX used only for CNY
+reference figures. The homepage provides scheduled observation evidence and an
+explicit monthly review acknowledgement. See [the usage guide](docs/long-term-investing.md).
+
 ## Browser logical backup and restore
 
 The history page's **完整备份与恢复** section exports one versioned

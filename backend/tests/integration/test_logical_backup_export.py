@@ -62,8 +62,8 @@ def _row(model: object, columns: tuple[str, ...]) -> dict[str, object]:
     return {column: getattr(model, column) for column in columns}
 
 
-async def _stored_rows(session: AsyncSession, model: type[Any]) -> list[Any]:
-    rows = await session.scalars(select(model).order_by(model.id))
+async def _stored_rows(session: AsyncSession, model: type[Any], order_key: str = "id") -> list[Any]:
+    rows = await session.scalars(select(model).order_by(getattr(model, order_key)))
     return list(rows)
 
 
@@ -74,7 +74,7 @@ async def _expected_document(
     session.expire_all()
     document: dict[str, list[dict[str, object]]] = {}
     for contract in TABLE_CONTRACTS:
-        models = await _stored_rows(session, contract.model)
+        models = await _stored_rows(session, contract.model, contract.order_key)
         document[contract.member] = [
             encode_json_value(_row(model, contract.columns)) for model in models
         ]

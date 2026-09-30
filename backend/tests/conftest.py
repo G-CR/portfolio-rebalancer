@@ -13,6 +13,14 @@ from sqlalchemy.pool import NullPool
 from tests.database_safety import require_safe_test_database, require_safe_test_environment
 
 BUSINESS_TABLES = (
+    "notification_outbox",
+    "decision_observations",
+    "decision_policy",
+    "reference_fx_revisions",
+    "ledger_entries",
+    "ledger_openings",
+    "ledger_periods",
+    "reference_fx_days",
     "snapshot_items",
     "cost_adjustments",
     "holding_defaults",

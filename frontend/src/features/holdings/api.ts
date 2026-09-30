@@ -4,6 +4,7 @@ import { ApiError, apiRequest, jsonBody } from "../../api/client";
 import { portfolioAnalyticsKey } from "../../api/queryKeys";
 import { marketDataQueryKey } from "../marketData/api";
 import { snapshotsQueryRoot } from "../snapshots/api";
+import { ledgerRoot } from '../ledger/api';
 import type {
   ConfirmAdjustmentRequest,
   CorrectionPayload,
@@ -53,6 +54,7 @@ export function useCreateHolding() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
     },
   });
 }
@@ -66,6 +68,7 @@ export function useArchiveHolding() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
     },
   });
 }
@@ -81,6 +84,7 @@ export function useUpdateHolding() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
     },
   });
 }
@@ -97,6 +101,7 @@ export function useReplaceHolding() {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(variables.holdingId) });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
       void queryClient.invalidateQueries({ queryKey: marketDataQueryKey });
       void queryClient.invalidateQueries({ queryKey: snapshotsQueryRoot });
     },
@@ -154,12 +159,14 @@ export function useConfirmAdjustment<TPayload>(holdingId: string) {
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(holdingId) });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
     },
     onError: (error) => {
       if (!isStaleCostPreview(error)) return;
       void queryClient.invalidateQueries({ queryKey: holdingsQueryRoot });
       void queryClient.invalidateQueries({ queryKey: costAdjustmentsQueryKey(holdingId) });
       void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
+      void queryClient.invalidateQueries({ queryKey: ledgerRoot });
     },
   });
 }
