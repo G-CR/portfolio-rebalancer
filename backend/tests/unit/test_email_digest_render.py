@@ -168,6 +168,27 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "当前配置在容差内" not in html
 
 
+def test_digest_html_omits_optimizer_trade_reason_column() -> None:
+    optimizer_reason = "该交易用于降低投资组合的最大配置偏离。"
+    trade = _result().trades[0].model_copy(
+        update={"reason_code": "REDUCE_MAX_DRIFT", "reason": optimizer_reason}
+    )
+    preview = _rebalance()
+    preview = preview.model_copy(
+        update={"result": preview.result.model_copy(update={"trades": (trade,)})}
+    )
+
+    html = build_digest_html(
+        analytics=_analytics(),
+        rebalance=preview,
+        local_date=date(2026, 8, 3),
+    )
+
+    assert ">原因</th>" not in html
+    assert optimizer_reason not in html
+    assert "标普 500（SPY）" in html
+
+
 def test_digest_html_no_trades_shows_hold_copy() -> None:
     empty = _result().model_copy(update={"trades": ()})
     html = build_digest_html(

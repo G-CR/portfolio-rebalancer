@@ -177,7 +177,8 @@ async def test_digest_sends_full_analysis_email(api_client, db_session, monkeypa
     assert "份额" in html
     assert "再平衡建议" in html
     assert "标的0（510100）" in html
-    assert "该交易用于降低投资组合的最大配置偏离。" in html
+    assert "该交易用于降低投资组合的最大配置偏离。" not in html
+    assert ">原因</th>" not in html
     assert "UNDERWEIGHT_WITH_CASH" not in html
 
 
