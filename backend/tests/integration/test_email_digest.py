@@ -126,7 +126,7 @@ async def test_digest_sends_anomaly_email_when_data_incomplete(
 
     await send_daily_digest_if_configured(
         db_session,
-        now=datetime(2026, 8, 3, 8, 0, tzinfo=UTC),  # Monday
+        now=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),  # Tuesday
     )
 
     send.assert_awaited_once()
@@ -166,7 +166,7 @@ async def test_digest_sends_full_analysis_email(api_client, db_session, monkeypa
 
     await send_daily_digest_if_configured(
         db_session,
-        now=datetime(2026, 8, 3, 8, 0, tzinfo=UTC),  # Monday
+        now=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),  # Tuesday
     )
 
     send.assert_awaited_once()

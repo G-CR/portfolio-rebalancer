@@ -14,6 +14,8 @@
 
 worker 按设置中的 Asia/Shanghai 时间刷新必需行情。供应商优先级可以全局调整，每个持仓可单独覆盖。失败记录不会覆盖最近有效数值；页面会显示旧值、失败状态和来源。手动覆盖带有备注和可选失效时间。
 
+启用每日邮件摘要后，定时日报按配置时区（默认 Asia/Shanghai）在周二至周六的刷新完成后发送，用于查看前一个交易日的行情；周五行情可在周六收到。周日、周一不发送定时日报，手动发送不受星期限制。此规则按星期判断，不额外排除交易所节假日。
+
 API 镜像内置 AKShare，用于默认获取国内 ETF 行情。持仓页发现必需数据缺失时还会发起一次即时刷新。数据源全部失败时，数据库只保存数据源名称和 `provider_request_failed`、`provider_payload_invalid`、`provider_not_configured`、`provider_internal_error` 等安全类别，不保存请求 URL、密钥、原始响应或异常堆栈。外部网络不可用时应先重试，再按需要设置手动覆盖。
 
 国际 ETF 与 USD/CNY 的默认顺序是 Yahoo Finance、新浪财经、Alpha Vantage。新浪财经不需要密钥，用于承接 Yahoo 的 HTTP 429、网络失败和无效载荷。Yahoo 返回值在入库前归一到 12 位小数，避免二进制浮点噪声超过 PostgreSQL `NUMERIC(28,12)`。记录的 `source` 始终是实际返回有效值的供应商。

@@ -222,8 +222,9 @@ def build_anomaly_html(*, items: list[dict[str, object]], local_date: date) -> s
 </html>"""
 
 
-def _is_trading_day(local_date: date) -> bool:
-    return local_date.weekday() < 5
+def _is_digest_send_day(local_date: date) -> bool:
+    # Send the previous weekday's market data on Tuesday through Saturday.
+    return 1 <= local_date.weekday() <= 5
 
 
 async def send_daily_digest_if_configured(
@@ -240,7 +241,7 @@ async def send_daily_digest_if_configured(
         return
     local_now = now or datetime.now(UTC)
     local_date = local_now.astimezone(ZoneInfo(get_settings().timezone)).date()
-    if not _is_trading_day(local_date):
+    if not _is_digest_send_day(local_date):
         return
     await _run_digest(session, config, local_date)
 
