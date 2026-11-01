@@ -281,16 +281,12 @@ export interface FeePreview {
   mode: "estimated" | "actual";
   currency: string;
   amount: DecimalString;
-  amount_cny: DecimalString | null;
+  amount_cny: DecimalString;
 }
 
 export type CostOperation = "purchase" | "sell" | "manual_correction" | "restore";
 
 export interface CostAdjustmentPreview {
-  original_cost?: DecimalString;
-  reference_label?: string;
-  preview_token?: string;
-  reference_details?: Record<string, unknown>;
   holding_id: string;
   holding_version: number;
   operation: CostOperation;
@@ -321,8 +317,7 @@ export interface CostAdjustmentCollection {
 export interface PurchasePayload {
   quantity: DecimalString;
   price: DecimalString;
-  fx?: DecimalString;
-  occurred_on?: string;
+  fx: DecimalString;
   fee_currency: string | null;
   commission_rate: DecimalString | null;
   minimum_commission: DecimalString | null;
@@ -335,10 +330,6 @@ export interface PurchasePayload {
 
 export interface SellPayload {
   quantity: DecimalString;
-  price?: DecimalString;
-  fee?: DecimalString;
-  fee_currency?: string;
-  occurred_on?: string;
   note: string | null;
 }
 
@@ -355,8 +346,6 @@ export interface RestorePayload {
 }
 
 export interface ConfirmAdjustmentRequest<TPayload> {
-  preview_token?: string;
-  idempotency_key?: string;
   expected_version: number;
   operation: CostOperation;
   payload: TPayload;

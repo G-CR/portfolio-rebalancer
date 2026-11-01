@@ -232,10 +232,6 @@ async def send_daily_digest_if_configured(
     *,
     now: datetime | None = None,
 ) -> None:
-    from app.services.decision import load_policy
-    policy = await load_policy(session)
-    if policy.notification_mode == "attention":
-        return
     config = await load_email_config(session)
     if config is None:
         return

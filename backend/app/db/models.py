@@ -484,6 +484,3 @@ class EncryptedSecret(Base):
         default=utcnow,
         onupdate=utcnow,
     )
-
-# Register independently scoped business models with the shared metadata.
-from app.db import ledger_models, decision_models  # noqa: E402, F401

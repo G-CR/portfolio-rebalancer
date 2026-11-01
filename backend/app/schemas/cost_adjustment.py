@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -68,7 +68,7 @@ class FeePreviewResponse(BaseModel):
     mode: Literal["estimated", "actual"]
     currency: str
     amount: str
-    amount_cny: str | None
+    amount_cny: str
 
 
 class CostAdjustmentPreviewResponse(BaseModel):
@@ -82,10 +82,6 @@ class CostAdjustmentPreviewResponse(BaseModel):
     fee: FeePreviewResponse | None = None
     note: str | None = None
     adjustment_id: UUID | None = None
-    preview_token: str | None = None
-    reference_details: dict[str, Any] | None = None
-    original_cost: str | None = None
-    reference_label: str | None = None
 
 
 class CostAdjustmentHistoryItemResponse(BaseModel):
@@ -114,8 +110,7 @@ class PurchasePreviewRequest(BaseModel):
 
     quantity: DecimalString
     price: DecimalString
-    fx: DecimalString | None = None
-    occurred_on: date | None = None
+    fx: DecimalString
     fee_currency: str | None = None
     commission_rate: DecimalString | None = None
     minimum_commission: DecimalString | None = None
@@ -134,9 +129,7 @@ class PurchasePreviewRequest(BaseModel):
 
     @field_validator("quantity", "price", "fx")
     @classmethod
-    def validate_positive_decimal(cls, value: Decimal | None, info) -> Decimal | None:
-        if value is None:
-            return None
+    def validate_positive_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_positive(value, info.field_name)
 
     @field_validator(
@@ -159,26 +152,12 @@ class SellPreviewRequest(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     quantity: DecimalString
-    price: DecimalString | None = None
-    fee: DecimalString = Decimal('0')
-    fee_currency: str | None = None
-    occurred_on: date | None = None
     note: str | None = None
 
     @field_validator("quantity")
     @classmethod
     def validate_positive_quantity(cls, value: Decimal) -> Decimal:
         return _ensure_positive(value, "quantity")
-
-    @field_validator('price')
-    @classmethod
-    def validate_price(cls, value):
-        return _ensure_positive(value, 'price') if value is not None else None
-
-    @field_validator('fee')
-    @classmethod
-    def validate_fee(cls, value):
-        return _ensure_non_negative(value, 'fee')
 
 
 class ManualCorrectionPreviewRequest(BaseModel):
@@ -216,5 +195,3 @@ class CostAdjustmentConfirmRequest(BaseModel):
     expected_version: int
     operation: Literal["purchase", "sell", "manual_correction", "restore"]
     payload: dict[str, Any]
-    preview_token: str | None = None
-    idempotency_key: str | None = None

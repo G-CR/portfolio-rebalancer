@@ -394,11 +394,11 @@ async def test_preview_translates_decimal_arithmetic_overflow(api_client) -> Non
 @pytest.mark.parametrize(
     ("operation", "payload", "expected_fields"),
     [
-        ("purchase", {"quantity": "1"}, {"payload.price"}),
+        ("purchase", {"quantity": "1"}, {"payload.price", "payload.fx"}),
         (
             "sell",
             {"quantity": "1", "price": "500", "fx": "7.1"},
-            {"payload.fx"},
+            {"payload.price", "payload.fx"},
         ),
         (
             "manual_correction",

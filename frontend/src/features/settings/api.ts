@@ -1,4 +1,3 @@
-import { portfolioAnalyticsKey } from "../../api/queryKeys";
 import { useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiRequest, jsonBody } from "../../api/client";
@@ -79,7 +78,7 @@ export function useSaveGeneralSettings() {
       };
       return apiRequest<GeneralSettings>("/api/settings/general", { method: "PUT", body: jsonBody(request) });
     },
-    onSuccess: (saved) => { queryClient.setQueryData(generalSettingsQueryKey, saved); void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey }); },
+    onSuccess: (saved) => queryClient.setQueryData(generalSettingsQueryKey, saved),
   });
 }
 
@@ -106,7 +105,6 @@ export function useSaveRebalanceDefaults() {
     },
     onSuccess: (saved) => {
       queryClient.setQueryData(rebalanceDefaultsQueryKey, saved);
-      void queryClient.invalidateQueries({ queryKey: portfolioAnalyticsKey });
       queryClient.setQueryData<GeneralSettings>(generalSettingsQueryKey, (current) => current ? {
         ...current,
         default_tolerance: saved.tolerance,
