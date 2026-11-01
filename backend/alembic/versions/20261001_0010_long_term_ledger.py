@@ -1,0 +1,28 @@
+"""Long-term investment ledger."""
+from alembic import op
+revision = '20261001_0010'
+down_revision = '20260915_0009'
+branch_labels = None
+depends_on = None
+
+def upgrade():
+    op.execute('\nCREATE TABLE ledger_periods (\n\tid UUID NOT NULL, \n\tsingleton INTEGER NOT NULL, \n\topened_on DATE NOT NULL, \n\tidempotency_key VARCHAR(128) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tCONSTRAINT pk_ledger_periods PRIMARY KEY (id), \n\tCONSTRAINT uq_ledger_periods_singleton UNIQUE (singleton), \n\tCONSTRAINT uq_ledger_periods_idempotency_key UNIQUE (idempotency_key)\n)\n\n')
+    op.execute('\nCREATE TABLE ledger_openings (\n\tid UUID NOT NULL, \n\tperiod_id UUID NOT NULL, \n\tholding_id UUID NOT NULL, \n\ttrade_currency VARCHAR(8) NOT NULL, \n\tsymbol VARCHAR(32) NOT NULL, \n\taccount_name VARCHAR(100) NOT NULL, \n\tquantity NUMERIC(28, 12) NOT NULL, \n\taverage_cost_price NUMERIC(28, 12) NOT NULL, \n\toriginal_cost NUMERIC(28, 12) NOT NULL, \n\tlegacy_cost_fx NUMERIC(28, 12) NOT NULL, \n\tbaseline_fx NUMERIC(28, 12) NOT NULL, \n\tmarket_price NUMERIC(28, 12), \n\treference_fx NUMERIC(28, 12), \n\treference_value_cny NUMERIC(28, 12), \n\treference_details JSON NOT NULL, \n\tCONSTRAINT pk_ledger_openings PRIMARY KEY (id), \n\tCONSTRAINT uq_ledger_opening_holding UNIQUE (period_id, holding_id), \n\tCONSTRAINT fk_ledger_openings_period_id_ledger_periods FOREIGN KEY(period_id) REFERENCES ledger_periods (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_ledger_openings_holding_id_holdings FOREIGN KEY(holding_id) REFERENCES holdings (id) ON DELETE RESTRICT\n)\n\n')
+    op.execute('\nCREATE TABLE ledger_entries (\n\tid UUID NOT NULL, \n\tperiod_id UUID NOT NULL, \n\tholding_id UUID NOT NULL, \n\tkind VARCHAR(32) NOT NULL, \n\toccurred_on DATE NOT NULL, \n\tsequence INTEGER NOT NULL, \n\tcurrency VARCHAR(8) NOT NULL, \n\tquantity NUMERIC(28, 12) NOT NULL, \n\tprice NUMERIC(28, 12) NOT NULL, \n\tamount NUMERIC(28, 12) NOT NULL, \n\tfee NUMERIC(28, 12) NOT NULL, \n\tfee_currency VARCHAR(8) NOT NULL, \n\tfee_original NUMERIC(28, 12), \n\tratio NUMERIC(28, 12) NOT NULL, \n\treference_fx NUMERIC(28, 12), \n\treference_cash_flow_cny NUMERIC(28, 12), \n\treference_details JSON NOT NULL, \n\treverses_id UUID, \n\treplaces_id UUID, \n\tlinked_entry_id UUID, \n\tidempotency_key VARCHAR(128) NOT NULL, \n\trequest_hash VARCHAR(64) NOT NULL, \n\tnote TEXT, \n\tincomplete_reason TEXT, \n\tcreated_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tCONSTRAINT pk_ledger_entries PRIMARY KEY (id), \n\tCONSTRAINT fk_ledger_entries_period_id_ledger_periods FOREIGN KEY(period_id) REFERENCES ledger_periods (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_ledger_entries_holding_id_holdings FOREIGN KEY(holding_id) REFERENCES holdings (id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_ledger_entries_reverses_id_ledger_entries FOREIGN KEY(reverses_id) REFERENCES ledger_entries (id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_ledger_entries_replaces_id_ledger_entries FOREIGN KEY(replaces_id) REFERENCES ledger_entries (id) ON DELETE RESTRICT, \n\tCONSTRAINT fk_ledger_entries_linked_entry_id_ledger_entries FOREIGN KEY(linked_entry_id) REFERENCES ledger_entries (id) ON DELETE RESTRICT, \n\tCONSTRAINT uq_ledger_entries_idempotency_key UNIQUE (idempotency_key)\n)\n\n')
+    op.execute('\nCREATE TABLE reference_fx_days (\n\tid UUID NOT NULL, \n\tcurrency VARCHAR(8) NOT NULL, \n\tlocal_date DATE NOT NULL, \n\trate NUMERIC(28, 12) NOT NULL, \n\tsource VARCHAR(64) NOT NULL, \n\tmarket_time TIMESTAMP WITH TIME ZONE, \n\tselected_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tquote_id UUID, \n\tactual_date DATE NOT NULL, \n\tis_fallback BOOLEAN NOT NULL, \n\tis_final BOOLEAN NOT NULL, \n\tCONSTRAINT pk_reference_fx_days PRIMARY KEY (id), \n\tCONSTRAINT uq_reference_fx_day UNIQUE (currency, local_date), \n\tCONSTRAINT fk_reference_fx_days_quote_id_market_data FOREIGN KEY(quote_id) REFERENCES market_data (id) ON DELETE SET NULL\n)\n\n')
+    op.execute('\nCREATE TABLE reference_fx_revisions (\n\tid UUID NOT NULL, \n\tentry_id UUID, \n\topening_id UUID, \n\tbefore JSON NOT NULL, \n\tafter JSON NOT NULL, \n\treason TEXT NOT NULL, \n\tcreated_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tCONSTRAINT pk_reference_fx_revisions PRIMARY KEY (id), \n\tCONSTRAINT fk_reference_fx_revisions_entry_id_ledger_entries FOREIGN KEY(entry_id) REFERENCES ledger_entries (id) ON DELETE CASCADE, \n\tCONSTRAINT fk_reference_fx_revisions_opening_id_ledger_openings FOREIGN KEY(opening_id) REFERENCES ledger_openings (id) ON DELETE CASCADE\n)\n\n')
+    op.execute('CREATE INDEX ix_ledger_entries_occurred_on ON ledger_entries (occurred_on)')
+
+    op.create_check_constraint('ck_ledger_period_singleton', 'ledger_periods', 'singleton = 1')
+    op.create_check_constraint('ck_ledger_opening_original_cost', 'ledger_openings', 'quantity >= 0 AND original_cost >= 0 AND average_cost_price >= 0')
+    op.create_check_constraint('ck_ledger_entry_kind', 'ledger_entries', "kind IN ('purchase','sale','dividend','split','manual_correction','reversal')")
+    op.create_check_constraint('ck_ledger_entry_values', 'ledger_entries', 'sequence >= 1 AND quantity >= 0 AND price >= 0 AND amount >= 0 AND fee >= 0 AND ratio > 0')
+    op.create_check_constraint('ck_reference_fx_date_rate', 'reference_fx_days', 'rate > 0 AND actual_date <= local_date AND local_date - actual_date <= 7')
+    op.create_check_constraint('ck_reference_fx_revision_target', 'reference_fx_revisions', '(entry_id IS NULL) <> (opening_id IS NULL)')
+
+def downgrade():
+    op.drop_table('reference_fx_revisions')
+    op.drop_table('reference_fx_days')
+    op.drop_table('ledger_entries')
+    op.drop_table('ledger_openings')
+    op.drop_table('ledger_periods')
