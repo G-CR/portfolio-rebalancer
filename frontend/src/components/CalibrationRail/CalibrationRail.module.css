@@ -121,12 +121,6 @@
   box-shadow: 0 0 0 1px var(--color-actual);
 }
 
-.fxNeutral .markerShape {
-  top: 4px;
-  width: 5px;
-  height: 11px;
-  background: var(--color-fx);
-}
 
 .planned .markerShape {
   top: 1px;
@@ -153,9 +147,6 @@
   color: var(--color-actual);
 }
 
-.fxNeutral {
-  color: var(--color-fx);
-}
 
 .planned {
   color: var(--color-planned);
@@ -192,9 +183,6 @@
   color: var(--color-actual);
 }
 
-.valueFx {
-  color: var(--color-fx);
-}
 
 .valuePlanned {
   color: var(--color-planned);

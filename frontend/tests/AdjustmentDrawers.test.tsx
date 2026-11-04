@@ -12,8 +12,7 @@ import { renderWithProviders } from "./testProviders";
 const basis = {
   quantity: "12.0000",
   average_cost_price: "510.25",
-  cost_fx_to_cny: "7.18",
-  total_cost_cny: "43963.14",
+  total_cost_trade_currency: "6123.00",
 };
 
 describe("sale, correction, and history drawers", () => {
@@ -26,7 +25,7 @@ describe("sale, correction, and history drawers", () => {
           holding_version: 1,
           operation: "sell",
           before: basis,
-          after: { ...basis, quantity: "10.0000", total_cost_cny: "36635.95" },
+          after: { ...basis, quantity: "10.0000", total_cost_trade_currency: "5102.50" },
           fee: null,
           note: "降低仓位",
           adjustment_id: null,
@@ -50,7 +49,7 @@ describe("sale, correction, and history drawers", () => {
           holding_version: 1,
           operation: "sell",
           before: basis,
-          after: { ...basis, quantity: "10.0000", total_cost_cny: "36635.95" },
+          after: { ...basis, quantity: "10.0000", total_cost_trade_currency: "5102.50" },
           fee: null,
           note: null,
           adjustment_id: null,
@@ -96,7 +95,7 @@ describe("sale, correction, and history drawers", () => {
           holding_version: 1,
           operation: "manual_correction",
           before: basis,
-          after: { ...basis, quantity: "11.0000", total_cost_cny: "40299.55" },
+          after: { ...basis, quantity: "11.0000", total_cost_trade_currency: "5612.75" },
           fee: null,
           note: "券商对账",
           adjustment_id: null,
@@ -124,8 +123,8 @@ describe("sale, correction, and history drawers", () => {
     const historyItem = {
       id: "50000000-0000-4000-8000-000000000001",
       operation_type: "PURCHASE",
-      before: { ...basis, cost_fx_to_cny: "7.181846190522" },
-      after: { ...basis, quantity: "17.0000", total_cost_cny: "62281.12" },
+      before: basis,
+      after: { ...basis, quantity: "17.0000", total_cost_trade_currency: "8674.25" },
       input_summary: { quantity: "5" },
       note: "定投",
       created_at: "2026-07-14T02:30:00Z",
@@ -160,15 +159,11 @@ describe("sale, correction, and history drawers", () => {
     expect(within(item).getByText("定投")).toBeInTheDocument();
     expect(within(item).getByText("12.0000")).toBeInTheDocument();
     expect(within(item).getByText("17.0000")).toBeInTheDocument();
-    expect(within(item).getAllByText(/汇率 7\.18(?!\d)/).length).toBeGreaterThanOrEqual(1);
-    expect(within(item).queryByText(/7\.181846190522/)).not.toBeInTheDocument();
     await user.click(within(item).getByRole("button", { name: "恢复到此状态" }));
 
     const restoreDialog = await screen.findByRole("dialog", { name: "恢复 SPY 成本状态" });
     expect(within(restoreDialog).getByText("将新增一条人工修正记录，原历史不会删除。"))
       .toBeInTheDocument();
-    expect(within(restoreDialog).getAllByText("7.18").length).toBeGreaterThanOrEqual(1);
-    expect(within(restoreDialog).queryByText("7.181846190522")).not.toBeInTheDocument();
     expect(within(restoreDialog).getByRole("button", { name: "确认恢复为新修正" })).toBeEnabled();
   });
 
@@ -179,7 +174,7 @@ describe("sale, correction, and history drawers", () => {
       id: "50000000-0000-4000-8000-000000000001",
       operation_type: "PURCHASE",
       before: basis,
-      after: { ...basis, quantity: "17.0000", total_cost_cny: "62281.12" },
+      after: { ...basis, quantity: "17.0000", total_cost_trade_currency: "8674.25" },
       input_summary: { quantity: "5" },
       note: "定投",
       created_at: "2026-07-14T02:30:00Z",

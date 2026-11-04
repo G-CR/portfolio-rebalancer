@@ -19,9 +19,13 @@ import app.services.backup_validation as module
 from app.backups.archive import ArchiveMetadata, write_archive
 from app.backups.canonical import canonical_json_bytes, logical_checksum
 from app.backups import migrations
-from app.backups.constants import CURRENT_FORMAT_VERSION, DATA_MEMBERS
+from app.backups.constants import (
+    CURRENT_FORMAT_VERSION,
+    DATA_MEMBERS,
+    LEGACY_V2_TABLE_MEMBERS,
+)
 from app.core.secrets import SecretStore
-from app.db.models import RebalancePlan
+from app.db.models import Holding, RebalancePlan
 from app.services.backup_restore import _insert_archive, restore_validated_backup
 from app.services.backup_storage import BackupStorage
 from app.services.backup_operations import BackupOperationManager
@@ -52,8 +56,7 @@ def _source() -> dict[str, list[dict[str, Any]]]:
         "id": IDS["holding"], "asset_class_id": IDS["asset"], "symbol": "SYNTH",
         "name": "Synthetic holding", "market": "US", "account_name": "test",
         "trade_currency": "USD", "quantity": "1.000000000000",
-        "average_cost_price": "1.000000000000", "cost_fx_to_cny": "7.000000000000",
-        "baseline_fx_to_cny": "7.000000000000", "lot_size": "1.000000000000",
+        "average_cost_price": "1.000000000000", "lot_size": "1.000000000000",
         "quantity_precision": 0, "preferred_data_source": "yahoo",
         "is_rebalance_preferred": True, "is_active": True, "version": 1,
         "created_at": dt, "updated_at": dt,
@@ -77,8 +80,8 @@ def _source() -> dict[str, list[dict[str, Any]]]:
     source["data/cost_adjustments.json"] = [{
         "id": IDS["cost"], "holding_id": IDS["holding"], "operation_type": "PURCHASE",
         "before_quantity": "0.000000000000", "before_average_cost_price": "0.000000000000",
-        "before_cost_fx_to_cny": "7.000000000000", "after_quantity": "1.000000000000",
-        "after_average_cost_price": "1.000000000000", "after_cost_fx_to_cny": "7.000000000000",
+        "after_quantity": "1.000000000000",
+        "after_average_cost_price": "1.000000000000",
         "input_summary": {}, "note": None, "created_at": dt,
     }]
     for key, snapshot_type in (("before", "rebalance_before"), ("after", "rebalance_after")):
@@ -92,13 +95,12 @@ def _source() -> dict[str, list[dict[str, Any]]]:
             "asset_class_name": "Synthetic", "holding_name": "Synthetic holding", "symbol": "SYNTH",
             "account_name": "test", "trade_currency": "USD", "quantity": "1.000000000000",
             "market_price": "1.000000000000", "current_fx_to_cny": "7.000000000000",
-            "baseline_fx_to_cny": "7.000000000000", "average_cost_price": "1.000000000000",
-            "cost_fx_to_cny": "7.000000000000", "target_weight": "1.000000000000",
-            "market_value_cny": "7.000000000000", "fx_neutral_value_cny": "7.000000000000",
+            "average_cost_price": "1.000000000000", "target_weight": "1.000000000000",
+            "market_value_cny": "7.000000000000",
             "cost_value_cny": "7.000000000000", "unrealized_pnl_amount_cny": "0.000000000000",
-            "unrealized_pnl_rate": "0.000000000000", "price_effect_cny": "0.000000000000",
-            "fx_effect_cny": "0.000000000000", "actual_weight": "1.000000000000",
-            "fx_neutral_weight": "1.000000000000", "price_status": "valid", "fx_status": "valid",
+            "unrealized_pnl_rate": "0.000000000000",
+            "actual_weight": "1.000000000000",
+            "price_status": "valid", "fx_status": "valid",
             "created_at": dt,
         })
     result = {
@@ -115,11 +117,11 @@ def _source() -> dict[str, list[dict[str, Any]]]:
     }
     data_version = rebalance_data_version(**version_payload)
     source["data/rebalance_plans.json"] = [{
-        "id": IDS["plan"], "strategy_mode": "actual", "status": "completed",
+        "id": IDS["plan"], "status": "completed",
         "data_version": data_version, "create_idempotency_key": "create",
         "input_summary": {
             "session_token": "synthetic-session", "request_token": "synthetic-request",
-            "available_cny": "0", "available_usd": "0", "valuation_basis": "actual",
+            "available_cny": "0", "available_usd": "0",
             "allow_sell": None, "allow_fx": None, "tolerance": None,
             "minimum_trade_cny": None, "acknowledge_stale_data": False,
             "holding_versions": version_payload["holding_versions"], "market_data_record_ids": market_ids,
@@ -127,12 +129,10 @@ def _source() -> dict[str, list[dict[str, Any]]]:
             "resolved_constraints": {"allow_sell": True, "allow_fx": True, "tolerance": "0.01", "minimum_trade_cny": "100"},
         },
         "suggested_actions": [],
-        "projected_result": {"valuation_basis": "actual", "result": result,
-                             "fx_comparison": {"valuation_basis": "fx_neutral", "result": result},
-                             "data_status": "valid"},
+        "projected_result": {"result": result, "data_status": "valid"},
         "before_snapshot_id": IDS["before"], "after_snapshot_id": IDS["after"],
         "started_at": dt, "cancelled_at": None, "created_at": dt, "updated_at": dt,
-        "baseline_reset_at": dt, "start_market_data_record_ids": {"price:SYNTH": str(IDS["market"])},
+        "start_market_data_record_ids": {"price:SYNTH": str(IDS["market"])},
         "completion_market_data_record_ids": {"price:SYNTH": str(IDS["market"])},
         "start_idempotency_key": "start", "cancel_idempotency_key": None,
         "complete_idempotency_key": "complete", "completed_at": dt,
@@ -142,7 +142,7 @@ def _source() -> dict[str, list[dict[str, Any]]]:
         "provider_priority": ["yahoo", "sina", "akshare", "tushare", "alpha_vantage"], "default_tolerance": "0.010000000000",
         "minimum_trade_amount_cny": "100.000000000000", "allow_sell": True,
         "allow_fx": True, "rebalance_available_cny": "0.000000000000",
-        "rebalance_available_usd": "0.000000000000", "rebalance_valuation_basis": "actual",
+        "rebalance_available_usd": "0.000000000000",
         "email_enabled": True, "email_recipient": "synthetic@example.test",
         "email_smtp_host": "smtp.example.test", "email_smtp_port": 465,
         "email_smtp_security": "ssl", "email_smtp_username": "synthetic@example.test",
@@ -187,7 +187,7 @@ def test_valid_backup_returns_bounded_descriptor_and_closes_snapshot(tmp_path: P
         expires_at=NOW + timedelta(minutes=30), workspace_root=tmp_path,
     )
 
-    assert validated.source_format_version == 1
+    assert validated.source_format_version == CURRENT_FORMAT_VERSION
     assert validated.current_format_version == CURRENT_FORMAT_VERSION
     assert validated.credential_categories == ("yahoo",)
     assert "synthetic-secret" not in repr(validated)
@@ -230,6 +230,43 @@ def test_older_rows_are_migrated_before_current_schema_and_checksum(
     assert validated.source_format_version == 0
     assert validated.canonical_logical_checksum == current_checksum
     assert validated.canonical_logical_checksum != old_checksum
+
+
+
+def test_legacy_format_2_archive_with_ledger_members_is_accepted_and_ignored(
+    tmp_path: Path,
+) -> None:
+    current = _archive(tmp_path)
+    with ZipFile(current) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        members = {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if name != "manifest.json"
+        }
+
+    ledger_payload = canonical_json_bytes([{"id": str(IDS["plan"])}])
+    for member in LEGACY_V2_TABLE_MEMBERS:
+        members[member] = ledger_payload
+        manifest["record_counts"][member] = 1
+        manifest["members"][member] = {
+            "byte_length": len(ledger_payload),
+            "sha256": hashlib.sha256(ledger_payload).hexdigest(),
+        }
+    manifest["format_version"] = 2
+
+    legacy = tmp_path / "legacy-v2.portfolio-backup"
+    with ZipFile(legacy, "w", compression=ZIP_DEFLATED) as archive:
+        for member, payload in members.items():
+            archive.writestr(member, payload)
+        archive.writestr("manifest.json", canonical_json_bytes(manifest))
+
+    validated = validate_backup(legacy, path_id="upload:v2", workspace_root=tmp_path)
+
+    assert validated.source_format_version == 2
+    assert validated.current_format_version == CURRENT_FORMAT_VERSION
+    assert any("ignored" in warning for warning in validated.warnings)
+    assert "data/ledger_entries.json" not in validated.record_counts
 
 
 @pytest.mark.parametrize(
@@ -414,24 +451,10 @@ def test_legacy_rebalance_result_is_normalized_only_for_response_validation() ->
         "fx_required_cny": "70",
         "trades": [dict(legacy_trade)],
     }
-    comparison_result = {
-        **projected["fx_comparison"]["result"],
-        "max_drift_after": "0.03",
-        "fx_required_cny": "0",
-        "trades": [],
-    }
     projected["result"] = primary
-    projected["fx_comparison"] = {
-        **projected["fx_comparison"],
-        "result": comparison_result,
-    }
     plan["suggested_actions"] = [dict(legacy_trade)]
 
     normalized_primary = module._result_for_response_validation(primary, "legacy")
-    normalized_comparison = module._result_for_response_validation(
-        comparison_result,
-        "legacy",
-    )
     assert normalized_primary["optimization_precision"] == "0.0001"
     assert normalized_primary["optimization_certified"] is False
     assert normalized_primary["optimality_gap"] == "0"
@@ -440,8 +463,6 @@ def test_legacy_rebalance_result_is_normalized_only_for_response_validation() ->
     assert normalized_primary["net_fx_direction"] == "cny_to_usd"
     assert normalized_primary["net_fx_amount_cny"] == "70"
     assert normalized_primary["trades"][0]["reason"] == legacy_trade["reason"]
-    assert normalized_comparison["buy_only_max_drift"] == "0.03"
-    assert normalized_comparison["net_fx_direction"] == "none"
     assert "optimization_certified" not in primary
     assert primary["trades"][0]["reason"] == legacy_trade["reason"]
 
@@ -475,7 +496,6 @@ def test_current_rebalance_result_validates_without_legacy_normalization(
     projected = plan["projected_result"]
     _make_current_constraints(plan)
     _make_current_result(projected["result"])
-    _make_current_result(projected["fx_comparison"]["result"])
 
     _validate(tmp_path, source)
 
@@ -485,6 +505,32 @@ def test_current_rebalance_result_validates_without_legacy_normalization(
     )
     assert projected["result"]["optimization_certified"] is True
     assert projected["result"]["optimization_precision"] == "0.0001"
+
+
+
+async def test_restore_preserves_holding_optimistic_version(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    source["data/holdings.json"][0]["version"] = 9
+    archive = _archive(tmp_path, source)
+    validated = validate_backup(
+        archive,
+        path_id="upload:version",
+        workspace_root=tmp_path,
+    )
+
+    async with db_session.begin():
+        await _insert_archive(
+            db_session,
+            validated,
+            secret_store=SecretStore(tmp_path / "restore.key"),
+        )
+
+    restored = await db_session.get(Holding, IDS["holding"])
+    assert restored is not None
+    assert restored.version == 9
 
 
 @pytest.mark.parametrize("generation", ["legacy", "current"])
@@ -500,7 +546,6 @@ async def test_rebalance_backup_generations_validate_and_restore(
     if generation == "current":
         _make_current_constraints(plan)
         _make_current_result(projected["result"])
-        _make_current_result(projected["fx_comparison"]["result"])
     else:
         plan["input_summary"]["minimum_trade_cny"] = "275"
         legacy_trade = {
@@ -514,7 +559,6 @@ async def test_rebalance_backup_generations_validate_and_restore(
         }
         plan["suggested_actions"] = [dict(legacy_trade)]
         projected["result"]["trades"] = [dict(legacy_trade)]
-        projected["fx_comparison"]["result"]["trades"] = [dict(legacy_trade)]
 
     archive = _archive(tmp_path, source)
     storage = BackupStorage(tmp_path / "backup-storage")
@@ -562,8 +606,6 @@ async def test_rebalance_backup_generations_validate_and_restore(
     [
         "current_constraints_legacy_results",
         "legacy_constraints_current_results",
-        "current_primary_legacy_comparison",
-        "legacy_primary_current_comparison",
     ],
 )
 def test_rebalance_mixed_persisted_generations_are_rejected(
@@ -574,22 +616,12 @@ def test_rebalance_mixed_persisted_generations_are_rejected(
     plan = source["data/rebalance_plans.json"][0]
     projected = plan["projected_result"]
     primary = dict(projected["result"])
-    comparison_container = dict(projected["fx_comparison"])
-    comparison = dict(comparison_container["result"])
     projected["result"] = primary
-    comparison_container["result"] = comparison
-    projected["fx_comparison"] = comparison_container
 
     if hybrid == "current_constraints_legacy_results":
         _make_current_constraints(plan)
-    elif hybrid == "legacy_constraints_current_results":
-        _make_current_result(primary)
-        _make_current_result(comparison)
-    elif hybrid == "current_primary_legacy_comparison":
-        _make_current_constraints(plan)
-        _make_current_result(primary)
     else:
-        _make_current_result(comparison)
+        _make_current_result(primary)
 
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
@@ -644,7 +676,6 @@ def test_holding_version_one_is_accepted(tmp_path: Path) -> None:
     "target",
     [
         "result", "projected_weight", "suggested_action", "result_trade",
-        "fx_comparison", "fx_result", "fx_trade",
     ],
 )
 def test_rebalance_nested_unknown_fields_are_rejected(
@@ -660,7 +691,6 @@ def test_rebalance_nested_unknown_fields_are_rejected(
     }
     plan["suggested_actions"] = [dict(trade)]
     projected["result"]["trades"] = [dict(trade)]
-    projected["fx_comparison"]["result"]["trades"] = [dict(trade)]
     if target == "result":
         projected["result"]["unknown"] = "secret"
     elif target == "projected_weight":
@@ -669,12 +699,7 @@ def test_rebalance_nested_unknown_fields_are_rejected(
         plan["suggested_actions"][0]["unknown"] = "secret"
     elif target == "result_trade":
         projected["result"]["trades"][0]["unknown"] = "secret"
-    elif target == "fx_comparison":
-        projected["fx_comparison"]["unknown"] = "secret"
-    elif target == "fx_result":
-        projected["fx_comparison"]["result"]["unknown"] = "secret"
-    else:
-        projected["fx_comparison"]["result"]["trades"][0]["unknown"] = "secret"
+
     with pytest.raises(BackupValidationError) as exc_info:
         _validate(tmp_path, source)
     assert exc_info.value.code == "BACKUP_INCOMPATIBLE"

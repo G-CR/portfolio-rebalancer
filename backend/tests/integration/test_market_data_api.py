@@ -26,8 +26,6 @@ def _holding_payload(
         "trade_currency": trade_currency,
         "quantity": "10",
         "average_cost_price": "500",
-        "cost_fx_to_cny": "7.20",
-        "baseline_fx_to_cny": "7.20",
         "lot_size": "1",
         "quantity_precision": 0,
         "is_rebalance_preferred": True,

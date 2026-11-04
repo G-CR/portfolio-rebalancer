@@ -31,6 +31,7 @@ from app.backups.constants import (
     ALLOWED_MEMBERS,
     CURRENT_FORMAT_VERSION,
     DATA_MEMBERS,
+    LEGACY_V2_TABLE_MEMBERS,
     MAX_AGGREGATE_COMPRESSION_RATIO,
     MAX_COMPRESSED_BYTES,
     MAX_UNCOMPRESSED_BYTES,
@@ -147,13 +148,12 @@ def track_temporary_snapshots(
     return snapshots
 
 
-def test_v1_constants_freeze_exact_archive_limits_and_members() -> None:
-    assert CURRENT_FORMAT_VERSION == 1
+def test_current_constants_freeze_exact_archive_limits_and_members() -> None:
+    assert CURRENT_FORMAT_VERSION == 3
     assert MAX_COMPRESSED_BYTES == 500 * 1024 * 1024
     assert MAX_UNCOMPRESSED_BYTES == 2 * 1024 * 1024 * 1024
     assert MAX_AGGREGATE_COMPRESSION_RATIO == 100
-    assert ALLOWED_MEMBERS == (
-        "manifest.json",
+    assert set(DATA_MEMBERS) == {
         "credentials.json",
         "data/asset_classes.json",
         "data/holdings.json",
@@ -165,10 +165,13 @@ def test_v1_constants_freeze_exact_archive_limits_and_members() -> None:
         "data/snapshot_items.json",
         "data/rebalance_plans.json",
         "data/settings.json",
+    }
+    assert set(ALLOWED_MEMBERS) == (
+        set(DATA_MEMBERS) | set(LEGACY_V2_TABLE_MEMBERS) | {"manifest.json"}
     )
 
 
-def test_v1_contract_covers_every_persisted_column() -> None:
+def test_current_contract_covers_every_persisted_column() -> None:
     assert len(TABLE_CONTRACTS) == 10
     for contract in TABLE_CONTRACTS:
         assert tuple(column.name for column in contract.model.__table__.columns) == contract.columns
@@ -335,10 +338,8 @@ def test_writer_inspector_and_iterator_preserve_nested_fractional_json_numbers(
             "operation_type": "purchase",
             "before_quantity": Decimal("0.000000000000"),
             "before_average_cost_price": Decimal("0.000000000000"),
-            "before_cost_fx_to_cny": Decimal("1.000000000000"),
             "after_quantity": Decimal("1.000000000000"),
             "after_average_cost_price": Decimal("0.100000000000"),
-            "after_cost_fx_to_cny": Decimal("1.000000000000"),
             "input_summary": {
                 "fraction": 0.1,
                 "nested": [1.25, {"ratio": 0.0000001}],

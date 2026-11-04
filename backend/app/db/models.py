@@ -94,8 +94,6 @@ class Holding(Base):
     trade_currency: Mapped[str] = mapped_column(String(8), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     average_cost_price: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
-    cost_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
-    baseline_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     lot_size: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     quantity_precision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     preferred_data_source: Mapped[str | None] = mapped_column(String(64))
@@ -220,16 +218,11 @@ class CostAdjustment(Base):
         MONEY_PRECISION,
         nullable=False,
     )
-    before_cost_fx_to_cny: Mapped[Decimal] = mapped_column(
-        MONEY_PRECISION,
-        nullable=False,
-    )
     after_quantity: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     after_average_cost_price: Mapped[Decimal] = mapped_column(
         MONEY_PRECISION,
         nullable=False,
     )
-    after_cost_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     input_summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
@@ -290,19 +283,13 @@ class SnapshotItem(Base):
     quantity: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     market_price: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     current_fx_to_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
-    baseline_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     average_cost_price: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
-    cost_fx_to_cny: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     target_weight: Mapped[Decimal] = mapped_column(MONEY_PRECISION, nullable=False)
     market_value_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
-    fx_neutral_value_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     cost_value_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     unrealized_pnl_amount_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     unrealized_pnl_rate: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
-    price_effect_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
-    fx_effect_cny: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     actual_weight: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
-    fx_neutral_weight: Mapped[Decimal | None] = mapped_column(MONEY_PRECISION)
     price_status: Mapped[str] = mapped_column(String(16), nullable=False)
     fx_status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -314,7 +301,6 @@ class RebalancePlan(Base):
     __tablename__ = "rebalance_plans"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    strategy_mode: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     data_version: Mapped[str] = mapped_column(String(64), nullable=False)
     create_idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
@@ -340,7 +326,6 @@ class RebalancePlan(Base):
         default=utcnow,
         onupdate=utcnow,
     )
-    baseline_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     start_market_data_record_ids: Mapped[dict[str, object] | None] = mapped_column(JSON)
     completion_market_data_record_ids: Mapped[dict[str, object] | None] = mapped_column(JSON)
     start_idempotency_key: Mapped[str | None] = mapped_column(String(128))
@@ -383,10 +368,6 @@ class Setting(Base):
             name="ck_settings_singleton_id",
         ),
         CheckConstraint(
-            "rebalance_valuation_basis IN ('actual', 'fx_neutral')",
-            name="ck_settings_rebalance_valuation_basis",
-        ),
-        CheckConstraint(
             "email_smtp_security IN ('ssl', 'starttls')",
             name="ck_settings_email_smtp_security",
         ),
@@ -418,12 +399,6 @@ class Setting(Base):
         nullable=False,
         default=Decimal("0"),
         server_default="0",
-    )
-    rebalance_valuation_basis: Mapped[str] = mapped_column(
-        String(16),
-        nullable=False,
-        default="actual",
-        server_default="actual",
     )
     email_enabled: Mapped[bool] = mapped_column(
         Boolean,

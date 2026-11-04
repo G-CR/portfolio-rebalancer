@@ -58,8 +58,7 @@ class CostBasisStateResponse(BaseModel):
 
     quantity: str
     average_cost_price: str
-    cost_fx_to_cny: str
-    total_cost_cny: str
+    total_cost_trade_currency: str
 
 
 class FeePreviewResponse(BaseModel):
@@ -68,7 +67,7 @@ class FeePreviewResponse(BaseModel):
     mode: Literal["estimated", "actual"]
     currency: str
     amount: str
-    amount_cny: str
+    amount_cny: str | None
 
 
 class CostAdjustmentPreviewResponse(BaseModel):
@@ -110,7 +109,6 @@ class PurchasePreviewRequest(BaseModel):
 
     quantity: DecimalString
     price: DecimalString
-    fx: DecimalString
     fee_currency: str | None = None
     commission_rate: DecimalString | None = None
     minimum_commission: DecimalString | None = None
@@ -127,7 +125,7 @@ class PurchasePreviewRequest(BaseModel):
             return None
         return value.upper()
 
-    @field_validator("quantity", "price", "fx")
+    @field_validator("quantity", "price")
     @classmethod
     def validate_positive_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_positive(value, info.field_name)
@@ -165,18 +163,12 @@ class ManualCorrectionPreviewRequest(BaseModel):
 
     quantity: DecimalString
     average_cost_price: DecimalString
-    cost_fx_to_cny: DecimalString
     note: str | None = None
 
     @field_validator("quantity", "average_cost_price")
     @classmethod
     def validate_non_negative_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_non_negative(value, info.field_name)
-
-    @field_validator("cost_fx_to_cny")
-    @classmethod
-    def validate_non_negative_cost_fx(cls, value: Decimal) -> Decimal:
-        return _ensure_non_negative(value, "cost_fx_to_cny")
 
 
 class RestorePreviewRequest(BaseModel):

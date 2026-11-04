@@ -99,18 +99,13 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
                     quantity=holding.quantity,
                     cost_price=holding.average_cost_price,
                     current_price=price.value,
-                    cost_fx=holding.cost_fx_to_cny,
                     current_fx=fx.value,
-                    baseline_fx=holding.baseline_fx_to_cny,
                 )
             )
             values = {
                 "cost_cny": analysis.cost_cny,
                 "market_value_cny": analysis.market_value_cny,
-                "fx_neutral_value_cny": analysis.fx_neutral_value_cny,
                 "unrealized_pnl": analysis.unrealized_pnl,
-                "price_effect": analysis.price_effect,
-                "fx_effect": analysis.fx_effect,
             }
             for name, value in values.items():
                 aggregate[holding.asset_class_id][name] += value
@@ -131,17 +126,15 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
                     current_fx_to_cny=fx.value,
                     price_status=price.status,
                     fx_status=fx.status,
-                    cost_trade_currency=holding.quantity * holding.average_cost_price,
-                    market_value_trade_currency=holding.quantity * price.value,
+                    cost_trade_currency=analysis.cost_trade_currency,
+                    market_value_trade_currency=analysis.market_value_trade_currency,
                     unrealized_pnl_trade_currency=(
-                        holding.quantity * (price.value - holding.average_cost_price)
+                        analysis.unrealized_pnl_trade_currency
                     ),
-                    **values,
-                    unrealized_return=(
-                        analysis.unrealized_pnl / analysis.cost_cny
-                        if analysis.cost_cny
-                        else _ZERO
-                    ),
+                    cost_cny=analysis.cost_cny,
+                    market_value_cny=analysis.market_value_cny,
+                    unrealized_pnl=analysis.unrealized_pnl,
+                    unrealized_return=analysis.unrealized_return,
                 )
             )
 
@@ -152,15 +145,10 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
             [aggregate[item.id]["market_value_cny"] for item in asset_classes],
             totals["market_value_cny"],
         )
-        fx_neutral_weights = _exact_weights(
-            [aggregate[item.id]["fx_neutral_value_cny"] for item in asset_classes],
-            totals["fx_neutral_value_cny"],
-        )
         class_responses = []
-        for asset_class, actual_weight, fx_neutral_weight in zip(
+        for asset_class, actual_weight in zip(
             asset_classes,
             actual_weights,
-            fx_neutral_weights,
             strict=True,
         ):
             values = aggregate[asset_class.id]
@@ -171,15 +159,10 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
                     target_weight=asset_class.target_weight,
                     display_order=asset_class.display_order,
                     actual_weight=actual_weight,
-                    fx_neutral_weight=fx_neutral_weight,
                     drift=actual_weight - asset_class.target_weight,
-                    fx_weight_contribution=actual_weight - fx_neutral_weight,
                     cost_cny=values["cost_cny"],
                     market_value_cny=values["market_value_cny"],
-                    fx_neutral_value_cny=values["fx_neutral_value_cny"],
                     unrealized_pnl=values["unrealized_pnl"],
-                    price_effect=values["price_effect"],
-                    fx_effect=values["fx_effect"],
                 )
             )
 
@@ -197,15 +180,12 @@ async def get_portfolio_analytics(session: AsyncSession) -> PortfolioAnalyticsRe
             tolerance=tolerance,
             cost_cny=totals["cost_cny"],
             market_value_cny=totals["market_value_cny"],
-            fx_neutral_value_cny=totals["fx_neutral_value_cny"],
             unrealized_pnl=totals["unrealized_pnl"],
             unrealized_return=(
                 totals["unrealized_pnl"] / totals["cost_cny"]
                 if totals["cost_cny"]
                 else _ZERO
             ),
-            price_effect=totals["price_effect"],
-            fx_effect=totals["fx_effect"],
             overseas_weight=(
                 overseas_market_value / totals["market_value_cny"]
                 if totals["market_value_cny"]
@@ -227,18 +207,14 @@ def _setup_response(tolerance: Decimal) -> PortfolioAnalyticsResponse:
         tolerance=tolerance,
         cost_cny=_ZERO,
         market_value_cny=_ZERO,
-        fx_neutral_value_cny=_ZERO,
         unrealized_pnl=_ZERO,
         unrealized_return=_ZERO,
-        price_effect=_ZERO,
-        fx_effect=_ZERO,
         overseas_weight=_ZERO,
         decision=PortfolioDecisionResponse(
             status="setup",
             title="开始建立组合",
-            reason="添加第一个持仓后即可查看配置偏离与盈亏拆分。",
+            reason="添加第一个持仓后即可查看配置偏离与盈亏。",
             max_drift=_ZERO,
-            fx_contribution=_ZERO,
             primary_action="add_holding",
         ),
         asset_classes=[],
@@ -374,13 +350,8 @@ def _decision(
     tolerance: Decimal,
 ) -> PortfolioDecisionResponse:
     drifts = [Decimal(item.actual_weight) - Decimal(item.target_weight) for item in asset_classes]
-    fx_contributions = [
-        Decimal(item.actual_weight) - Decimal(item.fx_neutral_weight)
-        for item in asset_classes
-    ]
     max_drift = max((abs(value) for value in drifts), default=_ZERO)
     max_overweight = max(drifts, default=_ZERO)
-    fx_contribution = max((abs(value) for value in fx_contributions), default=_ZERO)
     tolerance_pp = (tolerance * Decimal("100")).quantize(Decimal("0.1"))
 
     if max_drift <= tolerance:
@@ -404,7 +375,6 @@ def _decision(
         title=title,
         reason=reason,
         max_drift=max_drift.quantize(_DECISION_QUANTUM, rounding=ROUND_HALF_UP),
-        fx_contribution=fx_contribution.quantize(_DECISION_QUANTUM, rounding=ROUND_HALF_UP),
         primary_action=primary_action,
     )
 

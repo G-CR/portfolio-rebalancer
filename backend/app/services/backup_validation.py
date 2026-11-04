@@ -23,12 +23,17 @@ from app.backups.archive import (
     iter_current_rows,
 )
 from app.backups.canonical import JsonValue, canonical_json_bytes, canonical_parsed_json_bytes
-from app.backups.constants import CURRENT_FORMAT_VERSION, DATA_MEMBERS, STREAM_CHUNK_BYTES
+from app.backups.constants import (
+    CURRENT_FORMAT_VERSION,
+    DATA_MEMBERS,
+    LEGACY_V2_TABLE_MEMBERS,
+    STREAM_CHUNK_BYTES,
+)
 from app.backups.contracts import CONTRACTS_BY_MEMBER, Codec
 from app.backups.migrations import BackupMigrationError, migrate_to_current
 from app.core.decimal import fits_numeric_28_12
 from app.db.models import DEFAULT_SETTINGS_ID
-from app.schemas.rebalance import RebalanceComparisonResponse, RebalanceResultResponse, TradeSuggestionResponse
+from app.schemas.rebalance import RebalanceResultResponse, TradeSuggestionResponse
 from app.schemas.email_settings import EmailSettingsUpdate
 from pydantic import TypeAdapter, ValidationError
 from app.services.backup_storage import BackupSourceLease, BackupStorage
@@ -61,11 +66,9 @@ _ENUM_FIELDS: dict[tuple[str, str], set[str]] = {
     ("data/snapshot_items.json", "fx_status"): {
         "valid", "stale", "manual", "missing", "failed"
     },
-    ("data/rebalance_plans.json", "strategy_mode"): {"actual", "fx_neutral"},
     ("data/rebalance_plans.json", "status"): {
         "draft", "in_progress", "cancelled", "completed"
     },
-    ("data/settings.json", "rebalance_valuation_basis"): {"actual", "fx_neutral"},
     ("data/settings.json", "email_smtp_security"): {"ssl", "starttls"},
     ("credentials.json", "provider"): {*_PROVIDERS, "smtp"},
     ("credentials.json", "validation_status"): {"valid", "failed"},
@@ -218,7 +221,7 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
     actions = row["suggested_actions"]
     required_summary = {
         "session_token", "request_token", "available_cny", "available_usd",
-        "valuation_basis", "allow_sell", "allow_fx", "tolerance",
+        "allow_sell", "allow_fx", "tolerance",
         "minimum_trade_cny", "acknowledge_stale_data", "holding_versions",
         "market_data_record_ids",
     }
@@ -231,7 +234,7 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         raise _Incompatible
     if not isinstance(summary["session_token"], str) or not isinstance(summary["request_token"], str):
         raise _Incompatible
-    if summary["valuation_basis"] != row["strategy_mode"] or not isinstance(summary["acknowledge_stale_data"], bool):
+    if not isinstance(summary["acknowledge_stale_data"], bool):
         raise _Incompatible
     for field in ("available_cny", "available_usd"):
         if _decimal(summary[field]) < 0:
@@ -301,7 +304,6 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         "symbol", "action", "quantity", "amount_cny", "amount_trade_currency",
         "reason_code", "reason",
     }
-    comparison_keys = {"valuation_basis", "result"}
 
     def result_generation(value: JsonValue) -> str | None:
         if (
@@ -328,39 +330,22 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         not isinstance(actions, list)
         or not all(isinstance(item, dict) and set(item) == action_keys for item in actions)
         or not isinstance(projected, dict)
-        or set(projected) != {"valuation_basis", "result", "fx_comparison", "data_status"}
+        or set(projected) != {"result", "data_status"}
     ):
         raise _Incompatible
-    comparison = projected["fx_comparison"]
     primary_generation = result_generation(projected["result"])
-    comparison_generation = (
-        result_generation(comparison["result"])
-        if isinstance(comparison, dict) and set(comparison) == comparison_keys
-        else None
-    )
-    if (
-        primary_generation != constraints_generation
-        or comparison_generation != constraints_generation
-    ):
+    if primary_generation != constraints_generation:
         raise _Incompatible
 
     result_for_validation = _result_for_response_validation(
         projected["result"],
         primary_generation,
     )
-    comparison_for_validation = {
-        **comparison,
-        "result": _result_for_response_validation(
-            comparison["result"],
-            comparison_generation,
-        ),
-    }
-    if projected["valuation_basis"] != row["strategy_mode"] or projected["data_status"] not in {"valid", "stale", "manual"}:
+    if projected["data_status"] not in {"valid", "stale", "manual"}:
         raise _Incompatible
     try:
         TypeAdapter(list[TradeSuggestionResponse]).validate_python(actions)
         result = RebalanceResultResponse.model_validate(result_for_validation)
-        RebalanceComparisonResponse.model_validate(comparison_for_validation)
     except ValidationError:
         raise _Incompatible from None
     if [item.model_dump(mode="json") for item in result.trades] != actions:
@@ -467,7 +452,7 @@ def _validate_scalars(member: str, row: dict[str, JsonValue]) -> None:
             or version < 1
         ):
             raise _Incompatible
-        for field in ("quantity", "average_cost_price", "cost_fx_to_cny", "baseline_fx_to_cny"):
+        for field in ("quantity", "average_cost_price"):
             if _decimal(row[field]) < 0:
                 raise _Incompatible
     elif member == "data/holding_defaults.json":
@@ -480,8 +465,8 @@ def _validate_scalars(member: str, row: dict[str, JsonValue]) -> None:
         raise _Incompatible
     elif member == "data/cost_adjustments.json":
         for field in (
-            "before_quantity", "before_average_cost_price", "before_cost_fx_to_cny",
-            "after_quantity", "after_average_cost_price", "after_cost_fx_to_cny",
+            "before_quantity", "before_average_cost_price",
+            "after_quantity", "after_average_cost_price",
         ):
             if _decimal(row[field]) < 0:
                 raise _Incompatible
@@ -555,7 +540,7 @@ def _validate_rebalance(
     )
     cancel_fields = ("cancelled_at", "cancel_idempotency_key")
     complete_fields = (
-        "after_snapshot_id", "baseline_reset_at", "completion_market_data_record_ids",
+        "after_snapshot_id", "completion_market_data_record_ids",
         "complete_idempotency_key", "completed_at",
     )
     has_start = all(row[field] is not None for field in start_fields)
@@ -797,6 +782,15 @@ def validate_backup(
                         raise _Incompatible
                 finally:
                     connection.close()
+            warnings = ["Backup archives contain plaintext credentials."]
+            legacy_records = sum(
+                inspected.manifest.record_counts.get(member, 0)
+                for member in LEGACY_V2_TABLE_MEMBERS
+            )
+            if legacy_records:
+                warnings.append(
+                    "Format-2 ledger and decision records in this archive are ignored."
+                )
             return ValidatedBackup(
                 retained_archive_path=Path(path),
                 path_id=path_id,
@@ -808,7 +802,7 @@ def validate_backup(
                 exported_at=datetime.fromisoformat(inspected.manifest.exported_at),
                 record_counts=record_counts,
                 credential_categories=tuple(sorted(categories)),
-                warnings=("Backup archives contain plaintext credentials.",),
+                warnings=tuple(warnings),
                 expires_at=expires_at.astimezone(timezone.utc) if expires_at is not None else None,
             )
     except BackupValidationError:

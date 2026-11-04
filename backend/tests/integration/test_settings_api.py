@@ -19,7 +19,6 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
     assert initial.json() | {"updated_at": None} == {
         "available_cny": "0",
         "available_usd": "0",
-        "valuation_basis": "actual",
         "tolerance": "0.02",
         "minimum_trade_cny": "675",
         "allow_sell": True,
@@ -40,7 +39,6 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
         json={
             "available_cny": "12000.50",
             "available_usd": "800.25",
-            "valuation_basis": "fx_neutral",
             "tolerance": "0.035",
             "allow_sell": False,
             "allow_fx": False,
@@ -49,7 +47,6 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
     assert saved.status_code == 200, saved.text
     assert saved.json()["available_cny"] == "12000.5"
     assert saved.json()["available_usd"] == "800.25"
-    assert saved.json()["valuation_basis"] == "fx_neutral"
 
     general = await api_client.get("/api/settings/general")
     assert general.json()["default_tolerance"] == "0.035"
@@ -76,43 +73,27 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["available_cny"] == "12000.5"
     assert fetched.json()["available_usd"] == "800.25"
-    assert fetched.json()["valuation_basis"] == "fx_neutral"
     assert fetched.json()["tolerance"] == "0.01"
     assert fetched.json()["minimum_trade_cny"] == "675"
     assert fetched.json()["allow_sell"] is True
     assert fetched.json()["allow_fx"] is True
     assert stored.rebalance_available_cny == Decimal("12000.5")
     assert stored.rebalance_available_usd == Decimal("800.25")
-    assert stored.rebalance_valuation_basis == "fx_neutral"
     assert stored.minimum_trade_amount_cny == Decimal("675")
 
 
-async def test_rebalance_defaults_reject_invalid_values(api_client) -> None:
+async def test_rebalance_defaults_reject_negative_values(api_client) -> None:
     negative = await api_client.put(
         "/api/settings/rebalance-defaults",
         json={
             "available_cny": "-1",
             "available_usd": "0",
-            "valuation_basis": "actual",
             "tolerance": "0.02",
             "allow_sell": True,
             "allow_fx": True,
         },
     )
-    invalid_basis = await api_client.put(
-        "/api/settings/rebalance-defaults",
-        json={
-            "available_cny": "0",
-            "available_usd": "0",
-            "valuation_basis": "nominal",
-            "tolerance": "0.02",
-            "allow_sell": True,
-            "allow_fx": True,
-        },
-    )
-
     assert negative.status_code == 422
-    assert invalid_basis.status_code == 422
 
 
 async def test_provider_key_is_never_returned(api_client, db_session) -> None:

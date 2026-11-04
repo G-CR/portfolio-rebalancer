@@ -293,7 +293,7 @@ async def test_rebalance_plan_lifecycle_upgrade_preserves_existing_rows(
             )
             await session.commit()
 
-        await _run_alembic_upgrade("head")
+        await _run_alembic_upgrade("20260915_0009")
         state = await _rebalance_plan_migration_state()
         assert state["revision"] == "20260915_0009"
         assert state["columns"] == expected_columns
@@ -334,7 +334,7 @@ async def test_rebalance_plan_lifecycle_migration_round_trip(
         await _run_alembic_downgrade("20260714_0004")
         assert (await _rebalance_plan_migration_state())["columns"] == {}
 
-        await _run_alembic_upgrade("head")
+        await _run_alembic_upgrade("20260915_0009")
         first = await _rebalance_plan_migration_state()
         assert first["revision"] == "20260915_0009"
         assert first["columns"] == expected_columns
@@ -343,7 +343,7 @@ async def test_rebalance_plan_lifecycle_migration_round_trip(
         await _run_alembic_downgrade("20260714_0004")
         assert (await _rebalance_plan_migration_state())["columns"] == {}
 
-        await _run_alembic_upgrade("head")
+        await _run_alembic_upgrade("20260915_0009")
         second = await _rebalance_plan_migration_state()
         assert second["revision"] == "20260915_0009"
         assert second["columns"] == expected_columns
@@ -374,8 +374,6 @@ async def test_holding_orm_update_increments_version(db_session) -> None:
         trade_currency="USD",
         quantity=Decimal("10"),
         average_cost_price=Decimal("500"),
-        cost_fx_to_cny=Decimal("7.2"),
-        baseline_fx_to_cny=Decimal("7.2"),
         lot_size=Decimal("1"),
         quantity_precision=0,
         is_rebalance_preferred=True,
@@ -505,7 +503,7 @@ async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
         await _run_alembic_downgrade("20260713_0003")
         assert (await _snapshot_migration_state())["columns"] == {}
 
-        await _run_alembic_upgrade("head")
+        await _run_alembic_upgrade("20260915_0009")
         first_upgrade = await _snapshot_migration_state()
         assert first_upgrade["revision"] == "20260915_0009"
         assert first_upgrade["columns"] == expected_columns
@@ -515,7 +513,7 @@ async def test_snapshot_payload_empty_upgrade_downgrade_upgrade(
         await _run_alembic_downgrade("20260713_0003")
         assert (await _snapshot_migration_state())["columns"] == {}
 
-        await _run_alembic_upgrade("head")
+        await _run_alembic_upgrade("20260915_0009")
         second_upgrade = await _snapshot_migration_state()
         assert second_upgrade["revision"] == "20260915_0009"
         assert second_upgrade["columns"] == expected_columns
@@ -615,8 +613,6 @@ async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes
             trade_currency="USD",
             quantity=Decimal("0"),
             average_cost_price=Decimal("500"),
-            cost_fx_to_cny=Decimal("7.2"),
-            baseline_fx_to_cny=Decimal("7.2"),
             lot_size=Decimal("1"),
             quantity_precision=0,
             is_rebalance_preferred=False,
@@ -631,8 +627,6 @@ async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes
             trade_currency="USD",
             quantity=Decimal("10"),
             average_cost_price=Decimal("510"),
-            cost_fx_to_cny=Decimal("7.1"),
-            baseline_fx_to_cny=Decimal("7.2"),
             lot_size=Decimal("1"),
             quantity_precision=0,
             is_rebalance_preferred=True,
@@ -652,7 +646,7 @@ async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes
         state = await _holding_migration_state()
         rows = {row["id"]: row for row in state["rows"]}
 
-        assert state["revision"] == "20260915_0009"
+        assert state["revision"] == "20261104_0012"
         assert "uq_holdings_active_symbol_account_name" in state["indexes"]
         assert "uq_holdings_symbol_account_name" not in state["constraints"]
         assert rows[archived_id] == {
@@ -691,8 +685,6 @@ async def test_downgrade_0003_restores_global_identity_constraint_for_compatible
             trade_currency="USD",
             quantity=Decimal("0"),
             average_cost_price=Decimal("500"),
-            cost_fx_to_cny=Decimal("7.2"),
-            baseline_fx_to_cny=Decimal("7.2"),
             lot_size=Decimal("1"),
             quantity_precision=0,
             is_rebalance_preferred=False,
@@ -707,8 +699,6 @@ async def test_downgrade_0003_restores_global_identity_constraint_for_compatible
             trade_currency="USD",
             quantity=Decimal("10"),
             average_cost_price=Decimal("510"),
-            cost_fx_to_cny=Decimal("7.1"),
-            baseline_fx_to_cny=Decimal("7.2"),
             lot_size=Decimal("1"),
             quantity_precision=0,
             is_rebalance_preferred=True,
@@ -746,4 +736,132 @@ async def test_downgrade_0003_restores_global_identity_constraint_for_compatible
         await _run_alembic_upgrade("head")
 
     restored_state = await _holding_migration_state()
-    assert restored_state["revision"] == "20260915_0009"
+    assert restored_state["revision"] == "20261104_0012"
+
+
+async def test_fx_attribution_drop_recomputes_snapshot_reference_cost(
+    _reset_database,
+) -> None:
+    snapshot_id = UUID("00000000-0000-0000-0000-000000000701")
+    item_id = UUID("00000000-0000-0000-0000-000000000702")
+    missing_fx_item_id = UUID("00000000-0000-0000-0000-000000000703")
+
+    try:
+        await _run_alembic_downgrade("20261001_0011")
+        async with MigrationSessionFactory() as session:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO snapshots (
+                        id, snapshot_type, local_date, captured_at, note,
+                        data_complete, has_stale_data, has_manual_data, created_at
+                    )
+                    VALUES (
+                        :snapshot_id, 'manual', DATE '2026-11-04',
+                        TIMESTAMPTZ '2026-11-04 08:00:00+00', NULL,
+                        true, false, false, TIMESTAMPTZ '2026-11-04 08:00:00+00'
+                    )
+                    """
+                ),
+                {"snapshot_id": snapshot_id},
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO snapshot_items (
+                        id, snapshot_id, holding_id, asset_class_name, holding_name, symbol,
+                        account_name, trade_currency, quantity, market_price, current_fx_to_cny,
+                        baseline_fx_to_cny, average_cost_price, cost_fx_to_cny, target_weight,
+                        market_value_cny, fx_neutral_value_cny, cost_value_cny,
+                        unrealized_pnl_amount_cny, unrealized_pnl_rate, price_effect_cny,
+                        fx_effect_cny, actual_weight, fx_neutral_weight, price_status, fx_status,
+                        created_at
+                    )
+                    VALUES (
+                        :item_id, :snapshot_id, NULL, '海外股票', 'SPY', 'SPY',
+                        'Brokerage', 'USD', 3, 100, 7.2,
+                        6.8, 90, 7.0, 0.3,
+                        2160, 2040, 1890,
+                        270, 0.142857142857, 210,
+                        60, 1, 1, 'valid', 'valid',
+                        TIMESTAMPTZ '2026-11-04 08:00:00+00'
+                    )
+                    """
+                ),
+                {"item_id": item_id, "snapshot_id": snapshot_id},
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO snapshot_items (
+                        id, snapshot_id, holding_id, asset_class_name, holding_name, symbol,
+                        account_name, trade_currency, quantity, market_price, current_fx_to_cny,
+                        baseline_fx_to_cny, average_cost_price, cost_fx_to_cny, target_weight,
+                        market_value_cny, fx_neutral_value_cny, cost_value_cny,
+                        unrealized_pnl_amount_cny, unrealized_pnl_rate, price_effect_cny,
+                        fx_effect_cny, actual_weight, fx_neutral_weight, price_status, fx_status,
+                        created_at
+                    )
+                    VALUES (
+                        :item_id, :snapshot_id, NULL, '海外股票', 'MISSING-FX', 'MISSING-FX',
+                        'Brokerage', 'USD', 3, 100, NULL,
+                        6.8, 90, 7.0, 0.3,
+                        2160, 2040, 1890,
+                        270, 0.142857142857, 210,
+                        60, 1, 1, 'missing', 'missing',
+                        TIMESTAMPTZ '2026-11-04 08:00:00+00'
+                    )
+                    """
+                ),
+                {"item_id": missing_fx_item_id, "snapshot_id": snapshot_id},
+            )
+            await session.commit()
+
+        await _run_alembic_upgrade("head")
+
+        async with MigrationSessionFactory() as session:
+            removed = set(
+                await session.scalars(
+                    text(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'snapshot_items'
+                          AND column_name IN (
+                              'baseline_fx_to_cny', 'cost_fx_to_cny',
+                              'fx_neutral_value_cny', 'price_effect_cny',
+                              'fx_effect_cny', 'fx_neutral_weight'
+                          )
+                        """
+                    )
+                )
+            )
+            rows = {
+                row["id"]: row
+                for row in (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT id, cost_value_cny, unrealized_pnl_amount_cny, unrealized_pnl_rate
+                            FROM snapshot_items
+                            WHERE id IN (:item_id, :missing_fx_item_id)
+                            """
+                        ),
+                        {"item_id": item_id, "missing_fx_item_id": missing_fx_item_id},
+                    )
+                ).mappings()
+            }
+
+        assert removed == set()
+        assert rows[item_id]["cost_value_cny"] == Decimal("1944")
+        assert rows[item_id]["unrealized_pnl_amount_cny"] == Decimal("216")
+        assert rows[item_id]["unrealized_pnl_rate"] == Decimal("0.111111111111")
+        assert rows[missing_fx_item_id]["cost_value_cny"] is None
+        assert rows[missing_fx_item_id]["unrealized_pnl_amount_cny"] is None
+        assert rows[missing_fx_item_id]["unrealized_pnl_rate"] is None
+    finally:
+        async with MigrationSessionFactory() as session:
+            await session.execute(text("TRUNCATE TABLE snapshots CASCADE"))
+            await session.commit()
+        await _run_alembic_upgrade("head")

@@ -26,8 +26,6 @@ def _holding_payload(
     trade_currency: str,
     quantity: str,
     average_cost_price: str,
-    cost_fx_to_cny: str,
-    baseline_fx_to_cny: str,
     lot_size: str,
     account_name: str,
 ) -> dict[str, object]:
@@ -40,8 +38,6 @@ def _holding_payload(
         "trade_currency": trade_currency,
         "quantity": quantity,
         "average_cost_price": average_cost_price,
-        "cost_fx_to_cny": cost_fx_to_cny,
-        "baseline_fx_to_cny": baseline_fx_to_cny,
         "lot_size": lot_size,
         "quantity_precision": 12,
         "is_rebalance_preferred": True,
@@ -54,7 +50,6 @@ def _preview_payload() -> dict[str, object]:
         "request_token": "preview-request-1",
         "available_cny": "0",
         "available_usd": "0",
-        "valuation_basis": "actual",
         "allow_sell": True,
         "allow_fx": True,
         "tolerance": "0.05",
@@ -85,8 +80,6 @@ async def _configure_two_class_portfolio(api_client, db_session) -> dict[str, ob
             trade_currency="CNY",
             quantity="8",
             average_cost_price="90",
-            cost_fx_to_cny="1",
-            baseline_fx_to_cny="1",
             lot_size="1",
             account_name="Broker CNY",
         ),
@@ -102,8 +95,6 @@ async def _configure_two_class_portfolio(api_client, db_session) -> dict[str, ob
             trade_currency="USD",
             quantity="2",
             average_cost_price="18",
-            cost_fx_to_cny="4.200000000000",
-            baseline_fx_to_cny="4.000000000000",
             lot_size="1",
             account_name="Broker USD",
         ),
@@ -298,7 +289,7 @@ async def test_start_snapshot_uses_the_exact_price_row_captured_before_concurren
     assert snapshot_item.market_price == Decimal("100.000000000000")
 
 
-async def test_cancel_never_modifies_holdings_or_baselines(
+async def test_cancel_never_modifies_holdings_or_cost_basis(
     api_client,
     db_session,
     monkeypatch,
@@ -306,7 +297,7 @@ async def test_cancel_never_modifies_holdings_or_baselines(
     configured = await _configure_two_class_portfolio(api_client, db_session)
     draft = await _create_draft_plan(api_client, monkeypatch)
     before = {
-        row.id: (row.quantity, row.average_cost_price, row.cost_fx_to_cny, row.baseline_fx_to_cny)
+        row.id: (row.quantity, row.average_cost_price)
         for row in await db_session.scalars(select(Holding).where(Holding.is_active.is_(True)))
     }
 
@@ -316,7 +307,7 @@ async def test_cancel_never_modifies_holdings_or_baselines(
     )
     db_session.expire_all()
     after = {
-        row.id: (row.quantity, row.average_cost_price, row.cost_fx_to_cny, row.baseline_fx_to_cny)
+        row.id: (row.quantity, row.average_cost_price)
         for row in await db_session.scalars(select(Holding).where(Holding.is_active.is_(True)))
     }
 
@@ -329,7 +320,7 @@ async def test_cancel_never_modifies_holdings_or_baselines(
     ) == 0
 
 
-async def test_complete_rebalance_creates_after_snapshot_and_resets_baseline(
+async def test_complete_rebalance_creates_after_snapshot(
     api_client,
     db_session,
     monkeypatch,
@@ -348,7 +339,6 @@ async def test_complete_rebalance_creates_after_snapshot_and_resets_baseline(
     }
     holdings[UUID(configured["cny_holding_id"])].quantity = Decimal("5")
     holdings[UUID(configured["usd_holding_id"])].quantity = Decimal("5")
-    before_cost_fx = {holding_id: row.cost_fx_to_cny for holding_id, row in holdings.items()}
     await db_session.commit()
 
     response = await api_client.post(
@@ -365,21 +355,16 @@ async def test_complete_rebalance_creates_after_snapshot_and_resets_baseline(
     completed = response.json()
     assert completed["status"] == "completed"
     assert completed["after_snapshot_id"] is not None
-    assert completed["baseline_reset_at"] is not None
 
     after_snapshot = await db_session.scalar(
         select(Snapshot).where(Snapshot.id == completed["after_snapshot_id"])
     )
     assert after_snapshot.snapshot_type == "rebalance_after"
-    assert after[UUID(configured["cny_holding_id"])].baseline_fx_to_cny == Decimal("1")
-    assert after[UUID(configured["usd_holding_id"])].baseline_fx_to_cny == Decimal("5.000000000000")
-    assert after[UUID(configured["cny_holding_id"])].cost_fx_to_cny == before_cost_fx[UUID(configured["cny_holding_id"])]
-    assert after[UUID(configured["usd_holding_id"])].cost_fx_to_cny == before_cost_fx[UUID(configured["usd_holding_id"])]
     assert after[UUID(configured["cny_holding_id"])].quantity == Decimal("5")
     assert after[UUID(configured["usd_holding_id"])].quantity == Decimal("5")
 
 
-async def test_complete_snapshot_and_baseline_use_the_exact_fx_row_captured_before_concurrent_append(
+async def test_complete_snapshot_uses_the_exact_fx_row_captured_before_concurrent_append(
     api_client,
     db_session,
     monkeypatch,
@@ -434,19 +419,15 @@ async def test_complete_snapshot_and_baseline_use_the_exact_fx_row_captured_befo
             SnapshotItem.holding_id == configured["usd_holding_id"],
         )
     )
-    usd_holding = await db_session.scalar(
-        select(Holding).where(Holding.id == configured["usd_holding_id"])
-    )
 
     assert response.status_code == 200, response.text
     assert appended_ids
     assert plan.completion_market_data_record_ids["fx:USD/CNY"] == captured_fx_id
     assert plan.completion_market_data_record_ids["fx:USD/CNY"] != appended_ids[0]
     assert snapshot_item.current_fx_to_cny == Decimal("5.000000000000")
-    assert usd_holding.baseline_fx_to_cny == Decimal("5.000000000000")
 
 
-async def test_complete_rolls_back_baseline_reset_and_after_snapshot_on_failure(
+async def test_complete_rolls_back_after_snapshot_on_failure(
     api_client,
     db_session,
     monkeypatch,
@@ -459,19 +440,16 @@ async def test_complete_rolls_back_baseline_reset_and_after_snapshot_on_failure(
     )
     assert started.status_code == 200, started.text
     before = {
-        row.id: row.baseline_fx_to_cny
+        row.id: (row.quantity, row.average_cost_price)
         for row in await db_session.scalars(select(Holding).where(Holding.is_active.is_(True)))
     }
 
-    async def _failing_reset(session, effective_fx) -> None:
-        holding = await session.scalar(select(Holding).where(Holding.id == configured["usd_holding_id"]))
-        holding.baseline_fx_to_cny = Decimal("9.990000000000")
-        await session.flush()
+    async def _failing_snapshot(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "app.services.rebalancing.reset_baseline_fx",
-        _failing_reset,
+        "app.services.rebalancing.create_event_snapshot",
+        _failing_snapshot,
     )
 
     response = await api_client.post(
@@ -480,9 +458,10 @@ async def test_complete_rolls_back_baseline_reset_and_after_snapshot_on_failure(
     )
     db_session.expire_all()
     after = {
-        row.id: row.baseline_fx_to_cny
+        row.id: (row.quantity, row.average_cost_price)
         for row in await db_session.scalars(select(Holding).where(Holding.is_active.is_(True)))
     }
+    plan = await db_session.scalar(select(RebalancePlan).where(RebalancePlan.id == draft["id"]))
     after_snapshot_count = await db_session.scalar(
         select(func.count())
         .select_from(Snapshot)
@@ -495,4 +474,6 @@ async def test_complete_rolls_back_baseline_reset_and_after_snapshot_on_failure(
         "message": "Rebalance storage operation failed.",
     }
     assert after == before
+    assert plan is not None
+    assert plan.status == "in_progress"
     assert after_snapshot_count == 0

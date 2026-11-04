@@ -40,7 +40,6 @@ it("shows facts and its action for a contribute decision", async () => {
   await screen.findByRole("heading", { name: "新增资金" });
 
   expect(screen.getByText("最大偏离")).toBeInTheDocument();
-  expect(screen.getByText("汇率贡献")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "测算新增资金" })).toHaveAttribute("href", "/rebalance");
 });
 

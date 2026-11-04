@@ -37,19 +37,13 @@ class EventSnapshotItemCapture:
     quantity: Decimal
     market_price: Decimal
     current_fx_to_cny: Decimal
-    baseline_fx_to_cny: Decimal
     average_cost_price: Decimal
-    cost_fx_to_cny: Decimal
     target_weight: Decimal
     market_value_cny: Decimal
-    fx_neutral_value_cny: Decimal
     cost_value_cny: Decimal
     unrealized_pnl_amount_cny: Decimal
     unrealized_pnl_rate: Decimal
-    price_effect_cny: Decimal
-    fx_effect_cny: Decimal
     actual_weight: Decimal
-    fx_neutral_weight: Decimal
     price_status: str
     fx_status: str
 
@@ -218,13 +212,9 @@ async def list_snapshots(
         select(
             SnapshotItem.snapshot_id.label("snapshot_id"),
             func.coalesce(func.sum(SnapshotItem.market_value_cny), _ZERO).label("market"),
-            func.coalesce(func.sum(SnapshotItem.fx_neutral_value_cny), _ZERO).label("neutral"),
             func.coalesce(func.sum(SnapshotItem.cost_value_cny), _ZERO).label("cost"),
             func.coalesce(func.sum(SnapshotItem.unrealized_pnl_amount_cny), _ZERO).label("pnl"),
-            func.coalesce(func.sum(SnapshotItem.price_effect_cny), _ZERO).label("price"),
-            func.coalesce(func.sum(SnapshotItem.fx_effect_cny), _ZERO).label("fx"),
             func.coalesce(func.sum(SnapshotItem.actual_weight), _ZERO).label("actual"),
-            func.coalesce(func.sum(SnapshotItem.fx_neutral_weight), _ZERO).label("neutral_weight"),
             func.max(SnapshotItem.target_weight).label("target"),
         )
         .where(*aggregate_filters)
@@ -305,18 +295,13 @@ async def _persist_items(
                     if Decimal(analytics.market_value_cny)
                     else _ZERO
                 ),
-                fx_neutral_weight=(
-                    Decimal(item.fx_neutral_value_cny) / Decimal(analytics.fx_neutral_value_cny)
-                    if Decimal(analytics.fx_neutral_value_cny)
-                    else _ZERO
-                ),
             )
             for item in analytics.holdings
         ]
     )
 
 
-def _snapshot_item(*, snapshot_id, captured_at, item, holding, asset_class, actual_weight, fx_neutral_weight):
+def _snapshot_item(*, snapshot_id, captured_at, item, holding, asset_class, actual_weight):
     return SnapshotItem(
         snapshot_id=snapshot_id,
         holding_id=holding.id,
@@ -328,19 +313,13 @@ def _snapshot_item(*, snapshot_id, captured_at, item, holding, asset_class, actu
         quantity=holding.quantity,
         market_price=item.current_price,
         current_fx_to_cny=item.current_fx_to_cny,
-        baseline_fx_to_cny=holding.baseline_fx_to_cny,
         average_cost_price=holding.average_cost_price,
-        cost_fx_to_cny=holding.cost_fx_to_cny,
         target_weight=asset_class.target_weight,
         market_value_cny=item.market_value_cny,
-        fx_neutral_value_cny=item.fx_neutral_value_cny,
         cost_value_cny=item.cost_cny,
         unrealized_pnl_amount_cny=item.unrealized_pnl,
         unrealized_pnl_rate=item.unrealized_return,
-        price_effect_cny=item.price_effect,
-        fx_effect_cny=item.fx_effect,
         actual_weight=actual_weight,
-        fx_neutral_weight=fx_neutral_weight,
         price_status=item.price_status,
         fx_status=item.fx_status,
         created_at=captured_at,
@@ -378,13 +357,9 @@ def _summary(snapshot: Snapshot, aggregate, *, include_target: bool) -> Snapshot
         has_stale_data=snapshot.has_stale_data,
         has_manual_data=snapshot.has_manual_data,
         total_market_value_cny=aggregate.market,
-        total_fx_neutral_value_cny=aggregate.neutral,
         total_cost_value_cny=aggregate.cost,
         total_unrealized_pnl_cny=aggregate.pnl,
-        total_price_effect_cny=aggregate.price,
-        total_fx_effect_cny=aggregate.fx,
         actual_weight=aggregate.actual,
-        fx_neutral_weight=aggregate.neutral_weight,
         target_weight=aggregate.target if include_target else None,
     )
 
@@ -403,13 +378,9 @@ def _summary_from_items(snapshot: Snapshot, items: list[SnapshotItem]) -> Snapsh
         has_stale_data=snapshot.has_stale_data,
         has_manual_data=snapshot.has_manual_data,
         total_market_value_cny=total("market_value_cny"),
-        total_fx_neutral_value_cny=total("fx_neutral_value_cny"),
         total_cost_value_cny=total("cost_value_cny"),
         total_unrealized_pnl_cny=total("unrealized_pnl_amount_cny"),
-        total_price_effect_cny=total("price_effect_cny"),
-        total_fx_effect_cny=total("fx_effect_cny"),
         actual_weight=total("actual_weight"),
-        fx_neutral_weight=total("fx_neutral_weight"),
         target_weight=None,
     )
 

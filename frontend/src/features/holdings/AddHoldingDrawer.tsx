@@ -40,8 +40,6 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   const [accountName, setAccountName] = useState("");
   const [quantity, setQuantity] = useState("0");
   const [averageCost, setAverageCost] = useState("0");
-  const [costFx, setCostFx] = useState("1");
-  const [baselineFx, setBaselineFx] = useState("1");
   const [lotSize, setLotSize] = useState("1");
   const [precision, setPrecision] = useState("0");
   const [preferredDataSource, setPreferredDataSource] = useState("");
@@ -60,10 +58,6 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
 
   function changeMarket(next: string) {
     setMarket(next);
-    if (next !== "US") {
-      setCostFx("1");
-      setBaselineFx("1");
-    }
     const defaults = marketTradeUnitDefaults[next as keyof typeof marketTradeUnitDefaults];
     if (defaults) {
       setLotSize(defaults.lotSize);
@@ -72,13 +66,13 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
   }
 
   const missingIdentity = submitted && (!symbol.trim() || !name.trim() || !market.trim() || !accountName.trim());
-  const invalidDecimals = submitted && [quantity, averageCost, costFx, baselineFx]
+  const invalidDecimals = submitted && [quantity, averageCost]
     .some((value) => !decimalPattern.test(value));
   const invalidLotSize = submitted && !isPositiveDecimal(lotSize);
   const invalidPrecision = submitted && !isValidQuantityPrecision(precision);
   const canSubmit = Boolean(
     assetClassId && symbol.trim() && name.trim() && market.trim() && accountName.trim()
-    && [quantity, averageCost, costFx, baselineFx].every((value) => decimalPattern.test(value))
+    && [quantity, averageCost].every((value) => decimalPattern.test(value))
     && isPositiveDecimal(lotSize)
     && isValidQuantityPrecision(precision),
   );
@@ -96,8 +90,6 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
       trade_currency: currency,
       quantity,
       average_cost_price: averageCost,
-      cost_fx_to_cny: costFx,
-      baseline_fx_to_cny: baselineFx,
       lot_size: lotSize,
       quantity_precision: Number.parseInt(precision, 10),
       preferred_data_source: preferredDataSource || null,
@@ -140,7 +132,6 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
           <div className={styles.fieldGrid}>
             <FormField label="初始份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
             <FormField label="平均成本价" required><input type="text" inputMode="decimal" value={averageCost} onChange={(event) => setAverageCost(event.target.value)} /></FormField>
-            {isUsMarket ? <><FormField label="成本汇率" required><input type="text" inputMode="decimal" value={costFx} onChange={(event) => setCostFx(event.target.value)} /></FormField><FormField label="基准汇率" required><input type="text" inputMode="decimal" value={baselineFx} onChange={(event) => setBaselineFx(event.target.value)} /></FormField></> : null}
           </div>
         </section>
         <details className={styles.advancedSettings} aria-label="高级设置">

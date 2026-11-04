@@ -1,10 +1,11 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
 import pytest
 from sqlalchemy import select
 
-from app.db.models import CostAdjustment, Holding, HoldingDefault
+from app.db.models import CostAdjustment, Holding, HoldingDefault, MarketData
 
 
 def _holding_payload(asset_class_id: str, **overrides: object) -> dict[str, object]:
@@ -17,8 +18,6 @@ def _holding_payload(asset_class_id: str, **overrides: object) -> dict[str, obje
         "trade_currency": "USD",
         "quantity": "10",
         "average_cost_price": "500",
-        "cost_fx_to_cny": "7.20",
-        "baseline_fx_to_cny": "7.20",
         "lot_size": "1",
         "quantity_precision": 0,
         "is_rebalance_preferred": True,
@@ -47,7 +46,6 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
         json={
             "quantity": "5",
             "price": "650.20",
-            "fx": "7.1850",
             "fee_currency": "USD",
             "commission_rate": "0.0005",
             "minimum_commission": "1",
@@ -75,7 +73,6 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
             "payload": {
                 "quantity": "5",
                 "price": "650.20",
-                "fx": "7.1850",
                 "fee_currency": "USD",
                 "commission_rate": "0.0005",
                 "minimum_commission": "1",
@@ -97,8 +94,6 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
     assert holding.version == 2
     assert holding.quantity == Decimal("15")
     assert holding.average_cost_price == Decimal(confirmed["after"]["average_cost_price"])
-    assert holding.cost_fx_to_cny == Decimal(confirmed["after"]["cost_fx_to_cny"])
-    assert holding.baseline_fx_to_cny == Decimal("7.20")
 
     defaults = await db_session.scalar(
         select(HoldingDefault).where(HoldingDefault.holding_id == holding.id)
@@ -126,7 +121,6 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
         json={
             "quantity": "1",
             "price": "600",
-            "fx": "7.10",
             "fee_currency": "USD",
             "actual_fee": "3",
             "save_fee_defaults": False,
@@ -142,7 +136,6 @@ async def test_purchase_confirm_updates_holding_persists_audit_and_fee_defaults(
             "payload": {
                 "quantity": "1",
                 "price": "600",
-                "fx": "7.10",
                 "fee_currency": "USD",
                 "actual_fee": "3",
                 "save_fee_defaults": False,
@@ -181,7 +174,6 @@ async def test_preview_rejects_incomplete_explicit_fee_default_save(
         json={
             "quantity": "1",
             "price": "500",
-            "fx": "7.1",
             "actual_fee": "2",
             "save_fee_defaults": True,
             **rule_fields,
@@ -210,7 +202,6 @@ async def test_confirm_rejects_actual_fee_only_default_save_atomically(
             "payload": {
                 "quantity": "1",
                 "price": "500",
-                "fx": "7.1",
                 "actual_fee": "2",
                 "save_fee_defaults": True,
             },
@@ -236,7 +227,6 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
         json={
             "quantity": "5",
             "price": "650.20",
-            "fx": "7.1850",
             "actual_fee": "2.30",
             "fee_currency": "USD",
             "commission_rate": "0.0005",
@@ -263,7 +253,6 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
             "payload": {
                 "quantity": "5",
                 "price": "650.20",
-                "fx": "7.1850",
                 "actual_fee": "2.30",
                 "fee_currency": "USD",
                 "commission_rate": "0.0005",
@@ -287,7 +276,7 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
     [
         (
             "preview-purchase",
-            {"quantity": "1", "price": "10000000000000000", "fx": "7.1"},
+            {"quantity": "1", "price": "10000000000000000"},
             "price",
         ),
         ("preview-sell", {"quantity": "0.0000000000001"}, "quantity"),
@@ -296,7 +285,6 @@ async def test_stale_cost_preview_is_rejected(api_client, db_session) -> None:
             {
                 "quantity": "10000000000000000",
                 "average_cost_price": "480",
-                "cost_fx_to_cny": "7.1",
                 "note": "对齐券商月结单",
             },
             "quantity",
@@ -327,7 +315,7 @@ async def test_preview_rejects_decimal_values_outside_numeric_storage_bounds(
     [
         (
             "purchase",
-            {"quantity": "1", "price": "10000000000000000", "fx": "7.1"},
+            {"quantity": "1", "price": "10000000000000000"},
             "payload.price",
         ),
         ("sell", {"quantity": "0.0000000000001"}, "payload.quantity"),
@@ -336,7 +324,6 @@ async def test_preview_rejects_decimal_values_outside_numeric_storage_bounds(
             {
                 "quantity": "10000000000000000",
                 "average_cost_price": "480",
-                "cost_fx_to_cny": "7.1",
                 "note": "对齐券商月结单",
             },
             "payload.quantity",
@@ -382,7 +369,6 @@ async def test_preview_translates_decimal_arithmetic_overflow(api_client) -> Non
         json={
             "quantity": "9999999999999999",
             "price": "9999999999999999",
-            "fx": "9999999999999999",
             "actual_fee": "0",
         },
     )
@@ -394,18 +380,17 @@ async def test_preview_translates_decimal_arithmetic_overflow(api_client) -> Non
 @pytest.mark.parametrize(
     ("operation", "payload", "expected_fields"),
     [
-        ("purchase", {"quantity": "1"}, {"payload.price", "payload.fx"}),
+        ("purchase", {"quantity": "1"}, {"payload.price"}),
         (
             "sell",
-            {"quantity": "1", "price": "500", "fx": "7.1"},
-            {"payload.price", "payload.fx"},
+            {"quantity": "1", "price": "500"},
+            {"payload.price"},
         ),
         (
             "manual_correction",
             {
                 "quantity": "not-a-number",
                 "average_cost_price": "480",
-                "cost_fx_to_cny": "7.10",
                 "note": "对齐券商月结单",
             },
             {"payload.quantity"},
@@ -466,7 +451,7 @@ async def test_stale_version_wins_over_malformed_confirm_payload(api_client, db_
     assert list(await db_session.scalars(select(CostAdjustment))) == []
 
 
-async def test_sell_confirm_preserves_average_cost_and_cost_fx(api_client, db_session) -> None:
+async def test_sell_confirm_preserves_average_cost(api_client, db_session) -> None:
     spy_holding = await _create_spy_holding(api_client)
 
     preview = await api_client.post(
@@ -478,7 +463,6 @@ async def test_sell_confirm_preserves_average_cost_and_cost_fx(api_client, db_se
     assert preview.json()["operation"] == "sell"
     assert preview.json()["after"]["quantity"] == "8"
     assert preview.json()["after"]["average_cost_price"] == "500.00"
-    assert preview.json()["after"]["cost_fx_to_cny"] == "7.20"
 
     confirm = await api_client.post(
         f"/api/cost-adjustments/{spy_holding['id']}/confirm",
@@ -500,7 +484,6 @@ async def test_sell_confirm_preserves_average_cost_and_cost_fx(api_client, db_se
     assert holding is not None
     assert holding.quantity == Decimal("8")
     assert holding.average_cost_price == Decimal("500")
-    assert holding.cost_fx_to_cny == Decimal("7.20")
 
     rows = list(await db_session.scalars(select(CostAdjustment)))
     assert len(rows) == 1
@@ -517,8 +500,6 @@ async def test_zero_quantity_holding_defaults_can_preview_correction(api_client)
             trade_currency="CNY",
             quantity="0",
             average_cost_price="0",
-            cost_fx_to_cny="1",
-            baseline_fx_to_cny="1",
         ),
     )
     assert holding_response.status_code == 201
@@ -529,7 +510,6 @@ async def test_zero_quantity_holding_defaults_can_preview_correction(api_client)
         json={
             "quantity": "0",
             "average_cost_price": "0",
-            "cost_fx_to_cny": "1",
             "note": "确认空仓初始状态",
         },
     )
@@ -538,8 +518,7 @@ async def test_zero_quantity_holding_defaults_can_preview_correction(api_client)
     assert preview.json()["before"] == {
         "quantity": "0",
         "average_cost_price": "0.00",
-            "cost_fx_to_cny": "0.00",
-        "total_cost_cny": "0.00",
+        "total_cost_trade_currency": "0.00",
     }
     assert preview.json()["after"] == preview.json()["before"]
 
@@ -554,7 +533,6 @@ async def test_manual_correction_requires_reason_and_restore_creates_append_only
         json={
             "quantity": "9",
             "average_cost_price": "480",
-            "cost_fx_to_cny": "7.10",
         },
     )
     assert missing_note.status_code == 422
@@ -565,7 +543,6 @@ async def test_manual_correction_requires_reason_and_restore_creates_append_only
         json={
             "quantity": "5",
             "price": "650.20",
-            "fx": "7.1850",
             "fee_currency": "USD",
             "actual_fee": "2.30",
         },
@@ -578,7 +555,6 @@ async def test_manual_correction_requires_reason_and_restore_creates_append_only
             "payload": {
                 "quantity": "5",
                 "price": "650.20",
-                "fx": "7.1850",
                 "fee_currency": "USD",
                 "actual_fee": "2.30",
             },
@@ -591,7 +567,6 @@ async def test_manual_correction_requires_reason_and_restore_creates_append_only
         json={
             "quantity": "9",
             "average_cost_price": "480",
-            "cost_fx_to_cny": "7.10",
             "note": "对齐券商月结单",
         },
     )
@@ -605,7 +580,6 @@ async def test_manual_correction_requires_reason_and_restore_creates_append_only
             "payload": {
                 "quantity": "9",
                 "average_cost_price": "480",
-                "cost_fx_to_cny": "7.10",
                 "note": "对齐券商月结单",
             },
         },
@@ -715,3 +689,58 @@ async def test_history_preserves_stored_decimals_after_quantity_precision_change
     assert history_after.status_code == 200
     assert history_after.json()["items"][0]["before"] == stored_before
     assert history_after.json()["items"][0]["after"] == stored_after
+
+
+async def test_cny_fee_uses_current_fx_without_a_manual_rate(api_client, db_session) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+    now = datetime.now(UTC)
+    db_session.add(
+        MarketData(
+            data_type="fx",
+            symbol="USD/CNY",
+            source="test-provider",
+            value=Decimal("7.2"),
+            market_time=now,
+            fetched_at=now,
+            status="valid",
+        )
+    )
+    await db_session.commit()
+
+    preview = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/preview-purchase",
+        json={
+            "quantity": "1",
+            "price": "100",
+            "fee_currency": "CNY",
+            "actual_fee": "18",
+        },
+    )
+
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["fee"] == {
+        "mode": "actual",
+        "currency": "CNY",
+        "amount": "18.00",
+        "amount_cny": "18.00",
+    }
+    assert body["after"]["average_cost_price"] == "463.863636363636"
+    assert body["after"]["total_cost_trade_currency"] == "5102.50"
+
+
+async def test_cny_fee_without_a_current_fx_quote_is_rejected(api_client) -> None:
+    spy_holding = await _create_spy_holding(api_client)
+
+    preview = await api_client.post(
+        f"/api/cost-adjustments/{spy_holding['id']}/preview-purchase",
+        json={
+            "quantity": "1",
+            "price": "100",
+            "fee_currency": "CNY",
+            "actual_fee": "18",
+        },
+    )
+
+    assert preview.status_code == 409
+    assert preview.json()["detail"]["code"] == "FX_RATE_UNAVAILABLE"

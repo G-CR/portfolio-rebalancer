@@ -36,8 +36,6 @@ def _holding_payload(
         "trade_currency": "USD",
         "quantity": "3.000000000000",
         "average_cost_price": "90.000000000000",
-        "cost_fx_to_cny": "7.000000000000",
-        "baseline_fx_to_cny": "6.800000000000",
         "lot_size": "1.000000000000",
         "quantity_precision": 12,
         "is_rebalance_preferred": True,
@@ -338,8 +336,8 @@ async def test_snapshot_copies_complete_immutable_holding_payload(api_client, db
     assert payload["has_stale_data"] is False
     assert payload["has_manual_data"] is False
     assert payload["total_market_value_cny"] == "2160.000000000000"
-    assert payload["total_cost_value_cny"] == "1890.000000000000"
-    assert payload["total_unrealized_pnl_cny"] == "270.000000000000"
+    assert payload["total_cost_value_cny"] == "1944.000000000000"
+    assert payload["total_unrealized_pnl_cny"] == "216.000000000000"
     assert len(payload["items"]) == 1
     item = payload["items"][0]
     assert item == {
@@ -353,19 +351,13 @@ async def test_snapshot_copies_complete_immutable_holding_payload(api_client, db
         "quantity": "3.000000000000",
         "market_price": "100.000000000000",
         "current_fx_to_cny": "7.200000000000",
-        "baseline_fx_to_cny": "6.800000000000",
         "average_cost_price": "90.000000000000",
-        "cost_fx_to_cny": "7.000000000000",
         "target_weight": "0.300000000000",
         "market_value_cny": "2160.000000000000",
-        "fx_neutral_value_cny": "2040.000000000000",
-        "cost_value_cny": "1890.000000000000",
-        "unrealized_pnl_amount_cny": "270.000000000000",
-        "unrealized_pnl_rate": "0.142857142857",
-        "price_effect_cny": "210.000000000000",
-        "fx_effect_cny": "60.000000000000",
+        "cost_value_cny": "1944.000000000000",
+        "unrealized_pnl_amount_cny": "216.000000000000",
+        "unrealized_pnl_rate": "0.111111111111",
         "actual_weight": "1.000000000000",
-        "fx_neutral_weight": "1.000000000000",
         "price_status": "valid",
         "fx_status": "valid",
     }

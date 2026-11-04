@@ -10,13 +10,13 @@ from app.schemas.common import DecimalString
 class PositionAnalysisResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    cost_trade_currency: DecimalString
+    market_value_trade_currency: DecimalString
+    unrealized_pnl_trade_currency: DecimalString
     cost_cny: DecimalString
     market_value_cny: DecimalString
-    fx_neutral_value_cny: DecimalString
     unrealized_pnl: DecimalString
     unrealized_return: DecimalString
-    price_effect: DecimalString
-    fx_effect: DecimalString
 
 
 def _decimal_string(value: Decimal | None) -> str | None:
@@ -60,11 +60,8 @@ class HoldingAnalyticsResponse(BaseModel):
     unrealized_pnl_trade_currency: DecimalString
     cost_cny: DecimalString
     market_value_cny: DecimalString
-    fx_neutral_value_cny: DecimalString
     unrealized_pnl: DecimalString
     unrealized_return: DecimalString
-    price_effect: DecimalString
-    fx_effect: DecimalString
 
 
 class AssetClassAnalyticsResponse(BaseModel):
@@ -75,15 +72,10 @@ class AssetClassAnalyticsResponse(BaseModel):
     target_weight: DecimalString
     display_order: int
     actual_weight: DecimalString
-    fx_neutral_weight: DecimalString
     drift: DecimalString
-    fx_weight_contribution: DecimalString
     cost_cny: DecimalString
     market_value_cny: DecimalString
-    fx_neutral_value_cny: DecimalString
     unrealized_pnl: DecimalString
-    price_effect: DecimalString
-    fx_effect: DecimalString
 
 
 class PortfolioDecisionResponse(BaseModel):
@@ -93,7 +85,6 @@ class PortfolioDecisionResponse(BaseModel):
     title: str
     reason: str
     max_drift: DecimalString
-    fx_contribution: DecimalString
     primary_action: str
 
 
@@ -107,11 +98,8 @@ class PortfolioAnalyticsResponse(BaseModel):
     tolerance: DecimalString
     cost_cny: DecimalString
     market_value_cny: DecimalString
-    fx_neutral_value_cny: DecimalString
     unrealized_pnl: DecimalString
     unrealized_return: DecimalString
-    price_effect: DecimalString
-    fx_effect: DecimalString
     overseas_weight: DecimalString
     decision: PortfolioDecisionResponse
     asset_classes: list[AssetClassAnalyticsResponse]

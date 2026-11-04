@@ -20,7 +20,6 @@ from app.domain.rebalance import AssetInput, CashInput, RebalanceOptions, Rebala
 from app.domain.rebalance_optimizer import OptimizationFailure
 from app.schemas.rebalance import (
     ProjectedWeightResponse,
-    RebalanceComparisonResponse,
     RebalancePlanCreateRequest,
     RebalancePlanResponse,
     RebalancePreviewRequest,
@@ -28,7 +27,6 @@ from app.schemas.rebalance import (
     RebalanceResultResponse,
     TradeSuggestionResponse,
 )
-from app.services.baseline import reset_baseline_fx
 from app.services.errors import ServiceError
 from app.services.market_data import refresh_all_required_data
 from app.services.rebalance_version import rebalance_data_version, rebalance_preview_input_signature
@@ -75,7 +73,6 @@ class _LifecycleCapture:
     effective_fx: tuple[tuple[str, Decimal], ...]
     holding_versions: tuple[tuple[str, int], ...]
     asset_class_targets: tuple[tuple[str, str], ...]
-    holding_baseline_fx: tuple[tuple[UUID, Decimal], ...]
 
     @property
     def market_data_record_ids(self) -> dict[str, str]:
@@ -108,7 +105,6 @@ class _PreparedRebalance:
     holding_version_items: tuple[tuple[str, int], ...]
     asset_class_target_items: tuple[tuple[str, str], ...]
     result: RebalanceResult
-    comparison: RebalanceComparisonResponse
     effective_fx_items: tuple[tuple[str, Decimal], ...]
     resolved_constraints: _ResolvedConstraints
     input_signature: str
@@ -185,9 +181,7 @@ def _preview_response(
         data_status=prepared.data_status,
         acknowledge_stale_data=payload.acknowledge_stale_data,
         refresh_attempted=refresh_attempted,
-        valuation_basis=payload.valuation_basis,
         result=_serialize_result(prepared.result),
-        fx_comparison=prepared.comparison,
         input_signature=prepared.input_signature,
     )
 
@@ -277,9 +271,7 @@ async def create_rebalance_plan(
     }
     suggested_actions = preview.result.model_dump(mode="json")["trades"]
     projected_result = {
-        "valuation_basis": payload.valuation_basis,
         "result": preview.result.model_dump(mode="json"),
-        "fx_comparison": preview.fx_comparison.model_dump(mode="json"),
         "data_status": preview.data_status,
     }
     now = datetime.now(UTC)
@@ -287,7 +279,6 @@ async def create_rebalance_plan(
         insert(RebalancePlan)
         .values(
             id=uuid4(),
-            strategy_mode=payload.valuation_basis,
             status="draft",
             data_version=data_version,
             create_idempotency_key=payload.idempotency_key,
@@ -424,12 +415,10 @@ async def complete_rebalance_plan(
         capture=capture.snapshot,
         note=f"rebalance-plan:{plan.id}",
     )
-    await reset_baseline_fx(session, capture.holding_baseline_fx)
     now = datetime.now(UTC)
     plan.status = "completed"
     plan.completed_at = now
     plan.after_snapshot_id = after_snapshot.id
-    plan.baseline_reset_at = now
     plan.completion_market_data_record_ids = capture.market_data_record_ids
     plan.complete_idempotency_key = idempotency_key
     await session.flush()
@@ -500,22 +489,6 @@ async def _prepare_rebalance(
     )
 
     requested_result = _run_engine(
-        valuation_basis=payload.valuation_basis,
-        asset_classes=context["asset_classes"],
-        holdings=context["holdings"],
-        effective_inputs=context["effective_inputs"],
-        available_cny=payload.available_cny,
-        available_usd=payload.available_usd,
-        tolerance=resolved_constraints.tolerance,
-        allow_sell=resolved_constraints.allow_sell,
-        allow_fx=resolved_constraints.allow_fx,
-        optimization_deadline=optimization_deadline,
-    )
-    alternate_basis: Literal["actual", "fx_neutral"] = (
-        "fx_neutral" if payload.valuation_basis == "actual" else "actual"
-    )
-    alternate_result = _run_engine(
-        valuation_basis=alternate_basis,
         asset_classes=context["asset_classes"],
         holdings=context["holdings"],
         effective_inputs=context["effective_inputs"],
@@ -532,10 +505,6 @@ async def _prepare_rebalance(
         holding_version_items=tuple(sorted(context["holding_versions"].items())),
         asset_class_target_items=tuple(sorted(context["asset_class_targets"].items())),
         result=requested_result,
-        comparison=RebalanceComparisonResponse(
-            valuation_basis=alternate_basis,
-            result=_serialize_result(alternate_result),
-        ),
         effective_fx_items=tuple(sorted(context["effective_fx"].items())),
         resolved_constraints=resolved_constraints,
         input_signature=_input_signature_for_context(context),
@@ -558,7 +527,6 @@ async def _capture_lifecycle_bundle(session: AsyncSession) -> _LifecycleCapture:
     asset_classes_by_id = {item.id: item for item in asset_classes}
     captured_rows = []
     total_market_value = _ZERO
-    total_fx_neutral_value = _ZERO
 
     for holding in holdings:
         price = effective_inputs[f"price:{holding.symbol}"]
@@ -578,13 +546,10 @@ async def _capture_lifecycle_bundle(session: AsyncSession) -> _LifecycleCapture:
                 quantity=holding.quantity,
                 cost_price=holding.average_cost_price,
                 current_price=price.value,
-                cost_fx=holding.cost_fx_to_cny,
                 current_fx=fx.value,
-                baseline_fx=holding.baseline_fx_to_cny,
             )
         )
         total_market_value += analysis.market_value_cny
-        total_fx_neutral_value += analysis.fx_neutral_value_cny
         captured_rows.append(
             (
                 holding,
@@ -613,27 +578,13 @@ async def _capture_lifecycle_bundle(session: AsyncSession) -> _LifecycleCapture:
             quantity=holding.quantity,
             market_price=price.value,
             current_fx_to_cny=fx.value,
-            baseline_fx_to_cny=holding.baseline_fx_to_cny,
             average_cost_price=holding.average_cost_price,
-            cost_fx_to_cny=holding.cost_fx_to_cny,
             target_weight=asset_class.target_weight,
             market_value_cny=analysis.market_value_cny,
-            fx_neutral_value_cny=analysis.fx_neutral_value_cny,
             cost_value_cny=analysis.cost_cny,
             unrealized_pnl_amount_cny=analysis.unrealized_pnl,
-            unrealized_pnl_rate=(
-                analysis.unrealized_pnl / analysis.cost_cny
-                if analysis.cost_cny
-                else _ZERO
-            ),
-            price_effect_cny=analysis.price_effect,
-            fx_effect_cny=analysis.fx_effect,
+            unrealized_pnl_rate=analysis.unrealized_return,
             actual_weight=analysis.market_value_cny / total_market_value,
-            fx_neutral_weight=(
-                analysis.fx_neutral_value_cny / total_fx_neutral_value
-                if total_fx_neutral_value
-                else _ZERO
-            ),
             price_status=price.status,
             fx_status=fx.status,
         )
@@ -661,15 +612,6 @@ async def _capture_lifecycle_bundle(session: AsyncSession) -> _LifecycleCapture:
         asset_class_targets=tuple(
             (str(asset_class.id), format(asset_class.target_weight, "f"))
             for asset_class in asset_classes
-        ),
-        holding_baseline_fx=tuple(
-            (
-                holding.id,
-                Decimal("1")
-                if holding.trade_currency == "CNY"
-                else effective_inputs[f"fx:{holding.trade_currency}/CNY"].value,
-            )
-            for holding in holdings
         ),
     )
 
@@ -844,7 +786,6 @@ def _resolve_effective_input(
 
 def _run_engine(
     *,
-    valuation_basis: Literal["actual", "fx_neutral"],
     asset_classes: list[AssetClass],
     holdings: list[Holding],
     effective_inputs: dict[str, _EffectiveInput],
@@ -884,8 +825,7 @@ def _run_engine(
         for holding in class_holdings:
             price = effective_inputs[f"price:{holding.symbol}"].value
             fx = Decimal("1") if holding.trade_currency == "CNY" else effective_inputs[f"fx:{holding.trade_currency}/CNY"].value
-            basis_fx = fx if valuation_basis == "actual" else holding.baseline_fx_to_cny
-            total_value += holding.quantity * price * basis_fx
+            total_value += holding.quantity * price * fx
         preferred_price = effective_inputs[f"price:{preferred.symbol}"].value
         preferred_fx = Decimal("1") if preferred.trade_currency == "CNY" else effective_inputs[f"fx:{preferred.trade_currency}/CNY"].value
         unit_price_cny = preferred_price * (preferred_fx if preferred.trade_currency != "CNY" else Decimal("1"))
@@ -986,7 +926,6 @@ def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
     return RebalancePlanResponse(
         id=str(plan.id),
         status=plan.status,
-        valuation_basis=plan.strategy_mode,
         available_cny=input_summary["available_cny"],
         available_usd=input_summary["available_usd"],
         minimum_trade_cny=resolved_constraints.get("minimum_trade_cny"),
@@ -1000,10 +939,8 @@ def _plan_response(plan: RebalancePlan) -> RebalancePlanResponse:
         holding_versions=input_summary["holding_versions"],
         asset_class_targets=input_summary.get("asset_class_targets", {}),
         result=RebalanceResultResponse.model_validate(projected["result"]),
-        fx_comparison=RebalanceComparisonResponse.model_validate(projected["fx_comparison"]),
         before_snapshot_id=str(plan.before_snapshot_id) if plan.before_snapshot_id is not None else None,
         after_snapshot_id=str(plan.after_snapshot_id) if plan.after_snapshot_id is not None else None,
-        baseline_reset_at=plan.baseline_reset_at.isoformat() if plan.baseline_reset_at is not None else None,
         created_at=plan.created_at.isoformat(),
         updated_at=plan.updated_at.isoformat(),
     )
@@ -1018,7 +955,6 @@ async def preview_rebalance_with_defaults(session: AsyncSession) -> RebalancePre
         request_token=uuid4().hex,
         available_cny=setting.rebalance_available_cny,
         available_usd=setting.rebalance_available_usd,
-        valuation_basis=setting.rebalance_valuation_basis,
         allow_sell=setting.allow_sell,
         allow_fx=setting.allow_fx,
         tolerance=setting.default_tolerance,

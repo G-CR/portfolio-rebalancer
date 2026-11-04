@@ -24,7 +24,7 @@ test("numeric headings align and the final row menu stays in the viewport", asyn
 
   const table = page.getByRole("region", { name: "持仓与成本表格" });
   const firstRow = table.locator('tbody tr[data-mobile-summary="true"]').first();
-  for (const [label, index] of [["份额", 3], ["成本价", 4], ["成本汇率", 5], ["当前价", 6], ["当前汇率", 7], ["市值", 8], ["浮动盈亏", 9]] as const) {
+  for (const [label, index] of [["份额", 3], ["成本价", 4], ["当前价", 5], ["当前汇率", 6], ["市值", 7], ["浮动盈亏", 8]] as const) {
     const headingRight = await page.getByRole("columnheader", { name: label }).evaluate((element) => element.getBoundingClientRect().right);
     const cellRight = await firstRow.locator("td").nth(index).evaluate((element) => element.getBoundingClientRect().right);
     expect(Math.abs(headingRight - cellRight)).toBeLessThanOrEqual(1);
@@ -132,8 +132,6 @@ test("replacement fixture enforces production replacement invariants", async ({ 
       trade_currency: "CNY",
       quantity: "8",
       average_cost_price: "625.40",
-      cost_fx_to_cny: "7.18",
-      baseline_fx_to_cny: "7.15",
       lot_size: "1",
       quantity_precision: 4,
       preferred_data_source: null,
@@ -167,7 +165,6 @@ test("replacement fixture enforces production replacement invariants", async ({ 
     id: source.id,
     quantity: "0.0000",
     average_cost_price: "0",
-    cost_fx_to_cny: "0",
     is_active: false,
     is_rebalance_preferred: false,
     version: source.version + 1,
@@ -176,8 +173,6 @@ test("replacement fixture enforces production replacement invariants", async ({ 
     symbol: "510300",
     trade_currency: "CNY",
     quantity: "8.0000",
-    cost_fx_to_cny: "1",
-    baseline_fx_to_cny: "1",
   });
   expect(result.archivedRetryStatus).toBe(404);
   expect(result.holdings.find((item: typeof priorPreferred) => item.id === priorPreferred.id)).toMatchObject({

@@ -24,8 +24,8 @@ describe("holdings analytics join", () => {
     expect(screen.getByText("7.2")).toBeInTheDocument();
     expect(screen.getByText("51,012.29")).toBeInTheDocument();
     expect(screen.getByText("51,012")).toBeInTheDocument();
-    expect(screen.getByText("+7,049.15")).toBeInTheDocument();
-    expect(screen.getByText("+7,049")).toBeInTheDocument();
+    expect(screen.getByText("+6,926.69")).toBeInTheDocument();
+    expect(screen.getByText("+6,927")).toBeInTheDocument();
     expect(screen.getByText("数据已过期")).toBeInTheDocument();
     expect(screen.getByText("手动值")).toBeInTheDocument();
   });

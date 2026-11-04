@@ -5,7 +5,6 @@ import type { PortfolioIncompleteItem } from "../api/types";
 import { CalibrationRail } from "../components/CalibrationRail/CalibrationRail";
 import { DecisionBanner } from "../features/analytics/DecisionBanner";
 import { boundedRatioPercent, formatDataTime, formatDecimal, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
-import { PnlBreakdown } from "../features/analytics/PnlBreakdown";
 import { PortfolioMetrics } from "../features/analytics/PortfolioMetrics";
 import { usePortfolioAnalytics } from "../features/analytics/api";
 import styles from "./DashboardPage.module.css";
@@ -60,17 +59,14 @@ export function DashboardPage() {
             assetName={item.name}
             target={boundedRatioPercent(item.target_weight)}
             actual={boundedRatioPercent(item.actual_weight)}
-            fxNeutral={boundedRatioPercent(item.fx_neutral_weight)}
             tolerance={boundedRatioPercent(data.tolerance)}
             targetText={formatPercent(item.target_weight)}
             actualText={formatPercent(item.actual_weight)}
-            fxNeutralText={formatPercent(item.fx_neutral_weight)}
             deviationText={formatSignedPercentagePoints(item.drift)}
             toleranceValueText={formatPercentagePoints(data.tolerance).replace(/pp$/, "")}
           />)}
         </div>
       </section>
-      <PnlBreakdown portfolio={data} />
       <section className={styles.dataStatus} aria-labelledby="data-status-title">
         <div className={styles.sectionHeading}><div><p>INPUT STATUS</p><h2 id="data-status-title">数据状态</h2></div>{data.has_stale_data ? <strong>数据已过期</strong> : data.has_manual_data ? <strong>包含手动值</strong> : <strong>数据有效</strong>}</div>
         <div className={styles.statusGrid}>{groups.map(([label, items]) => {

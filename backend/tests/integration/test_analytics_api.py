@@ -19,8 +19,6 @@ def _holding_payload(
     trade_currency: str = "CNY",
     quantity: str = "10",
     average_cost_price: str = "1",
-    cost_fx_to_cny: str = "1",
-    baseline_fx_to_cny: str = "1",
 ) -> dict[str, object]:
     return {
         "asset_class_id": asset_class_id,
@@ -31,8 +29,6 @@ def _holding_payload(
         "trade_currency": trade_currency,
         "quantity": quantity,
         "average_cost_price": average_cost_price,
-        "cost_fx_to_cny": cost_fx_to_cny,
-        "baseline_fx_to_cny": baseline_fx_to_cny,
         "lot_size": "1",
         "quantity_precision": 12,
         "is_rebalance_preferred": True,
@@ -215,8 +211,6 @@ async def test_portfolio_aggregates_positions_with_exact_weights_and_pnl_identit
         trade_currency="USD",
         quantity="3",
         average_cost_price="90",
-        cost_fx_to_cny="7.0",
-        baseline_fx_to_cny="6.8",
     )
     await _add_quote(db_session, data_type="price", symbol="510100", value="1.25")
     await _add_quote(db_session, data_type="price", symbol="SPY", value="100")
@@ -229,16 +223,13 @@ async def test_portfolio_aggregates_positions_with_exact_weights_and_pnl_identit
     payload = response.json()
     assert len(payload["asset_classes"]) == 5
     assert sum(Decimal(item["actual_weight"]) for item in payload["asset_classes"]) == Decimal("1")
-    assert sum(Decimal(item["fx_neutral_weight"]) for item in payload["asset_classes"]) == Decimal("1")
     assert all(len(item["actual_weight"].partition(".")[2]) == 12 for item in payload["asset_classes"])
-    assert all(len(item["fx_neutral_weight"].partition(".")[2]) == 12 for item in payload["asset_classes"])
     assert Decimal(payload["unrealized_pnl"]) == (
-        Decimal(payload["price_effect"]) + Decimal(payload["fx_effect"])
+        Decimal(payload["market_value_cny"]) - Decimal(payload["cost_cny"])
     )
     assert payload["decision"]["status"] in {"hold", "contribute", "rebalance"}
     assert payload["decision"]["reason"]
     assert payload["decision"]["max_drift"]
-    assert payload["decision"]["fx_contribution"]
     assert payload["decision"]["primary_action"]
 
     by_holding = {item["holding_id"]: item for item in payload["holdings"]}
@@ -248,7 +239,7 @@ async def test_portfolio_aggregates_positions_with_exact_weights_and_pnl_identit
     assert Decimal(by_holding[overseas["id"]]["current_price"]) == Decimal("100")
     assert Decimal(by_holding[overseas["id"]]["current_fx_to_cny"]) == Decimal("7.2")
     assert Decimal(by_holding[overseas["id"]]["market_value_cny"]) == Decimal("2160")
-    assert Decimal(by_holding[overseas["id"]]["unrealized_pnl"]) == Decimal("270")
+    assert Decimal(by_holding[overseas["id"]]["unrealized_pnl"]) == Decimal("216")
     assert Decimal(by_holding[overseas["id"]]["cost_trade_currency"]) == Decimal("270")
     assert Decimal(by_holding[overseas["id"]]["market_value_trade_currency"]) == Decimal("300")
     assert Decimal(by_holding[overseas["id"]]["unrealized_pnl_trade_currency"]) == Decimal("30")
@@ -268,8 +259,6 @@ async def test_stale_and_manual_values_remain_usable_and_are_reported(
         trade_currency="USD",
         quantity="2",
         average_cost_price="90",
-        cost_fx_to_cny="7.0",
-        baseline_fx_to_cny="6.9",
     )
     await _add_quote(
         db_session,

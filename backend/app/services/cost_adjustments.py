@@ -26,8 +26,10 @@ from app.schemas.cost_adjustment import (
     SellPreviewRequest,
 )
 from app.services.errors import ServiceError
+from app.services.market_data import resolve_current_fx_rate
 
 _CNY = "CNY"
+_ONE = Decimal("1")
 _ZERO = Decimal("0")
 _CENT = Decimal("0.01")
 _STORAGE_SCALE = Decimal("0.000000000001")
@@ -51,7 +53,7 @@ class FeePreview:
     mode: str
     currency: str
     amount: Decimal
-    amount_cny: Decimal
+    amount_cny: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -90,14 +92,12 @@ async def get_adjustment_context(
                     _normalized_cost_basis(
                         quantity=item.before_quantity,
                         average_price=item.before_average_cost_price,
-                        cost_fx=item.before_cost_fx_to_cny,
                     )
                 ),
                 after=_history_basis_response(
                     _normalized_cost_basis(
                         quantity=item.after_quantity,
                         average_price=item.after_average_cost_price,
-                        cost_fx=item.after_cost_fx_to_cny,
                     )
                 ),
                 input_summary=item.input_summary,
@@ -117,7 +117,7 @@ async def preview_purchase(
     try:
         holding = await _get_active_holding(session, holding_id)
         defaults = await _get_holding_defaults(session, holding.id)
-        preview = _preview_purchase_from_holding(holding, defaults, payload)
+        preview = await _purchase_preview(session, holding, defaults, payload)
         return _preview_response(holding, preview)
     except InvalidOperation as exc:
         raise _numeric_range_error() from exc
@@ -187,7 +187,6 @@ async def confirm_adjustment(
 
     holding.quantity = after.quantity
     holding.average_cost_price = after.average_price
-    holding.cost_fx_to_cny = after.cost_fx
     holding.updated_at = utcnow()
 
     if request.operation == "purchase":
@@ -200,10 +199,8 @@ async def confirm_adjustment(
         operation_type=preview.operation_type,
         before_quantity=before.quantity,
         before_average_cost_price=before.average_price,
-        before_cost_fx_to_cny=before.cost_fx,
         after_quantity=after.quantity,
         after_average_cost_price=after.average_price,
-        after_cost_fx_to_cny=after.cost_fx,
         input_summary=preview.input_summary,
         note=preview.note,
         created_at=utcnow(),
@@ -236,17 +233,14 @@ async def record_full_sale(
     normalized_note = _normalized_optional_note(note)
     holding.quantity = after.quantity
     holding.average_cost_price = after.average_price
-    holding.cost_fx_to_cny = after.cost_fx
     holding.updated_at = utcnow()
     adjustment = CostAdjustment(
         holding_id=holding.id,
         operation_type="SELL",
         before_quantity=before.quantity,
         before_average_cost_price=before.average_price,
-        before_cost_fx_to_cny=before.cost_fx,
         after_quantity=after.quantity,
         after_average_cost_price=after.average_price,
-        after_cost_fx_to_cny=after.cost_fx,
         input_summary={
             "quantity": _decimal_string(before.quantity),
             "note": normalized_note,
@@ -268,7 +262,7 @@ async def _preview_for_confirmation(
     if request.operation == "purchase":
         defaults = await _get_holding_defaults(session, holding.id)
         payload = _validate_operation_payload(PurchasePreviewRequest, request.payload)
-        return _preview_purchase_from_holding(holding, defaults, payload)
+        return await _purchase_preview(session, holding, defaults, payload)
     if request.operation == "sell":
         payload = _validate_operation_payload(SellPreviewRequest, request.payload)
         return _preview_sell_from_holding(holding, payload)
@@ -293,14 +287,25 @@ async def _preview_for_confirmation(
     raise ServiceError(422, "UNSUPPORTED_COST_OPERATION", "Unsupported cost operation.")
 
 
-def _preview_purchase_from_holding(
+async def _purchase_preview(
+    session: AsyncSession,
     holding: Holding,
     defaults: HoldingDefault | None,
     payload: PurchasePreviewRequest,
 ) -> PreviewResult:
+    resolved_defaults = _resolve_fee_defaults(holding, defaults, payload)
+    fx = await _fee_conversion_fx(session, holding, resolved_defaults.fee_currency)
+    return _preview_purchase_from_holding(holding, payload, resolved_defaults, fx)
+
+
+def _preview_purchase_from_holding(
+    holding: Holding,
+    payload: PurchasePreviewRequest,
+    resolved_defaults: ResolvedFeeDefaults,
+    fx: Decimal | None,
+) -> PreviewResult:
     _validate_fee_default_save(payload)
     before = _holding_cost_basis(holding)
-    resolved_defaults = _resolve_fee_defaults(holding, defaults, payload)
     trade_value = payload.quantity * payload.price
     fee_amount = resolve_fee(
         trade_value=trade_value,
@@ -311,20 +316,26 @@ def _preview_purchase_from_holding(
     fee_currency = resolved_defaults.fee_currency
     fee_trade_currency = fee_amount if fee_currency == holding.trade_currency else _ZERO
     fee_cny = fee_amount if fee_currency == _CNY else _ZERO
+    purchase_fx = fx if fx is not None else _ONE
     after = _storage_basis(
         add_purchase(
             before,
             Purchase(
                 quantity=payload.quantity,
                 price=payload.price,
-                fx=payload.fx,
+                fx=purchase_fx,
                 fee_trade_currency=fee_trade_currency,
                 fee_cny=fee_cny,
             ),
         )
     )
 
-    fee_amount_cny = fee_amount if fee_currency == _CNY else fee_amount * payload.fx
+    if fee_currency == _CNY:
+        fee_amount_cny = fee_amount
+    elif fx is not None:
+        fee_amount_cny = fee_amount * fx
+    else:
+        fee_amount_cny = None
 
     return PreviewResult(
         operation="purchase",
@@ -341,7 +352,7 @@ def _preview_purchase_from_holding(
         input_summary={
             "quantity": _decimal_string(payload.quantity),
             "price": _decimal_string(payload.price),
-            "fx": _decimal_string(payload.fx),
+            "fee_conversion_fx": _decimal_string(fx) if fx is not None else None,
             "fee_currency": fee_currency,
             "commission_rate": _decimal_string(resolved_defaults.rule.commission_rate),
             "minimum_commission": _decimal_string(resolved_defaults.rule.minimum_commission),
@@ -351,7 +362,9 @@ def _preview_purchase_from_holding(
                 _decimal_string(payload.actual_fee) if payload.actual_fee is not None else None
             ),
             "resolved_fee": _decimal_string(fee_amount),
-            "resolved_fee_cny": _decimal_string(fee_amount_cny),
+            "resolved_fee_cny": (
+                _decimal_string(fee_amount_cny) if fee_amount_cny is not None else None
+            ),
             "save_fee_defaults": payload.save_fee_defaults,
         },
     )
@@ -403,7 +416,6 @@ def _preview_correction_from_holding(
         after = _normalized_cost_basis(
             quantity=payload.quantity,
             average_price=payload.average_cost_price,
-            cost_fx=payload.cost_fx_to_cny,
         )
     except ValueError as exc:
         raise ServiceError(422, "INVALID_COST_BASIS", str(exc)) from exc
@@ -418,7 +430,6 @@ def _preview_correction_from_holding(
         input_summary={
             "quantity": _decimal_string(payload.quantity),
             "average_cost_price": _decimal_string(payload.average_cost_price),
-            "cost_fx_to_cny": _decimal_string(payload.cost_fx_to_cny),
             "note": note,
         },
     )
@@ -438,7 +449,6 @@ def _preview_restore_from_holding(
     after = _normalized_cost_basis(
         quantity=adjustment.after_quantity,
         average_price=adjustment.after_average_cost_price,
-        cost_fx=adjustment.after_cost_fx_to_cny,
     )
     return PreviewResult(
         operation="restore",
@@ -534,7 +544,11 @@ def _preview_response(
                 mode=preview.fee.mode,  # type: ignore[arg-type]
                 currency=preview.fee.currency,
                 amount=_price_decimal(preview.fee.amount),
-                amount_cny=_money_decimal(preview.fee.amount_cny),
+                amount_cny=(
+                    _money_decimal(preview.fee.amount_cny)
+                    if preview.fee.amount_cny is not None
+                    else None
+                ),
             )
             if preview.fee is not None
             else None
@@ -547,8 +561,7 @@ def _basis_response(value: CostBasis, quantity_precision: int) -> CostBasisState
     return CostBasisStateResponse(
         quantity=_scale_decimal(value.quantity, quantity_precision),
         average_cost_price=_price_decimal(value.average_price),
-        cost_fx_to_cny=_price_decimal(value.cost_fx),
-        total_cost_cny=_money_decimal(value.total_cost_cny),
+        total_cost_trade_currency=_money_decimal(value.total_cost_trade_currency),
     )
 
 
@@ -556,8 +569,7 @@ def _history_basis_response(value: CostBasis) -> CostBasisStateResponse:
     return CostBasisStateResponse(
         quantity=_trim_decimal(value.quantity),
         average_cost_price=_price_decimal(value.average_price),
-        cost_fx_to_cny=_price_decimal(value.cost_fx),
-        total_cost_cny=_money_decimal(value.total_cost_cny),
+        total_cost_trade_currency=_money_decimal(value.total_cost_trade_currency),
     )
 
 
@@ -681,7 +693,6 @@ def _holding_cost_basis(holding: Holding) -> CostBasis:
     return _normalized_cost_basis(
         quantity=holding.quantity,
         average_price=holding.average_cost_price,
-        cost_fx=holding.cost_fx_to_cny,
     )
 
 
@@ -695,46 +706,44 @@ def _or_default(value: Decimal | None, fallback: Decimal | None) -> Decimal:
 
 def _storage_basis(value: CostBasis) -> CostBasis:
     if value.quantity == 0:
-        return CostBasis(
-            quantity=_ZERO,
-            average_price=_ZERO,
-            cost_fx=_ZERO,
-            _total_cost_cny=_ZERO,
-        )
+        return CostBasis(quantity=_ZERO, average_price=_ZERO)
 
-    quantity = value.quantity.quantize(_STORAGE_SCALE)
-    average_price = value.average_price.quantize(_STORAGE_SCALE)
-    cost_fx = value.cost_fx.quantize(_STORAGE_SCALE)
-    _total_cost_cny = (
-        value._total_cost_cny
-        if value._total_cost_cny is not None
-        else quantity * average_price * cost_fx
-    )
     return CostBasis(
-        quantity=quantity,
-        average_price=average_price,
-        cost_fx=cost_fx,
-        _total_cost_cny=_total_cost_cny,
+        quantity=value.quantity.quantize(_STORAGE_SCALE),
+        average_price=value.average_price.quantize(_STORAGE_SCALE),
     )
 
 
 def _normalized_cost_basis(
-    *, quantity: Decimal, average_price: Decimal, cost_fx: Decimal
+    *, quantity: Decimal, average_price: Decimal
 ) -> CostBasis:
     if quantity == 0:
-        return CostBasis(
-            quantity=_ZERO,
-            average_price=_ZERO,
-            cost_fx=_ZERO,
-            _total_cost_cny=_ZERO,
-        )
+        return CostBasis(quantity=_ZERO, average_price=_ZERO)
     return _storage_basis(
-        CostBasis(
-            quantity=quantity,
-            average_price=average_price,
-            cost_fx=cost_fx,
-        )
+        CostBasis(quantity=quantity, average_price=average_price)
     )
+
+
+async def _fee_conversion_fx(
+    session: AsyncSession,
+    holding: Holding,
+    fee_currency: str,
+) -> Decimal | None:
+    """Return the live FX used to translate fees, or None when only display needs it.
+
+    A CNY-denominated fee on a foreign holding must be converted into the
+    holding's trade currency, so a missing rate is an error. For a fee already
+    in the trade currency the rate is only used for the CNY reference display
+    and may be unavailable.
+    """
+    if holding.trade_currency == _CNY:
+        return _ONE
+    try:
+        return await resolve_current_fx_rate(session, holding.trade_currency)
+    except ServiceError:
+        if fee_currency == _CNY:
+            raise
+        return None
 
 
 def _require_nonempty_note(note: str | None, *, code: str, message: str) -> str:

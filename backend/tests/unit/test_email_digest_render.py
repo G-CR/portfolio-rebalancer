@@ -8,7 +8,6 @@ from app.schemas.analytics import (
 )
 from app.schemas.rebalance import (
     ProjectedWeightResponse,
-    RebalanceComparisonResponse,
     RebalancePreviewResponse,
     RebalanceResultResponse,
     TradeSuggestionResponse,
@@ -34,11 +33,8 @@ def _holding() -> HoldingAnalyticsResponse:
         unrealized_pnl_trade_currency="30",
         cost_cny="1944",
         market_value_cny="2160",
-        fx_neutral_value_cny="2040",
         unrealized_pnl="216",
         unrealized_return="0.111111111111",
-        price_effect="189",
-        fx_effect="27",
     )
 
 
@@ -49,15 +45,10 @@ def _asset_class() -> AssetClassAnalyticsResponse:
         target_weight="0.5",
         display_order=1,
         actual_weight="0.5",
-        fx_neutral_weight="0.48",
         drift="0",
-        fx_weight_contribution="0.02",
         cost_cny="1944",
         market_value_cny="2160",
-        fx_neutral_value_cny="2040",
         unrealized_pnl="216",
-        price_effect="189",
-        fx_effect="27",
     )
 
 
@@ -70,18 +61,14 @@ def _analytics() -> PortfolioAnalyticsResponse:
         tolerance="0.02",
         cost_cny="1944",
         market_value_cny="2160",
-        fx_neutral_value_cny="2040",
         unrealized_pnl="216",
         unrealized_return="0.111111111111",
-        price_effect="189",
-        fx_effect="27",
         overseas_weight="1",
         decision=PortfolioDecisionResponse(
             status="rebalance",
             title="建议再平衡",
             reason="至少一个资产类别超出策略区间。",
             max_drift="0.05",
-            fx_contribution="0.02",
             primary_action="view_rebalance",
         ),
         asset_classes=[_asset_class()],
@@ -129,12 +116,7 @@ def _rebalance() -> RebalancePreviewResponse:
         data_status="valid",
         acknowledge_stale_data=True,
         refresh_attempted=False,
-        valuation_basis="actual",
         result=result,
-        fx_comparison=RebalanceComparisonResponse(
-            valuation_basis="fx_neutral",
-            result=result,
-        ),
     )
 
 
@@ -200,12 +182,7 @@ def test_digest_html_no_trades_shows_hold_copy() -> None:
             data_status="valid",
             acknowledge_stale_data=True,
             refresh_attempted=False,
-            valuation_basis="actual",
             result=empty,
-            fx_comparison=RebalanceComparisonResponse(
-                valuation_basis="fx_neutral",
-                result=empty,
-            ),
         ),
         local_date=date(2026, 8, 3),
     )
@@ -222,15 +199,7 @@ def _render_trade_label(
     analytics = _analytics().model_copy(update={"holdings": [holding]})
     trade = _result().trades[0].model_copy(update={"symbol": trade_symbol})
     result = _result().model_copy(update={"trades": (trade,)})
-    rebalance = _rebalance().model_copy(
-        update={
-            "result": result,
-            "fx_comparison": RebalanceComparisonResponse(
-                valuation_basis="fx_neutral",
-                result=result,
-            ),
-        }
-    )
+    rebalance = _rebalance().model_copy(update={"result": result})
     return build_digest_html(
         analytics=analytics,
         rebalance=rebalance,

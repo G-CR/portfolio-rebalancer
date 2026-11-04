@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -16,8 +15,6 @@ from app.schemas.holding import (
 )
 from app.services.cost_adjustments import record_full_sale
 from app.services.errors import ServiceError
-
-_ONE = Decimal("1")
 
 
 async def list_holdings(
@@ -49,11 +46,6 @@ async def create_holding(session: AsyncSession, payload: HoldingCreate) -> Holdi
         payload.asset_class_id,
         lock=True,
     )
-    cost_fx_to_cny, baseline_fx_to_cny = _normalized_fx_values(
-        payload.trade_currency,
-        payload.cost_fx_to_cny,
-        payload.baseline_fx_to_cny,
-    )
     should_prefer = payload.is_rebalance_preferred or not existing_holdings
     if should_prefer:
         for item in existing_holdings:
@@ -68,8 +60,6 @@ async def create_holding(session: AsyncSession, payload: HoldingCreate) -> Holdi
         trade_currency=payload.trade_currency,
         quantity=payload.quantity,
         average_cost_price=payload.average_cost_price,
-        cost_fx_to_cny=cost_fx_to_cny,
-        baseline_fx_to_cny=baseline_fx_to_cny,
         lot_size=payload.lot_size,
         quantity_precision=payload.quantity_precision,
         preferred_data_source=payload.preferred_data_source,
@@ -106,11 +96,6 @@ async def replace_holding(
         source.asset_class_id,
         lock=True,
     )
-    cost_fx_to_cny, baseline_fx_to_cny = _normalized_fx_values(
-        payload.trade_currency,
-        payload.cost_fx_to_cny,
-        payload.baseline_fx_to_cny,
-    )
     for holding in active_holdings:
         holding.is_rebalance_preferred = False
     await record_full_sale(session, source, payload.note)
@@ -124,8 +109,6 @@ async def replace_holding(
         trade_currency=payload.trade_currency,
         quantity=payload.quantity,
         average_cost_price=payload.average_cost_price,
-        cost_fx_to_cny=cost_fx_to_cny,
-        baseline_fx_to_cny=baseline_fx_to_cny,
         lot_size=payload.lot_size,
         quantity_precision=payload.quantity_precision,
         preferred_data_source=payload.preferred_data_source,
@@ -192,14 +175,6 @@ async def update_holding(
         holding.preferred_data_source = updates["preferred_data_source"]
     if "is_rebalance_preferred" in updates:
         holding.is_rebalance_preferred = updates["is_rebalance_preferred"]
-
-    cost_fx_to_cny, baseline_fx_to_cny = _normalized_fx_values(
-        holding.trade_currency,
-        updates.get("cost_fx_to_cny", holding.cost_fx_to_cny),
-        updates.get("baseline_fx_to_cny", holding.baseline_fx_to_cny),
-    )
-    holding.cost_fx_to_cny = cost_fx_to_cny
-    holding.baseline_fx_to_cny = baseline_fx_to_cny
 
     await session.flush()
 
@@ -314,22 +289,6 @@ async def _demote_other_preferred_holdings(
             item.is_rebalance_preferred = False
             changed = True
     return changed
-
-
-def _normalized_fx_values(
-    trade_currency: str,
-    cost_fx_to_cny: Decimal,
-    baseline_fx_to_cny: Decimal,
-) -> tuple[Decimal, Decimal]:
-    if trade_currency == "CNY":
-        return (_ONE, _ONE)
-    if cost_fx_to_cny <= 0 or baseline_fx_to_cny <= 0:
-        raise ServiceError(
-            422,
-            "FX_MUST_BE_POSITIVE",
-            "Non-CNY holdings require positive cost and baseline FX values.",
-        )
-    return (cost_fx_to_cny, baseline_fx_to_cny)
 
 
 async def _enforce_preferred_holding(

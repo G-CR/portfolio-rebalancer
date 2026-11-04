@@ -26,10 +26,6 @@ async def test_scheduled_digest_sends_tuesday_through_saturday_in_local_timezone
 ):
     session = object()
     config = object()
-    monkeypatch.setattr(
-        "app.services.decision.load_policy",
-        AsyncMock(return_value=SimpleNamespace(notification_mode="daily")),
-    )
     monkeypatch.setattr(email_digest, "load_email_config", AsyncMock(return_value=config))
     monkeypatch.setattr(
         email_digest, "get_settings", lambda: SimpleNamespace(timezone="Asia/Shanghai")

@@ -7,7 +7,6 @@
 .currencyCol { width: 66px; }
 .quantityCol { width: 98px; }
 .costPriceCol { width: 100px; }
-.costFxCol { width: 88px; }
 .currentPriceCol, .currentFxCol { width: 82px; }
 .marketValueCol, .pnlCol { width: 96px; }
 .actionsCol { width: 88px; }
@@ -73,7 +72,7 @@
   .table th:nth-child(6),
   .table th:nth-child(7),
   .table th:nth-child(8) { display: none; }
-  .accountCol, .currencyCol, .costPriceCol, .costFxCol, .currentPriceCol, .currentFxCol { width: 0; visibility: collapse; }
+  .accountCol, .currencyCol, .costPriceCol, .currentPriceCol, .currentFxCol { width: 0; visibility: collapse; }
   .desktopActionsColumn { display: none; }
   .table th, .table td { padding-inline: var(--space-1); }
   .symbolCol { width: 100px; }

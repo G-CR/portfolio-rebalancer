@@ -36,6 +36,7 @@ from app.backups.constants import (
     MAX_UNCOMPRESSED_BYTES,
     STREAM_CHUNK_BYTES,
     ROW_SCAN_CHUNK_BYTES,
+    data_members_for_version,
 )
 from app.backups.contracts import CONTRACTS_BY_MEMBER, Codec, TableContract
 from app.backups.migrations import (
@@ -406,10 +407,13 @@ def _iter_payloads(connection: sqlite3.Connection, member: str) -> Iterator[byte
         yield bytes(payload)
 
 
-def _logical_checksum_from_store(connection: sqlite3.Connection) -> str:
+def _logical_checksum_from_store(
+    connection: sqlite3.Connection,
+    members: tuple[str, ...] = DATA_MEMBERS,
+) -> str:
     digest = hashlib.sha256()
     digest.update(b"{")
-    for member_index, member in enumerate(sorted(DATA_MEMBERS)):
+    for member_index, member in enumerate(sorted(members)):
         if member_index:
             digest.update(b",")
         digest.update(canonical_json_bytes(member))
@@ -600,17 +604,18 @@ def _parse_manifest(document: dict[str, Any], version: int) -> BackupManifest:
     except ValueError as exc:
         raise InvalidBackupDocument("logical checksum is invalid") from exc
 
+    expected_members = data_members_for_version(version)
     counts = document["record_counts"]
-    if not isinstance(counts, dict) or set(counts) != set(DATA_MEMBERS):
+    if not isinstance(counts, dict) or set(counts) != set(expected_members):
         raise InvalidBackupDocument("record counts do not match archive members")
     if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts.values()):
         raise InvalidBackupDocument("record count is invalid")
 
     raw_members = document["members"]
-    if not isinstance(raw_members, dict) or set(raw_members) != set(DATA_MEMBERS):
+    if not isinstance(raw_members, dict) or set(raw_members) != set(expected_members):
         raise InvalidBackupDocument("member metadata does not match archive members")
     members: dict[str, MemberDigest] = {}
-    for member in DATA_MEMBERS:
+    for member in expected_members:
         details = raw_members[member]
         if not isinstance(details, dict) or set(details) != {"byte_length", "sha256"}:
             raise InvalidBackupDocument("member metadata is invalid")
@@ -661,7 +666,9 @@ def _check_archive_metadata(compressed_size: int, infos: list[ZipInfo]) -> dict[
     names = [info.filename for info in infos]
     if len(names) != len(set(names)):
         raise InvalidBackupArchive("backup contains duplicate members")
-    if tuple(sorted(names)) != tuple(sorted(ALLOWED_MEMBERS)):
+    if MANIFEST_MEMBER not in names:
+        raise InvalidBackupArchive("backup manifest is missing")
+    if any(name not in ALLOWED_MEMBERS for name in names):
         raise InvalidBackupArchive("backup members do not match the allowlist")
     if any(_is_symlink(info) for info in infos):
         raise InvalidBackupArchive("backup contains a symbolic link")
@@ -709,7 +716,11 @@ def open_verified_archive(path: Path) -> InspectedArchive:
         raw_manifest = _read_manifest(archive, by_name[MANIFEST_MEMBER])
         version = _format_version(raw_manifest)
         manifest = _parse_manifest(raw_manifest, version)
-        for member in DATA_MEMBERS:
+        expected_members = data_members_for_version(version)
+        expected_names = {MANIFEST_MEMBER, *expected_members}
+        if set(by_name) != expected_names:
+            raise InvalidBackupArchive("backup members do not match the versioned contract")
+        for member in expected_members:
             _verify_member_bytes(archive, by_name[member], manifest.members[member])
         require_migration_path(version)
         inspected = InspectedArchive(

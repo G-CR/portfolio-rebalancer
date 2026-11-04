@@ -5,23 +5,20 @@ type CalibrationRailProps = {
   target: number;
   actual: number;
   tolerance: number;
-  fxNeutral?: number;
   planned?: number;
   targetText?: string;
   actualText?: string;
-  fxNeutralText?: string;
   plannedText?: string;
   deviationText?: string;
   toleranceValueText?: string;
 };
 
-type MarkerKind = "actual" | "fxNeutral" | "planned";
+type MarkerKind = "actual" | "planned";
 
 const HALF_RANGE = 4;
 
 const markerLabels: Record<MarkerKind, string> = {
   actual: "实际",
-  fxNeutral: "剔汇率",
   planned: "计划",
 };
 
@@ -60,7 +57,7 @@ function toleranceDescription(inputTolerance: number, displayedTolerance: number
 function Marker({ kind, value, target, valueText }: { kind: MarkerKind; value: number; target: number; valueText?: string }) {
   const side = overflowSide(value, target);
   const label = markerLabels[kind];
-  const testId = kind === "fxNeutral" ? "fx-neutral-marker" : `${kind}-marker`;
+  const testId = `${kind}-marker`;
   const overflowLabel = side
     ? `${label}占比超出${side === "left" ? "左" : "右"}侧刻度，真实值 ${valueText ?? formatPercent(value)}`
     : undefined;
@@ -83,11 +80,9 @@ export function CalibrationRail({
   target,
   actual,
   tolerance,
-  fxNeutral,
   planned,
   targetText,
   actualText,
-  fxNeutralText,
   plannedText,
   deviationText,
   toleranceValueText,
@@ -122,7 +117,6 @@ export function CalibrationRail({
         />
         <span className={styles.targetLine} aria-hidden="true" />
         <Marker kind="actual" value={actual} target={target} valueText={actualText} />
-        {fxNeutral === undefined ? null : <Marker kind="fxNeutral" value={fxNeutral} target={target} valueText={fxNeutralText} />}
         {planned === undefined ? null : <Marker kind="planned" value={planned} target={target} valueText={plannedText} />}
       </div>
 
@@ -132,11 +126,6 @@ export function CalibrationRail({
         <div className={styles.valueActual}>
           <span aria-hidden="true" />实际 {actualText ?? formatPercent(actual)}
         </div>
-        {fxNeutral === undefined ? null : (
-          <div className={styles.valueFx}>
-            <span aria-hidden="true" />剔汇率 {fxNeutralText ?? formatPercent(fxNeutral)}
-          </div>
-        )}
         {planned === undefined ? null : (
           <div className={styles.valuePlanned}>
             <span aria-hidden="true" />计划 {plannedText ?? formatPercent(planned)}

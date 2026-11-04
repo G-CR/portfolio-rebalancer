@@ -541,6 +541,35 @@ async def _status_for_key(
     )
 
 
+async def resolve_current_fx_rate(session: AsyncSession, currency: str) -> Decimal:
+    """Return the effective current FX rate for a currency priced in CNY.
+
+    This is only used as a live reference (for example to translate a
+    CNY-denominated fee into a holding's trade currency). It is not a
+    historical cost and must never be persisted as a cost basis.
+    """
+    if currency == "CNY":
+        return _ONE
+    parsed_key = ParsedMarketDataKey(
+        key=f"fx:{currency}/CNY",
+        data_type="fx",
+        symbol=f"{currency}/CNY",
+    )
+    status = await _status_for_key(session, parsed_key, currency="CNY")
+    if (
+        status is None
+        or status.effective_value is None
+        or status.status not in {"valid", "stale", "manual"}
+    ):
+        raise ServiceError(
+            409,
+            "FX_RATE_UNAVAILABLE",
+            "A current exchange rate is required for this operation.",
+            {"currency": currency, "key": parsed_key.key},
+        )
+    return status.effective_value
+
+
 def _resolve_automated_value(rows: list[MarketData]) -> AutomatedValue | None:
     latest_attempt = max(rows, key=_attempt_order_key, default=None)
     latest_valid = max(

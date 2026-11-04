@@ -17,8 +17,6 @@ def _holding_payload(asset_class_id: str, *, symbol: str, quantity: str) -> dict
         "trade_currency": "CNY",
         "quantity": quantity,
         "average_cost_price": "1",
-        "cost_fx_to_cny": "1",
-        "baseline_fx_to_cny": "1",
         "lot_size": "1",
         "quantity_precision": 12,
         "is_rebalance_preferred": True,
@@ -64,7 +62,6 @@ async def test_preview_with_defaults_uses_persisted_constraints(api_client, db_s
     preview = await preview_rebalance_with_defaults(db_session)
 
     assert preview.status == "ok"
-    assert preview.valuation_basis == "actual"
     assert len(preview.result.projected_weights) == 5
     assert preview.result.feasible is True
     assert preview.result.optimization_precision == Decimal("0.0001")

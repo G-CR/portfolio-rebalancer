@@ -10,7 +10,6 @@ def test_add_purchase_with_trade_currency_fee() -> None:
         CostBasis(
             quantity=Decimal("100"),
             average_price=Decimal("100"),
-            cost_fx=Decimal("7.00"),
         ),
         Purchase(
             quantity=Decimal("50"),
@@ -23,10 +22,7 @@ def test_add_purchase_with_trade_currency_fee() -> None:
 
     assert result.quantity == Decimal("150")
     assert result.average_price == Decimal("106.68")
-    assert result.total_cost_cny == Decimal("113214.40")
-    assert (
-        result.quantity * result.average_price * result.cost_fx
-    ).quantize(Decimal("0.01")) == result.total_cost_cny.quantize(Decimal("0.01"))
+    assert result.total_cost_trade_currency == Decimal("16002.00")
 
 
 def test_add_purchase_with_cny_fee() -> None:
@@ -34,7 +30,6 @@ def test_add_purchase_with_cny_fee() -> None:
         CostBasis(
             quantity=Decimal("10"),
             average_price=Decimal("500"),
-            cost_fx=Decimal("7.20"),
         ),
         Purchase(
             quantity=Decimal("5"),
@@ -47,7 +42,7 @@ def test_add_purchase_with_cny_fee() -> None:
 
     assert result.quantity == Decimal("15")
     assert result.average_price.quantize(Decimal("0.0001")) == Decimal("550.2337")
-    assert result.total_cost_cny.quantize(Decimal("0.01")) == Decimal("59376.44")
+    assert result.total_cost_trade_currency.quantize(Decimal("0.01")) == Decimal("8253.51")
 
 
 def test_actual_fee_overrides_estimated_fee() -> None:
@@ -87,7 +82,6 @@ def test_partial_sale_preserves_average_cost() -> None:
         CostBasis(
             quantity=Decimal("100"),
             average_price=Decimal("50"),
-            cost_fx=Decimal("7.10"),
         ),
         Decimal("25"),
     )
@@ -95,7 +89,6 @@ def test_partial_sale_preserves_average_cost() -> None:
     assert result == CostBasis(
         quantity=Decimal("75"),
         average_price=Decimal("50"),
-        cost_fx=Decimal("7.10"),
     )
 
 
@@ -104,7 +97,6 @@ def test_full_sale_zeros_out_cost_fields() -> None:
         CostBasis(
             quantity=Decimal("25"),
             average_price=Decimal("50"),
-            cost_fx=Decimal("7.10"),
         ),
         Decimal("25"),
     )
@@ -112,7 +104,6 @@ def test_full_sale_zeros_out_cost_fields() -> None:
     assert result == CostBasis(
         quantity=Decimal("0"),
         average_price=Decimal("0"),
-        cost_fx=Decimal("0"),
     )
 
 
@@ -122,7 +113,6 @@ def test_sell_quantity_rejects_sale_above_current_quantity() -> None:
             CostBasis(
                 quantity=Decimal("10"),
                 average_price=Decimal("50"),
-                cost_fx=Decimal("7.10"),
             ),
             Decimal("10.000001"),
         )

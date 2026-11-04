@@ -38,8 +38,6 @@ const createPayload = {
   trade_currency: holdingFixture.trade_currency,
   quantity: holdingFixture.quantity,
   average_cost_price: holdingFixture.average_cost_price,
-  cost_fx_to_cny: holdingFixture.cost_fx_to_cny,
-  baseline_fx_to_cny: holdingFixture.baseline_fx_to_cny,
   lot_size: holdingFixture.lot_size,
   quantity_precision: holdingFixture.quantity_precision,
   is_rebalance_preferred: holdingFixture.is_rebalance_preferred,
@@ -48,7 +46,6 @@ const createPayload = {
 const purchasePayload: PurchasePayload = {
   quantity: "1",
   price: "600",
-  fx: "7.2",
   fee_currency: "USD",
   commission_rate: null,
   minimum_commission: null,

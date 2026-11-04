@@ -88,8 +88,6 @@ class HoldingResponse(BaseModel):
     trade_currency: str
     quantity: DecimalString
     average_cost_price: DecimalString
-    cost_fx_to_cny: DecimalString
-    baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
     quantity_precision: int
     preferred_data_source: Literal["yahoo", "sina", "akshare", "tushare", "alpha_vantage"] | None
@@ -105,7 +103,7 @@ class HoldingResponse(BaseModel):
     def serialize_average_cost_price(self, value: Decimal) -> str:
         return _price_decimal(value)
 
-    @field_serializer("cost_fx_to_cny", "baseline_fx_to_cny", "lot_size")
+    @field_serializer("lot_size")
     def serialize_trimmed_decimal(self, value: Decimal) -> str:
         return _trim_decimal(value)
 
@@ -121,8 +119,6 @@ class HoldingReplacementRequest(BaseModel):
     trade_currency: str
     quantity: DecimalString
     average_cost_price: DecimalString
-    cost_fx_to_cny: DecimalString
-    baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
     quantity_precision: StrictInt
     preferred_data_source: Literal[
@@ -165,11 +161,7 @@ class HoldingReplacementRequest(BaseModel):
             )
         return value
 
-    @field_validator(
-        "average_cost_price",
-        "cost_fx_to_cny",
-        "baseline_fx_to_cny",
-    )
+    @field_validator("average_cost_price")
     @classmethod
     def non_negative_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_non_negative(value, info.field_name)
@@ -214,8 +206,6 @@ class HoldingCreate(BaseModel):
     trade_currency: str
     quantity: DecimalString
     average_cost_price: DecimalString
-    cost_fx_to_cny: DecimalString
-    baseline_fx_to_cny: DecimalString
     lot_size: DecimalString
     quantity_precision: StrictInt
     preferred_data_source: Literal["yahoo", "sina", "akshare", "tushare", "alpha_vantage"] | None = None
@@ -245,12 +235,7 @@ class HoldingCreate(BaseModel):
                 {"field": "trade_currency"},
             ) from exc
 
-    @field_validator(
-        "quantity",
-        "average_cost_price",
-        "cost_fx_to_cny",
-        "baseline_fx_to_cny",
-    )
+    @field_validator("quantity", "average_cost_price")
     @classmethod
     def validate_non_negative_decimal(cls, value: Decimal, info) -> Decimal:
         return _ensure_non_negative(value, info.field_name)
@@ -277,8 +262,6 @@ class HoldingUpdate(BaseModel):
     trade_currency: str | None = None
     quantity: DecimalString | None = None
     average_cost_price: DecimalString | None = None
-    cost_fx_to_cny: DecimalString | None = None
-    baseline_fx_to_cny: DecimalString | None = None
     lot_size: DecimalString | None = None
     quantity_precision: StrictInt | None = None
     preferred_data_source: Literal["yahoo", "sina", "akshare", "tushare", "alpha_vantage"] | None = None
@@ -312,12 +295,7 @@ class HoldingUpdate(BaseModel):
                 {"field": "trade_currency"},
             ) from exc
 
-    @field_validator(
-        "quantity",
-        "average_cost_price",
-        "cost_fx_to_cny",
-        "baseline_fx_to_cny",
-    )
+    @field_validator("quantity", "average_cost_price")
     @classmethod
     def validate_non_negative_decimal(
         cls, value: Decimal | None, info

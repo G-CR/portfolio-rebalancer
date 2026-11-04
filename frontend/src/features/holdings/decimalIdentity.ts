@@ -26,15 +26,14 @@ function cents(value: DecimalValue) {
 export function costBasisIdentityMatches(
   quantity: string,
   averagePrice: string,
-  costFx: string,
-  totalCostCny: string,
+  totalCost: string,
 ) {
-  const values = [quantity, averagePrice, costFx, totalCostCny].map(parseDecimal);
+  const values = [quantity, averagePrice, totalCost].map(parseDecimal);
   if (values.some((value) => value === null)) return false;
-  const [parsedQuantity, parsedPrice, parsedFx, parsedTotal] = values as DecimalValue[];
+  const [parsedQuantity, parsedPrice, parsedTotal] = values as DecimalValue[];
   const product = {
-    units: parsedQuantity.units * parsedPrice.units * parsedFx.units,
-    scale: parsedQuantity.scale + parsedPrice.scale + parsedFx.scale,
+    units: parsedQuantity.units * parsedPrice.units,
+    scale: parsedQuantity.scale + parsedPrice.scale,
   };
   const productCents = cents(product);
   const totalCents = cents(parsedTotal);
@@ -43,11 +42,11 @@ export function costBasisIdentityMatches(
   // Quantity is rounded for display (_scale_decimal rounds to N decimal places).
   // Max quantity error = 0.5 × 10^(−scale). Tolerate the resulting error in total.
   if (parsedQuantity.scale > 0) {
-    // maxErrorCents = ceil(0.5 × 10^(−qtyScale) × price × fx × 100)
-    //               = ceil(50 × priceUnits × fxUnits / 10^(qtyScale + priceScale + fxScale))
-    const totalScale = parsedQuantity.scale + parsedPrice.scale + parsedFx.scale;
+    // maxErrorCents = ceil(0.5 × 10^(−qtyScale) × price × 100)
+    //               = ceil(50 × priceUnits / 10^(qtyScale + priceScale))
+    const totalScale = parsedQuantity.scale + parsedPrice.scale;
     const denominator = 10n ** BigInt(totalScale);
-    const numerator = 50n * parsedPrice.units * parsedFx.units;
+    const numerator = 50n * parsedPrice.units;
     const maxErrorCents = (numerator + denominator - 1n) / denominator + 1n;
     const diff = productCents > totalCents ? productCents - totalCents : totalCents - productCents;
     return diff <= maxErrorCents;

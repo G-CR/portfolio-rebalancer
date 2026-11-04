@@ -115,14 +115,14 @@ describe("HoldingsTable mobile row details", () => {
     expect(summaryRow).toHaveAttribute("data-mobile-summary", "true");
     expect(within(summaryRow).getByText("12.0000")).toBeInTheDocument();
     expect(within(summaryRow).getByText("51,012")).toBeInTheDocument();
-    expect(within(summaryRow).getByText("+7,049")).toBeInTheDocument();
+    expect(within(summaryRow).getByText("+6,927")).toBeInTheDocument();
   });
 
   it("shares fixed columns and right-aligns every numeric heading", () => {
     renderTable();
 
-    expect(document.querySelectorAll("colgroup col")).toHaveLength(11);
-    for (const label of ["份额", "成本价", "成本汇率", "当前价", "当前汇率", "市值", "浮动盈亏"]) {
+    expect(document.querySelectorAll("colgroup col")).toHaveLength(10);
+    for (const label of ["份额", "成本价", "当前价", "当前汇率", "市值", "浮动盈亏"]) {
       expect(screen.getByRole("columnheader", { name: label })).toHaveClass(styles.numericHeader);
     }
     expect(tableCss).toMatch(/\.numericHeader[^\{]*\{[^}]*text-align:\s*right/s);
@@ -140,12 +140,11 @@ describe("HoldingsTable mobile row details", () => {
     expect(disclosure).toHaveAttribute("aria-label", "收起 SPY 持仓详情");
     expect(detailRow).not.toHaveAttribute("hidden");
     expect(detailRow.tagName).toBe("TR");
-    expect(detailRow.querySelector("td")).toHaveAttribute("colspan", "11");
+    expect(detailRow.querySelector("td")).toHaveAttribute("colspan", "10");
     expect(detailRow).toHaveTextContent("长期账户");
     expect(detailRow).toHaveTextContent("标普 500");
     expect(detailRow).toHaveTextContent("USD / US");
     expect(detailRow).toHaveTextContent("510.25");
-    expect(detailRow).toHaveTextContent("7.18");
     expect(detailRow).toHaveTextContent("590.42");
     expect(detailRow).toHaveTextContent("7.2");
     expect(detailRow).toHaveTextContent("默认调整标的");
@@ -167,21 +166,6 @@ describe("HoldingsTable mobile row details", () => {
     await user.click(screen.getByRole("menuitem", { name: "替换标的" }));
 
     expect(onCommand).toHaveBeenCalledWith(holdingFixture, "replace");
-  });
-
-  it("formats cost FX to two decimals in summary and details", async () => {
-    const user = userEvent.setup();
-    const precise = { ...holdingFixture, cost_fx_to_cny: "6.769073520399" };
-    renderTable({ holdings: [precise] });
-
-    const summaryRow = screen.getByText("SPY").closest("tr")!;
-    expect(within(summaryRow).getByText("6.77")).toBeInTheDocument();
-    expect(within(summaryRow).queryByText("6.769073520399")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "查看 SPY 持仓详情" }));
-    const detailRow = document.getElementById(screen.getByRole("button", { name: "收起 SPY 持仓详情" }).getAttribute("aria-controls")!)!;
-    expect(detailRow).toHaveTextContent("6.77");
-    expect(detailRow).not.toHaveTextContent("6.769073520399");
   });
 
   it("uses unique independent controls for multiple rows", async () => {

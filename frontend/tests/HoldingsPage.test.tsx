@@ -35,8 +35,6 @@ function ReplaceHarness({ holding }: { holding: Holding }) {
       trade_currency: "USD",
       quantity: "8",
       average_cost_price: "625.40",
-      cost_fx_to_cny: "7.18",
-      baseline_fx_to_cny: "7.15",
       lot_size: "1",
       quantity_precision: 0,
       preferred_data_source: "yahoo",
@@ -106,8 +104,6 @@ describe("HoldingsPage", () => {
   it.each([
     ["目标份额", "not-a-decimal", "请输入大于 0 的有效目标份额。"],
     ["平均成本价", "NaN", "请输入大于或等于 0 的有效平均成本价。"],
-    ["成本汇率", "0", "请输入大于 0 的有效成本汇率。"],
-    ["基准汇率", "Infinity", "请输入大于 0 的有效基准汇率。"],
     ["最小交易单位", "-1", "请输入大于或等于 0 的有效最小交易单位。"],
     ["份额精度", "1.5", "份额精度必须是 0 到 12 的整数。"],
     ["份额精度", "", "份额精度必须是 0 到 12 的整数。"],
@@ -231,8 +227,6 @@ describe("HoldingsPage", () => {
       trade_currency: holdingFixture.trade_currency,
       quantity: holdingFixture.quantity,
       average_cost_price: holdingFixture.average_cost_price,
-      cost_fx_to_cny: holdingFixture.cost_fx_to_cny,
-      baseline_fx_to_cny: holdingFixture.baseline_fx_to_cny,
       lot_size: holdingFixture.lot_size,
       quantity_precision: holdingFixture.quantity_precision,
       preferred_data_source: holdingFixture.preferred_data_source,
@@ -312,8 +306,6 @@ describe("HoldingsPage", () => {
       trade_currency: "USD",
       quantity: "8",
       average_cost_price: "625.40",
-      cost_fx_to_cny: "7.18",
-      baseline_fx_to_cny: "7.15",
       lot_size: "1",
       quantity_precision: 0,
       preferred_data_source: "yahoo",
@@ -444,8 +436,6 @@ describe("HoldingsPage", () => {
       symbol: "SPY",
       quantity: "0",
       average_cost_price: "0",
-      cost_fx_to_cny: "1",
-      baseline_fx_to_cny: "1",
       lot_size: "0.01",
       quantity_precision: 2,
       preferred_data_source: "yahoo",
@@ -454,7 +444,7 @@ describe("HoldingsPage", () => {
     expect(queryClient.getQueryState(holdingsQueryKey(true))?.isInvalidated).toBe(true);
   });
 
-  it("submits a Shanghai A-share holding in CNY with fixed FX values", async () => {
+  it("submits a Shanghai A-share holding in CNY", async () => {
     const user = userEvent.setup();
     let body: unknown;
     renderWithProviders(<HoldingsPage />, { handlers: [
@@ -471,15 +461,11 @@ describe("HoldingsPage", () => {
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "贵州茅台");
     await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "SH");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "人民币账户");
-    expect(screen.queryByRole("textbox", { name: "成本汇率" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "基准汇率" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
 
     await waitFor(() => expect(body).toMatchObject({
       market: "SH",
       trade_currency: "CNY",
-      cost_fx_to_cny: "1",
-      baseline_fx_to_cny: "1",
       lot_size: "100",
       quantity_precision: 0,
     }));
@@ -603,32 +589,6 @@ describe("HoldingsPage", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("请完整填写标的代码、名称、市场和账户");
     expect(body).toBeUndefined();
-  });
-
-  it("shows editable USD FX fields only for US holdings", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<HoldingsPage />, { handlers: [
-      http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
-      http.get("/api/holdings", () => HttpResponse.json([])),
-    ] });
-
-    await user.click(await screen.findByRole("button", { name: "添加第一个持仓" }));
-    const market = screen.getByRole("combobox", { name: "上市市场" });
-    expect([...market.options].filter((option) => option.value).map((option) => [option.label, option.value])).toEqual([
-      ["美股", "US"],
-      ["上海 A 股", "SH"],
-      ["深圳 A 股", "SZ"],
-    ]);
-    await user.selectOptions(market, "US");
-
-    const costFx = screen.getByRole("textbox", { name: "成本汇率" });
-    const baselineFx = screen.getByRole("textbox", { name: "基准汇率" });
-    await user.clear(costFx);
-    await user.type(costFx, "7.18");
-    await user.clear(baselineFx);
-    await user.type(baselineFx, "7.20");
-    expect(costFx).toHaveValue("7.18");
-    expect(baselineFx).toHaveValue("7.20");
   });
 
   it("submits advanced holding settings from the labelled details section", async () => {

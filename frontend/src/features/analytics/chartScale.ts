@@ -66,19 +66,3 @@ export function normalizeDecimalSeries(
     return { original, scaled: coefficient < 0n ? -magnitude : magnitude };
   });
 }
-
-export function proportionDecimalSeries(
-  values: readonly string[],
-  total = 100,
-): ExactChartValue[] {
-  if (!Number.isSafeInteger(total) || total <= 0) {
-    throw new RangeError("Chart proportion total must be a positive safe integer.");
-  }
-  const coefficients = alignedCoefficients(values);
-  const denominator = coefficients.reduce((sum, value) => sum + absolute(value), 0n);
-  if (denominator === 0n) return values.map((original) => ({ original, scaled: 0 }));
-  return values.map((original, index) => ({
-    original,
-    scaled: exactRatioNumber(absolute(coefficients[index]) * BigInt(total), denominator),
-  }));
-}

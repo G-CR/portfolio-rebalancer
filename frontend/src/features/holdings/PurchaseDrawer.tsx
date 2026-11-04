@@ -42,7 +42,6 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
   const [quantity, setQuantity] = useState("");
   const [tradeDate, setTradeDate] = useState(today);
   const [price, setPrice] = useState("");
-  const [fx, setFx] = useState(holding.trade_currency === "CNY" ? "1" : "");
   const [feeMode, setFeeMode] = useState<FeeMode>("estimated");
   const [feeCurrency, setFeeCurrency] = useState(holding.trade_currency);
   const [commissionRate, setCommissionRate] = useState("0");
@@ -77,7 +76,6 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
   const payload = useMemo<PurchasePayload>(() => ({
     quantity,
     price,
-    fx,
     fee_currency: feeCurrency || null,
     commission_rate: commissionRate || null,
     minimum_commission: minimumCommission || null,
@@ -86,11 +84,11 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
     actual_fee: feeMode === "actual" ? actualFee || null : null,
     save_fee_defaults: saveDefaults,
     note: note.trim() || null,
-  }), [actualFee, commissionRate, feeCurrency, feeMode, fixedFee, fx, minimumCommission, note, perShareFee, price, quantity, saveDefaults]);
+  }), [actualFee, commissionRate, feeCurrency, feeMode, fixedFee, minimumCommission, note, perShareFee, price, quantity, saveDefaults]);
   const fingerprint = JSON.stringify(payload);
   const stale = Boolean(previewFingerprint && previewFingerprint !== fingerprint);
   const preview = stale ? null : previewMutation.data ?? null;
-  const validInputs = Boolean(quantity && price && fx && (feeMode === "estimated" || actualFee));
+  const validInputs = Boolean(quantity && price && (feeMode === "estimated" || actualFee));
   const canConfirm = Boolean(preview && previewIdentityMatches(preview) && !stale && !confirmMutation.isPending);
 
   async function generatePreview() {
@@ -152,12 +150,11 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
             <FormField label="新增份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
             <FormField label="成交日期" required><input type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></FormField>
             <FormField label="成交价" required suffix={holding.trade_currency}><input type="text" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} /></FormField>
-            <FormField label="本次汇率" required hint="1 单位交易币种折合人民币"><input type="text" inputMode="decimal" value={fx} onChange={(event) => setFx(event.target.value)} /></FormField>
           </div>
         </section>
 
         <section className={styles.drawerSection}>
-          <div className={styles.sectionHeading}><span className={styles.step}>02</span><div><h3>交易费用</h3><p>选择按规则预估或录入券商实际费用。</p></div></div>
+          <div className={styles.sectionHeading}><span className={styles.step}>02</span><div><h3>交易费用</h3><p>选择按规则预估或录入券商实际费用；跨币种费用按当前汇率自动折算。</p></div></div>
           <div className={styles.tabs} role="tablist" aria-label="费用模式">
             <button type="button" role="tab" aria-selected={feeMode === "estimated"} onClick={() => setFeeMode("estimated")}>按规则预估</button>
             <button type="button" role="tab" aria-selected={feeMode === "actual"} onClick={() => setFeeMode("actual")}>录入实际费用</button>

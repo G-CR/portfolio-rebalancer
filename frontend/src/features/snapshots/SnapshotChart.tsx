@@ -10,19 +10,13 @@ export type SnapshotMetric =
   | "market"
   | "cost"
   | "pnl"
-  | "actual_weight"
-  | "fx_neutral_weight"
-  | "price_effect"
-  | "fx_effect";
+  | "actual_weight";
 
 const metricConfig: Record<SnapshotMetric, { key: keyof SnapshotSummary; label: string; percent?: boolean; signed?: boolean }> = {
   market: { key: "total_market_value_cny", label: "核心池市值" },
-  cost: { key: "total_cost_value_cny", label: "人民币成本" },
+  cost: { key: "total_cost_value_cny", label: "人民币参考成本" },
   pnl: { key: "total_unrealized_pnl_cny", label: "浮动盈亏", signed: true },
   actual_weight: { key: "actual_weight", label: "实际占比", percent: true },
-  fx_neutral_weight: { key: "fx_neutral_weight", label: "剔汇率占比", percent: true },
-  price_effect: { key: "total_price_effect_cny", label: "价格影响", signed: true },
-  fx_effect: { key: "total_fx_effect_cny", label: "汇率影响", signed: true },
 };
 
 function metricValue(snapshot: SnapshotSummary, metric: SnapshotMetric) {

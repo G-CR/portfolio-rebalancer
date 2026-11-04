@@ -35,8 +35,6 @@ def _holding_payload(
     trade_currency: str,
     quantity: str,
     average_cost_price: str,
-    cost_fx_to_cny: str,
-    baseline_fx_to_cny: str,
     lot_size: str,
     account_name: str,
     is_rebalance_preferred: bool = True,
@@ -50,8 +48,6 @@ def _holding_payload(
         "trade_currency": trade_currency,
         "quantity": quantity,
         "average_cost_price": average_cost_price,
-        "cost_fx_to_cny": cost_fx_to_cny,
-        "baseline_fx_to_cny": baseline_fx_to_cny,
         "lot_size": lot_size,
         "quantity_precision": 12,
         "is_rebalance_preferred": is_rebalance_preferred,
@@ -79,8 +75,6 @@ async def _configure_two_class_portfolio(api_client, db_session) -> dict[str, ob
             trade_currency="CNY",
             quantity="8",
             average_cost_price="90",
-            cost_fx_to_cny="1",
-            baseline_fx_to_cny="1",
             lot_size="1",
             account_name="Broker CNY",
         ),
@@ -96,8 +90,6 @@ async def _configure_two_class_portfolio(api_client, db_session) -> dict[str, ob
             trade_currency="USD",
             quantity="2",
             average_cost_price="18",
-            cost_fx_to_cny="4.200000000000",
-            baseline_fx_to_cny="4.000000000000",
             lot_size="1",
             account_name="Broker USD",
         ),
@@ -156,7 +148,6 @@ def _preview_payload(
         "request_token": request_token,
         "available_cny": "0",
         "available_usd": "0",
-        "valuation_basis": "actual",
         "allow_sell": True,
         "allow_fx": True,
         "tolerance": "0.05",
@@ -313,7 +304,6 @@ async def test_preview_refreshes_once_per_browser_session_and_includes_basis_com
     assert payload["status"] == "ok"
     assert payload["data_status"] == "valid"
     assert payload["refresh_attempted"] is True
-    assert payload["valuation_basis"] == "actual"
     trades_by_symbol = {trade["symbol"]: trade for trade in payload["result"]["trades"]}
     cny_trade = trades_by_symbol["CNY-FUND"]
     usd_trade = trades_by_symbol["USD-FUND"]
@@ -334,17 +324,6 @@ async def test_preview_refreshes_once_per_browser_session_and_includes_basis_com
     assert payload["result"]["sell_phase_used"] is True
     assert payload["result"]["net_fx_direction"] == "cny_to_usd"
     assert Decimal(payload["result"]["net_fx_amount_cny"]) == Decimal("300")
-    assert payload["fx_comparison"]["valuation_basis"] == "fx_neutral"
-    assert [item["asset_class_id"] for item in payload["fx_comparison"]["result"]["projected_weights"]] == [
-        payload["result"]["projected_weights"][0]["asset_class_id"],
-        payload["result"]["projected_weights"][1]["asset_class_id"],
-    ]
-    assert [Decimal(item["after"]) for item in payload["fx_comparison"]["result"]["projected_weights"]] != [
-        Decimal("0.5"),
-        Decimal("0.5"),
-    ]
-    assert payload["fx_comparison"]["result"]["feasible"] is True
-
     second_payload = second.json()
     assert second_payload["refresh_attempted"] is False
 
@@ -399,8 +378,6 @@ async def test_preview_caps_sell_inventory_at_the_preferred_holding_quantity(
             trade_currency="CNY",
             quantity="20",
             average_cost_price="100",
-            cost_fx_to_cny="1",
-            baseline_fx_to_cny="1",
             lot_size="1",
             account_name="Broker CNY Secondary",
             is_rebalance_preferred=False,
@@ -441,7 +418,6 @@ async def test_preview_caps_sell_inventory_at_the_preferred_holding_quantity(
 
     assert response.status_code == 200, response.text
     assert captured == [
-        (Decimal("2800.000000000000"), Decimal("8.000000000000")),
         (Decimal("2800.000000000000"), Decimal("8.000000000000")),
     ]
 
@@ -665,7 +641,6 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     assert create_response.status_code == 201, create_response.text
     created = create_response.json()
     assert created["status"] == "draft"
-    assert created["valuation_basis"] == "actual"
     assert created["available_cny"] == "0"
     assert created["available_usd"] == "0"
     assert created["minimum_trade_cny"] is None
@@ -695,13 +670,11 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     plan = await db_session.scalar(select(RebalancePlan).where(RebalancePlan.id == created["id"]))
     assert plan is not None
     assert plan.status == "draft"
-    assert plan.strategy_mode == "actual"
     assert plan.input_summary == {
         "session_token": "browser-session-1",
         "request_token": "preview-request-1",
         "available_cny": "0",
         "available_usd": "0",
-        "valuation_basis": "actual",
         "allow_sell": True,
         "allow_fx": True,
         "tolerance": "0.05",
@@ -721,9 +694,7 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     }
     assert plan.suggested_actions == created["result"]["trades"]
     assert plan.projected_result == {
-        "valuation_basis": "actual",
         "result": created["result"],
-        "fx_comparison": created["fx_comparison"],
         "data_status": "valid",
     }
 
@@ -734,8 +705,6 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     plan.input_summary = legacy_input_summary
     legacy_projected = dict(plan.projected_result)
     legacy_result = dict(legacy_projected["result"])
-    legacy_comparison = dict(legacy_projected["fx_comparison"])
-    legacy_comparison_result = dict(legacy_comparison["result"])
     for field in (
         "buy_only_max_drift",
         "optimization_precision",
@@ -746,7 +715,6 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
         "net_fx_amount_cny",
     ):
         legacy_result.pop(field)
-        legacy_comparison_result.pop(field)
     legacy_result["trades"] = [
         {
             **legacy_result["trades"][0],
@@ -757,11 +725,7 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
         *legacy_result["trades"][1:],
     ]
     legacy_result["fx_required_cny"] = "70"
-    legacy_comparison_result["trades"] = []
-    legacy_comparison_result["fx_required_cny"] = "0"
-    legacy_comparison["result"] = legacy_comparison_result
     legacy_projected["result"] = legacy_result
-    legacy_projected["fx_comparison"] = legacy_comparison
     plan.projected_result = legacy_projected
     plan.suggested_actions = legacy_result["trades"]
     plan.data_version = "legacy-opaque-version"
@@ -795,10 +759,6 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     assert legacy_detail.json()["result"]["sell_phase_used"] is True
     assert legacy_detail.json()["result"]["net_fx_direction"] == "cny_to_usd"
     assert legacy_detail.json()["result"]["net_fx_amount_cny"] == "70"
-    assert legacy_detail.json()["fx_comparison"]["result"]["buy_only_max_drift"] == legacy_comparison_result["max_drift_after"]
-    assert legacy_detail.json()["fx_comparison"]["result"]["sell_phase_used"] is False
-    assert legacy_detail.json()["fx_comparison"]["result"]["net_fx_direction"] == "none"
-    assert legacy_detail.json()["fx_comparison"]["result"]["net_fx_amount_cny"] == "0"
 
 
 async def test_current_task5_plan_backup_validates_and_restores_without_legacy_mutation(
@@ -1001,7 +961,6 @@ async def test_plan_create_same_key_with_different_payload_returns_original_plan
         **first_payload,
         "request_token": "materially-different-request",
         "available_cny": "50000",
-        "valuation_basis": "fx_neutral",
     }
 
     first = await api_client.post("/api/rebalance/plans", json=first_payload)

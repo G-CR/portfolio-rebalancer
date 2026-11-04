@@ -18,14 +18,12 @@ def position_inputs(draw: st.DrawFn) -> PositionInput:
         quantity=draw(quantity),
         cost_price=price_basis * draw(ratio),
         current_price=price_basis * draw(ratio),
-        cost_fx=fx_basis * draw(ratio),
         current_fx=fx_basis * draw(ratio),
-        baseline_fx=fx_basis * draw(ratio),
     )
 
 
 @given(position_inputs())
-def test_pnl_decomposition_identity(value: PositionInput) -> None:
+def test_reference_pnl_identity(value: PositionInput) -> None:
     with localcontext() as context:
         context.prec = 80
         result = analyze_position(
@@ -33,9 +31,32 @@ def test_pnl_decomposition_identity(value: PositionInput) -> None:
                 quantity=Decimal(value.quantity),
                 cost_price=Decimal(value.cost_price),
                 current_price=Decimal(value.current_price),
-                cost_fx=Decimal(value.cost_fx),
                 current_fx=Decimal(value.current_fx),
-                baseline_fx=Decimal(value.baseline_fx),
             )
         )
-        assert result.price_effect + result.fx_effect == result.unrealized_pnl
+        assert result.market_value_cny - result.cost_cny == result.unrealized_pnl
+        assert (
+            result.market_value_trade_currency - result.cost_trade_currency
+            == result.unrealized_pnl_trade_currency
+        )
+
+
+@given(position_inputs(), base_fx)
+def test_native_pnl_does_not_depend_on_current_fx(
+    value: PositionInput, other_fx: Decimal
+) -> None:
+    with localcontext() as context:
+        context.prec = 80
+        first = analyze_position(value)
+        second = analyze_position(
+            PositionInput(
+                quantity=value.quantity,
+                cost_price=value.cost_price,
+                current_price=value.current_price,
+                current_fx=other_fx,
+            )
+        )
+        assert first.unrealized_pnl_trade_currency == second.unrealized_pnl_trade_currency
+        assert first.unrealized_return.quantize(
+            Decimal("0.000000000001")
+        ) == second.unrealized_return.quantize(Decimal("0.000000000001"))

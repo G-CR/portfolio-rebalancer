@@ -22,7 +22,6 @@ def purchase_inputs(draw: st.DrawFn) -> tuple[CostBasis, Purchase]:
         CostBasis(
             quantity=draw(current_quantity),
             average_price=draw(current_price),
-            cost_fx=draw(fx_value),
         ),
         Purchase(
             quantity=draw(purchase_quantity),
@@ -45,7 +44,6 @@ def test_purchase_identity_holds_after_cent_quantization(
             CostBasis(
                 quantity=Decimal(current.quantity),
                 average_price=Decimal(current.average_price),
-                cost_fx=Decimal(current.cost_fx),
             ),
             Purchase(
                 quantity=Decimal(purchase.quantity),
@@ -55,9 +53,52 @@ def test_purchase_identity_holds_after_cent_quantization(
                 fee_cny=Decimal(purchase.fee_cny),
             ),
         )
-        left = (result.quantity * result.average_price * result.cost_fx).quantize(
-            Decimal("0.01")
+        expected_total = (
+            current.quantity * current.average_price
+            + purchase.quantity * purchase.price
+            + purchase.fee_trade_currency
+            + purchase.fee_cny / purchase.fx
         )
-        right = result.total_cost_cny.quantize(Decimal("0.01"))
 
-        assert left == right
+        assert result.quantity == current.quantity + purchase.quantity
+        assert result.total_cost_trade_currency.quantize(
+            Decimal("0.01")
+        ) == expected_total.quantize(Decimal("0.01"))
+
+
+@given(
+    current_quantity,
+    current_price,
+    purchase_quantity,
+    purchase_price,
+    fx_value,
+    fx_value,
+)
+def test_trade_currency_fee_cost_is_independent_of_fx(
+    current_quantity_value: Decimal,
+    current_price_value: Decimal,
+    purchase_quantity_value: Decimal,
+    purchase_price_value: Decimal,
+    first_fx: Decimal,
+    second_fx: Decimal,
+) -> None:
+    with localcontext() as context:
+        context.prec = 80
+        current = CostBasis(
+            quantity=current_quantity_value,
+            average_price=current_price_value,
+        )
+
+        def buy(fx: Decimal) -> CostBasis:
+            return add_purchase(
+                current,
+                Purchase(
+                    quantity=purchase_quantity_value,
+                    price=purchase_price_value,
+                    fx=fx,
+                    fee_trade_currency=Decimal("1"),
+                    fee_cny=Decimal("0"),
+                ),
+            )
+
+        assert buy(first_fx) == buy(second_fx)

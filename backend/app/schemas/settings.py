@@ -98,7 +98,6 @@ class RebalanceDefaultsUpdate(BaseModel):
 
     available_cny: DecimalString
     available_usd: DecimalString
-    valuation_basis: Literal["actual", "fx_neutral"]
     tolerance: DecimalString
     allow_sell: bool
     allow_fx: bool

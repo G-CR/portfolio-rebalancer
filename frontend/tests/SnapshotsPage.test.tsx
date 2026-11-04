@@ -28,13 +28,9 @@ const summaries = [
     has_stale_data: false,
     has_manual_data: true,
     total_market_value_cny: "9007199254740993.120000000000",
-    total_fx_neutral_value_cny: "9007199254740000.120000000000",
     total_cost_value_cny: "8000000000000000.000000000000",
     total_unrealized_pnl_cny: "1007199254740993.120000000000",
-    total_price_effect_cny: "1000000000000000.000000000000",
-    total_fx_effect_cny: "7199254740993.120000000000",
     actual_weight: "0.300000000000",
-    fx_neutral_weight: "0.295000000000",
     target_weight: "0.300000000000",
   },
   {
@@ -47,13 +43,9 @@ const summaries = [
     has_stale_data: false,
     has_manual_data: false,
     total_market_value_cny: "684220.000000000000",
-    total_fx_neutral_value_cny: "680000.000000000000",
     total_cost_value_cny: "620000.000000000000",
     total_unrealized_pnl_cny: "64220.000000000000",
-    total_price_effect_cny: "60000.000000000000",
-    total_fx_effect_cny: "4220.000000000000",
     actual_weight: "0.300000000000",
-    fx_neutral_weight: "0.298000000000",
     target_weight: "0.300000000000",
   },
   {
@@ -66,13 +58,9 @@ const summaries = [
     has_stale_data: false,
     has_manual_data: false,
     total_market_value_cny: "680000.000000000000",
-    total_fx_neutral_value_cny: "675000.000000000000",
     total_cost_value_cny: "620000.000000000000",
     total_unrealized_pnl_cny: "60000.000000000000",
-    total_price_effect_cny: "55000.000000000000",
-    total_fx_effect_cny: "5000.000000000000",
     actual_weight: "0.327000000000",
-    fx_neutral_weight: "0.320000000000",
     target_weight: "0.300000000000",
   },
   {
@@ -85,13 +73,9 @@ const summaries = [
     has_stale_data: false,
     has_manual_data: false,
     total_market_value_cny: "670000.000000000000",
-    total_fx_neutral_value_cny: "666000.000000000000",
     total_cost_value_cny: "620000.000000000000",
     total_unrealized_pnl_cny: "50000.000000000000",
-    total_price_effect_cny: "46000.000000000000",
-    total_fx_effect_cny: "4000.000000000000",
     actual_weight: "0.325000000000",
-    fx_neutral_weight: "0.319000000000",
     target_weight: "0.300000000000",
   },
 ] as const;
@@ -110,19 +94,13 @@ const detail = {
     quantity: "3.000000000000",
     market_price: "590.420000000000",
     current_fx_to_cny: "7.200000000000",
-    baseline_fx_to_cny: "6.800000000000",
     average_cost_price: "510.250000000000",
-    cost_fx_to_cny: "7.180000000000",
     target_weight: "0.300000000000",
     market_value_cny: "127530.720000000000",
-    fx_neutral_value_cny: "120445.680000000000",
     cost_value_cny: "109907.850000000000",
     unrealized_pnl_amount_cny: "17622.870000000000",
     unrealized_pnl_rate: "0.160342000000",
-    price_effect_cny: "16800.000000000000",
-    fx_effect_cny: "822.870000000000",
     actual_weight: "0.186389000000",
-    fx_neutral_weight: "0.177126000000",
     price_status: "valid",
     fx_status: "manual",
   }],
@@ -170,7 +148,7 @@ describe("SnapshotsPage", () => {
     renderWithProviders(<SnapshotsPage />, { handlers: handlers() });
 
     expect(await screen.findByRole("button", { name: "核心池市值" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "人民币成本" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人民币参考成本" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "浮动盈亏" })).toBeInTheDocument();
     expect(screen.queryByText("组合收益率")).not.toBeInTheDocument();
     expect(screen.getByText("快照时点状态，不代表精确组合回报")).toBeInTheDocument();

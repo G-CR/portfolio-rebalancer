@@ -1,4 +1,4 @@
-import { normalizeDecimalSeries, proportionDecimalSeries } from "../src/features/analytics/chartScale";
+import { normalizeDecimalSeries } from "../src/features/analytics/chartScale";
 
 describe("chartScale", () => {
   it("normalizes boundary, negative, and tiny values without unsafe chart numbers", () => {
@@ -29,16 +29,4 @@ describe("chartScale", () => {
     ]);
   });
 
-  it("calculates exact-derived proportions for decomposition geometry", () => {
-    const values = proportionDecimalSeries([
-      "9999999999999999.999999999999",
-      "-0.000000000001",
-    ]);
-
-    expect(values[0].scaled).toBeGreaterThan(99.999999999);
-    expect(values[0].scaled).toBeLessThanOrEqual(100);
-    expect(values[1].scaled).toBeGreaterThan(0);
-    expect(values[0].scaled + values[1].scaled).toBeCloseTo(100, 10);
-    expect(values.every((item) => Number.isFinite(item.scaled))).toBe(true);
-  });
 });

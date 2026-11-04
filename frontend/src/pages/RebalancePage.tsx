@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
-import type { ApiErrorDetail, RebalanceDefaultsUpdate, RebalancePlan, RebalancePreview, RebalancePreviewJobStatus, RebalancePreviewPayload, RebalanceValuationBasis } from "../api/types";
+import type { ApiErrorDetail, RebalanceDefaultsUpdate, RebalancePlan, RebalancePreview, RebalancePreviewJobStatus, RebalancePreviewPayload } from "../api/types";
 import { useAssetClasses } from "../features/assetClasses/api";
-import { formatPercent } from "../features/analytics/format";
 import { useHoldings } from "../features/holdings/api";
 import { useMarketDataRefreshVersion } from "../features/marketData/api";
 import { useRebalanceDefaults, useSaveRebalanceDefaults } from "../features/settings/api";
@@ -31,7 +30,6 @@ const initialForm: RebalanceFormState = {
   tolerance: "2",
   allowSell: true,
   allowFx: true,
-  valuationBasis: "actual",
   acknowledgeStaleData: false,
 };
 
@@ -56,7 +54,6 @@ function defaultsPayloadFor(form: RebalanceFormState): RebalanceDefaultsUpdate {
   return {
     available_cny: form.availableCny || "0",
     available_usd: form.availableUsd || "0",
-    valuation_basis: form.valuationBasis,
     tolerance: ratioFromPercent(form.tolerance),
     allow_sell: form.allowSell,
     allow_fx: form.allowFx,
@@ -69,7 +66,6 @@ function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePr
     request_token: token("preview"),
     available_cny: form.availableCny || "0",
     available_usd: form.availableUsd || "0",
-    valuation_basis: form.valuationBasis,
     allow_sell: form.allowSell,
     allow_fx: form.allowFx,
     tolerance: ratioFromPercent(form.tolerance),
@@ -85,9 +81,7 @@ function previewFromPlan(plan: RebalancePlan): RebalancePreview {
     data_status: plan.data_status,
     acknowledge_stale_data: plan.data_status === "stale",
     refresh_attempted: false,
-    valuation_basis: plan.valuation_basis,
     result: plan.result,
-    fx_comparison: plan.fx_comparison,
   };
 }
 
@@ -98,7 +92,6 @@ function formFromPreviewPayload(payload: RebalancePreviewPayload): RebalanceForm
     tolerance: percentFromRatio(payload.tolerance),
     allowSell: payload.allow_sell,
     allowFx: payload.allow_fx,
-    valuationBasis: payload.valuation_basis,
     acknowledgeStaleData: payload.acknowledge_stale_data,
   };
 }
@@ -219,7 +212,6 @@ export function RebalancePage() {
         tolerance: percentFromRatio(defaults.data.tolerance),
         allowSell: defaults.data.allow_sell,
         allowFx: defaults.data.allow_fx,
-        valuationBasis: defaults.data.valuation_basis,
         acknowledgeStaleData: false,
       });
     }
@@ -260,13 +252,6 @@ export function RebalancePage() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const changeBasis = (valuationBasis: RebalanceValuationBasis) => {
-    if ((!planRestoreCompleted && !plans.isError) || plan?.status === "in_progress") return;
-    setForm((current) => ({ ...current, valuationBasis }));
-    setIsDirty(Boolean(previewResult));
-    setPlan(null);
   };
 
   const save = async () => {
@@ -335,7 +320,6 @@ export function RebalancePage() {
     ...form,
     availableCny: activePlan.available_cny,
     availableUsd: activePlan.available_usd,
-    valuationBasis: activePlan.valuation_basis,
     tolerance: percentFromRatio(activePlan.tolerance),
     allowSell: activePlan.allow_sell,
     allowFx: activePlan.allow_fx,
@@ -351,11 +335,10 @@ export function RebalancePage() {
     <section className={styles.page} aria-label="再平衡工作台">
       <header className={styles.pageHeader}>
         <div><p>REBALANCE WORKBENCH</p><h1>再平衡校准</h1><span>建议只用于规划，不会连接券商或自动提交订单。</span></div>
-        <div className={styles.basisStatus}><span>当前口径</span><strong>{displayedForm.valuationBasis === "actual" ? "实际人民币占比" : "剔汇率模拟"}</strong></div>
       </header>
       <div className={styles.workspace}>
         {!defaultsReady ? <div className={styles.defaultsLoading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入上次使用的资金与约束</div> : <>
-          <RebalanceInputs value={displayedForm} pending={submitting || preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onBasisChange={changeBasis} onSubmit={() => void runPreview()} />
+          <RebalanceInputs value={displayedForm} pending={submitting || preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onSubmit={() => void runPreview()} />
           <main className={styles.results}>
           {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
           {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
@@ -375,10 +358,6 @@ export function RebalancePage() {
             <RebalanceSummary preview={currentPreview} />
             <ProjectedAllocation preview={currentPreview} assetClasses={assetClasses.data ?? []} tolerance={displayedTolerance} />
             <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} />
-            <section className={styles.comparison} aria-labelledby="fx-comparison-title">
-              <header className={styles.sectionHeading}><div><p>FX COMPARISON</p><h2 id="fx-comparison-title">汇率口径对照</h2></div></header>
-              <p>切换为{currentPreview.fx_comparison.valuation_basis === "actual" ? "实际占比" : "剔汇率口径"}时，建议交易为 <b>{currentPreview.fx_comparison.result.trades.length}</b> 笔，最大偏离为 <b>{formatPercent(currentPreview.fx_comparison.result.max_drift_after, 2)}</b>。用于判断比例变化是否主要来自汇率。</p>
-            </section>
           </> : null}
           {operationError ? <p className={styles.error} role="alert">{operationError}</p> : null}
             <RebalanceLifecycle plan={plan} disabled={lifecycleDisabled} pending={transitionPending} onSave={() => void save()} onStart={() => void start()} onCancel={() => void cancel()} onComplete={() => void complete()} />

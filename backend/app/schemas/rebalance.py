@@ -31,7 +31,6 @@ class RebalancePreviewRequest(BaseModel):
     request_token: str
     available_cny: DecimalString
     available_usd: DecimalString
-    valuation_basis: Literal["actual", "fx_neutral"] = "actual"
     allow_sell: bool | None = None
     allow_fx: bool | None = None
     tolerance: DecimalString | None = None
@@ -150,13 +149,6 @@ class RebalanceResultResponse(BaseModel):
     trades: tuple[TradeSuggestionResponse, ...]
 
 
-class RebalanceComparisonResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    valuation_basis: Literal["actual", "fx_neutral"]
-    result: RebalanceResultResponse
-
-
 class RebalancePreviewResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -166,9 +158,7 @@ class RebalancePreviewResponse(BaseModel):
     data_status: Literal["valid", "stale", "manual"]
     acknowledge_stale_data: bool
     refresh_attempted: bool
-    valuation_basis: Literal["actual", "fx_neutral"]
     result: RebalanceResultResponse
-    fx_comparison: RebalanceComparisonResponse
     input_signature: str | None = None
 
 
@@ -199,7 +189,6 @@ class RebalancePlanResponse(BaseModel):
 
     id: str
     status: Literal["draft", "in_progress", "completed", "cancelled"]
-    valuation_basis: Literal["actual", "fx_neutral"]
     available_cny: DecimalString
     available_usd: DecimalString
     minimum_trade_cny: DecimalString | None
@@ -213,10 +202,8 @@ class RebalancePlanResponse(BaseModel):
     holding_versions: dict[str, int]
     asset_class_targets: dict[str, str] = Field(default_factory=dict)
     result: RebalanceResultResponse
-    fx_comparison: RebalanceComparisonResponse
     before_snapshot_id: str | None
     after_snapshot_id: str | None
-    baseline_reset_at: str | None
     created_at: str
     updated_at: str
 

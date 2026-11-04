@@ -68,7 +68,6 @@ it("whitelists settings PUT bodies when mutations receive response-shaped object
   expect(rebalanceDefaultsPayload).toEqual({
     available_cny: rebalanceDefaultsFixture.available_cny,
     available_usd: rebalanceDefaultsFixture.available_usd,
-    valuation_basis: rebalanceDefaultsFixture.valuation_basis,
     tolerance: rebalanceDefaultsFixture.tolerance,
     allow_sell: rebalanceDefaultsFixture.allow_sell,
     allow_fx: rebalanceDefaultsFixture.allow_fx,

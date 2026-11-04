@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal, localcontext
 
 
@@ -37,28 +37,17 @@ def _calculation_precision(values: tuple[Decimal, ...]) -> int:
 class CostBasis:
     quantity: Decimal
     average_price: Decimal
-    cost_fx: Decimal
-    _total_cost_cny: Decimal | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _require_nonnegative("quantity", self.quantity)
         _require_nonnegative("average_price", self.average_price)
-        _require_nonnegative("cost_fx", self.cost_fx)
 
-        if self.quantity == 0:
-            if self.average_price != 0 or self.cost_fx != 0:
-                raise ValueError(
-                    "average price and cost fx must both be zero when quantity is zero"
-                )
-            return
-
-        _require_positive("cost_fx", self.cost_fx)
+        if self.quantity == 0 and self.average_price != 0:
+            raise ValueError("average price must be zero when quantity is zero")
 
     @property
-    def total_cost_cny(self) -> Decimal:
-        if self._total_cost_cny is not None:
-            return self._total_cost_cny
-        return self.quantity * self.average_price * self.cost_fx
+    def total_cost_trade_currency(self) -> Decimal:
+        return self.quantity * self.average_price
 
 
 @dataclass(frozen=True)
@@ -92,10 +81,15 @@ class FeeRule:
 
 
 def add_purchase(current: CostBasis, purchase: Purchase) -> CostBasis:
+    """Add a purchase to the trade-currency cost basis.
+
+    ``purchase.fx`` is only used to translate a CNY-denominated fee into the
+    holding's trade currency. The resulting cost basis never stores or depends
+    on a historical CNY exchange rate.
+    """
     values = (
         current.quantity,
         current.average_price,
-        current.cost_fx,
         purchase.quantity,
         purchase.price,
         purchase.fx,
@@ -112,34 +106,15 @@ def add_purchase(current: CostBasis, purchase: Purchase) -> CostBasis:
             + (purchase.fee_cny / purchase.fx)
         )
 
-        original_cny_cost = current.total_cost_cny
-        purchase_cny_cost = (
-            purchase.quantity * purchase.price * purchase.fx
-            + (purchase.fee_trade_currency * purchase.fx)
-            + purchase.fee_cny
-        )
-
         new_quantity = current.quantity + purchase.quantity
         new_trade_cost = original_trade_cost + purchase_trade_cost
-        new_total_cost_cny = original_cny_cost + purchase_cny_cost
 
         if new_quantity == 0 or new_trade_cost == 0:
-            return CostBasis(
-                quantity=Decimal("0"),
-                average_price=Decimal("0"),
-                cost_fx=Decimal("0"),
-                _total_cost_cny=Decimal("0"),
-            )
+            return CostBasis(quantity=Decimal("0"), average_price=Decimal("0"))
 
         new_average_price = new_trade_cost / new_quantity
-        new_cost_fx = new_total_cost_cny / new_trade_cost
 
-        return CostBasis(
-            quantity=new_quantity,
-            average_price=new_average_price,
-            cost_fx=new_cost_fx,
-            _total_cost_cny=new_total_cost_cny,
-        )
+        return CostBasis(quantity=new_quantity, average_price=new_average_price)
 
 
 def sell_quantity(current: CostBasis, quantity: Decimal) -> CostBasis:
@@ -149,19 +124,11 @@ def sell_quantity(current: CostBasis, quantity: Decimal) -> CostBasis:
 
     remaining_quantity = current.quantity - quantity
     if remaining_quantity == 0:
-        return CostBasis(
-            quantity=Decimal("0"),
-            average_price=Decimal("0"),
-            cost_fx=Decimal("0"),
-            _total_cost_cny=Decimal("0"),
-        )
+        return CostBasis(quantity=Decimal("0"), average_price=Decimal("0"))
 
-    remaining_total_cost_cny = remaining_quantity * current.average_price * current.cost_fx
     return CostBasis(
         quantity=remaining_quantity,
         average_price=current.average_price,
-        cost_fx=current.cost_fx,
-        _total_cost_cny=remaining_total_cost_cny,
     )
 
 

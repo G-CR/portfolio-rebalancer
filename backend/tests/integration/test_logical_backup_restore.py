@@ -62,7 +62,7 @@ def _storage(tmp_path: Path, *, safety_retention: int = 5) -> BackupStorage:
 
 async def _seed_state(session: AsyncSession, secret_store: SecretStore, *, name: str, secret: str) -> None:
     session.add(AssetClass(id=ASSET_ID, name=name, target_weight=Decimal("1.000000000000"), display_order=0, is_active=True, notes="恢复测试", created_at=NOW, updated_at=NOW))
-    session.add(Setting(id=SETTING_ID, refresh_hour=7, refresh_minute=30, provider_priority=["yahoo"], default_tolerance=Decimal("0.010000000000"), minimum_trade_amount_cny=Decimal("100.000000000000"), allow_sell=True, allow_fx=True, rebalance_available_cny=Decimal("0"), rebalance_available_usd=Decimal("0"), rebalance_valuation_basis="actual", email_enabled=False, email_recipient=None, email_smtp_host=None, email_smtp_port=465, email_smtp_security="ssl", email_smtp_username=None, email_from=None, created_at=NOW, updated_at=NOW))
+    session.add(Setting(id=SETTING_ID, refresh_hour=7, refresh_minute=30, provider_priority=["yahoo"], default_tolerance=Decimal("0.010000000000"), minimum_trade_amount_cny=Decimal("100.000000000000"), allow_sell=True, allow_fx=True, rebalance_available_cny=Decimal("0"), rebalance_available_usd=Decimal("0"), email_enabled=False, email_recipient=None, email_smtp_host=None, email_smtp_port=465, email_smtp_security="ssl", email_smtp_username=None, email_from=None, created_at=NOW, updated_at=NOW))
     session.add(EncryptedSecret(id=SECRET_ID, provider="yahoo", encrypted_value=secret_store.encrypt(secret).decode("ascii"), masked_value="****test", validation_status="valid", validation_message="synthetic", last_validated_at=NOW, created_at=NOW, updated_at=NOW))
     await session.commit()
 

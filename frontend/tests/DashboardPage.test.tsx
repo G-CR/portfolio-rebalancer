@@ -16,7 +16,7 @@ describe("DashboardPage", () => {
     const value = screen.getByText("1,268,420");
     expect(decision.compareDocumentPosition(value) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByLabelText(/资产校准尺$/)).toHaveLength(5);
-    expect(screen.getByRole("heading", { name: "盈亏拆分" })).toBeInTheDocument();
+    expect(screen.getByText("浮动盈亏")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "数据状态" })).toBeInTheDocument();
   });
 
@@ -44,7 +44,6 @@ describe("DashboardPage", () => {
         ...item,
         target_weight: "0.0015",
         actual_weight: "0.0025",
-        fx_neutral_weight: "0.0035",
         drift: "0.0010",
       } : item),
     };
@@ -55,7 +54,6 @@ describe("DashboardPage", () => {
     expect(await screen.findByText("允许偏离 ±0.2pp")).toBeInTheDocument();
     expect(screen.getByText("目标 0.2%")).toBeInTheDocument();
     expect(screen.getByText("实际 0.3%")).toBeInTheDocument();
-    expect(screen.getByText("剔汇率 0.4%")).toBeInTheDocument();
     expect(screen.getByText("+0.1pp")).toBeInTheDocument();
   });
 
@@ -80,12 +78,9 @@ describe("DashboardPage", () => {
         data_status: "setup",
         cost_cny: "0",
         market_value_cny: "0",
-        fx_neutral_value_cny: "0",
         unrealized_pnl: "0",
-        price_effect: "0",
-        fx_effect: "0",
         overseas_weight: "0",
-        decision: { status: "setup", title: "开始建立组合", reason: "添加第一个持仓后即可查看配置偏离与盈亏拆分。", max_drift: "0", fx_contribution: "0", primary_action: "add_holding" },
+        decision: { status: "setup", title: "开始建立组合", reason: "添加第一个持仓后即可查看配置偏离与盈亏。", max_drift: "0", primary_action: "add_holding" },
         asset_classes: [], holdings: [], data_inputs: [],
       }))],
     });

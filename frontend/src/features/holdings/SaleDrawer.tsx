@@ -62,7 +62,7 @@ export function SaleDrawer({ holding, open, onClose, onUpdated }: Props) {
         <div className={styles.identityStrip}><strong>{holding.symbol}</strong><span>{holding.name}</span><span>当前份额 {holding.quantity}</span></div>
         {error ? <div className={styles.alert} role="alert">{error}</div> : null}
         <section className={styles.drawerSection}>
-          <div className={styles.sectionHeading}><span className={styles.step}>01</span><div><h3>卖出份额</h3><p>卖出只减少当前份额，保留剩余持仓的成本价与成本汇率。</p></div></div>
+          <div className={styles.sectionHeading}><span className={styles.step}>01</span><div><h3>卖出份额</h3><p>卖出只减少当前份额，保留剩余持仓的平均成本价。</p></div></div>
           <FormField label="卖出份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
           <FormField label="调整备注"><textarea value={note} onChange={(event) => setNote(event.target.value)} /></FormField>
         </section>

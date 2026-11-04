@@ -1,6 +1,5 @@
 import { Calculator } from "lucide-react";
 
-import type { RebalanceValuationBasis } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
 import styles from "./Rebalance.module.css";
 
@@ -10,7 +9,6 @@ export type RebalanceFormState = {
   tolerance: string;
   allowSell: boolean;
   allowFx: boolean;
-  valuationBasis: RebalanceValuationBasis;
   acknowledgeStaleData: boolean;
 };
 
@@ -20,11 +18,10 @@ type Props = {
   disabled: boolean;
   hasPreview: boolean;
   onChange: (value: RebalanceFormState) => void;
-  onBasisChange: (basis: RebalanceValuationBasis) => void;
   onSubmit: () => void;
 };
 
-export function RebalanceInputs({ value, pending, disabled, hasPreview, onChange, onBasisChange, onSubmit }: Props) {
+export function RebalanceInputs({ value, pending, disabled, hasPreview, onChange, onSubmit }: Props) {
   const set = <K extends keyof RebalanceFormState>(key: K, next: RebalanceFormState[K]) => onChange({ ...value, [key]: next });
   return (
     <aside className={styles.inputs} aria-labelledby="rebalance-inputs-title">
@@ -32,12 +29,6 @@ export function RebalanceInputs({ value, pending, disabled, hasPreview, onChange
         <p>CALIBRATION INPUT</p>
         <h2 id="rebalance-inputs-title">本次可用资金与约束</h2>
       </header>
-
-      <fieldset className={styles.segmented}>
-        <legend>计算口径</legend>
-        <label><input type="radio" name="valuation-basis" checked={value.valuationBasis === "actual"} disabled={disabled} onChange={() => onBasisChange("actual")} />实际占比</label>
-        <label><input type="radio" name="valuation-basis" checked={value.valuationBasis === "fx_neutral"} disabled={disabled} onChange={() => onBasisChange("fx_neutral")} />剔汇率口径</label>
-      </fieldset>
 
       <div className={styles.fieldGrid}>
         <FormField label="人民币" suffix="CNY"><input inputMode="decimal" value={value.availableCny} disabled={disabled} onChange={(event) => set("availableCny", event.target.value)} /></FormField>

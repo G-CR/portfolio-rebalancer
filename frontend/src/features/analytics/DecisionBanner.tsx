@@ -32,7 +32,6 @@ export function DecisionBanner({ decision }: { decision: PortfolioDecision }) {
       {showFacts && (
         <dl className={styles.decisionFacts}>
           <div><dt>最大偏离</dt><dd>{formatPercent(decision.max_drift)}</dd></div>
-          <div><dt>汇率贡献</dt><dd>{formatPercent(decision.fx_contribution)}</dd></div>
         </dl>
       )}
       <Link className={styles.decisionAction} to={action.to}>{action.label}<ArrowRight size={15} aria-hidden="true" /></Link>

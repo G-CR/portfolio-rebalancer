@@ -44,13 +44,6 @@ export async function seedPortfolio(
         ...rebalancePreviewFixture.result,
         trades: replaceTradeSymbols(rebalancePreviewFixture.result.trades),
       },
-      fx_comparison: {
-        ...rebalancePreviewFixture.fx_comparison,
-        result: {
-          ...rebalancePreviewFixture.fx_comparison.result,
-          trades: replaceTradeSymbols(rebalancePreviewFixture.fx_comparison.result.trades),
-        },
-      },
     };
   };
   const analytics = options.analytics ?? (state === "empty" ? { ...portfolioFixture, decision: { ...portfolioFixture.decision, status: "setup", title: "开始建立组合", primary_action: "add_holding" }, asset_classes: [], holdings: [] } : portfolioFixture);
@@ -117,7 +110,6 @@ export async function seedPortfolio(
       rebalancePlan = {
         ...rebalancePlanFixture,
         status: planStatus,
-        valuation_basis: payload.valuation_basis,
         available_cny: payload.available_cny,
         available_usd: payload.available_usd,
         minimum_trade_cny: null,
@@ -127,7 +119,6 @@ export async function seedPortfolio(
         tolerance: payload.tolerance ?? rebalanceDefaults.tolerance,
         holding_versions: holdingVersions,
         result: preview.result,
-        fx_comparison: preview.fx_comparison,
       };
       return route.fulfill({ status: 201, json: rebalancePlan });
     }
@@ -138,7 +129,7 @@ export async function seedPortfolio(
     }
     if (path.endsWith("/complete")) {
       planStatus = "completed";
-      rebalancePlan = { ...(rebalancePlan ?? rebalancePlanFixture), status: planStatus, before_snapshot_id: "snapshot-before", after_snapshot_id: "snapshot-after", baseline_reset_at: new Date().toISOString() };
+      rebalancePlan = { ...(rebalancePlan ?? rebalancePlanFixture), status: planStatus, before_snapshot_id: "snapshot-before", after_snapshot_id: "snapshot-after" };
       return route.fulfill({ json: rebalancePlan });
     }
     if (path.includes("/cost-adjustments/") && route.request().method() === "GET") return route.fulfill({ json: { holding_id: holdingFixture.id, holding_version: 1, defaults: null, items: [] } });

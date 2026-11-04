@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from app.api.routes import backups as backup_routes
 from app.backups.archive import ArchiveMetadata, write_archive
-from app.backups.constants import DATA_MEMBERS
+from app.backups.constants import CURRENT_FORMAT_VERSION, DATA_MEMBERS
 from app.db.models import AssetClass, DEFAULT_SETTINGS_ID
 from app.db.session import SessionFactory
 from app.main import app
@@ -222,7 +222,7 @@ async def test_safety_list_download_and_explicit_delete_confirmation(api_client)
             "id": str(backup_id),
             "exported_at": "2026-08-23T00:00:00Z",
             "source_application_version": "api-test",
-            "format_version": 1,
+            "format_version": CURRENT_FORMAT_VERSION,
             "size_bytes": storage.safety_path(backup_id).stat().st_size,
             "record_counts": {member: 0 for member in DATA_MEMBERS},
         }
@@ -352,7 +352,6 @@ def _preview_source() -> tuple[dict[str, list[dict[str, object]]], str]:
         "allow_fx": True,
         "rebalance_available_cny": "0.000000000000",
         "rebalance_available_usd": "0.000000000000",
-        "rebalance_valuation_basis": "actual",
         "email_enabled": True,
         "email_recipient": "synthetic@example.test",
         "email_smtp_host": "smtp.example.test",
@@ -428,8 +427,8 @@ async def test_upload_streams_validates_and_never_mutates_database(
     assert await _business_table_hashes() == before
     preview = response.json()
     assert preview["source_application_version"] == "api-upload-test"
-    assert preview["source_format_version"] == 1
-    assert preview["current_format_version"] == 1
+    assert preview["source_format_version"] == CURRENT_FORMAT_VERSION
+    assert preview["current_format_version"] == CURRENT_FORMAT_VERSION
     assert preview["record_counts"]["credentials.json"] == 1
     assert preview["current_record_counts"]["data/asset_classes.json"] >= 1
     assert preview["count_comparison"]["credentials.json"] == {

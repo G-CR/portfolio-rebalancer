@@ -227,7 +227,10 @@ def _database_parameter_bytes(row: dict[str, object]) -> int:
 def _insert_statement(member: str):
     contract = CONTRACTS_BY_MEMBER[member]
     if not any(codec.codec is Codec.JSON for codec in contract.codecs):
-        return insert(contract.model)
+        # Use the Core table so ORM mapper events (notably the holdings
+        # version_id_col, which resets the version to 1 on insert) cannot
+        # rewrite the exact logical values from the archive.
+        return insert(contract.model.__table__)
     values = [
         (
             f"CAST(:{column} AS JSON)"

@@ -16,7 +16,6 @@ export function CorrectionDrawer({ holding, open, onClose, onUpdated }: Props) {
   const confirmMutation = useConfirmAdjustment<CorrectionPayload>(holding.id);
   const [quantity, setQuantity] = useState(holding.quantity);
   const [averagePrice, setAveragePrice] = useState(holding.average_cost_price);
-  const [costFx, setCostFx] = useState(holding.cost_fx_to_cny);
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState(false);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
@@ -24,9 +23,8 @@ export function CorrectionDrawer({ holding, open, onClose, onUpdated }: Props) {
   const payload = useMemo<CorrectionPayload>(() => ({
     quantity,
     average_cost_price: averagePrice,
-    cost_fx_to_cny: costFx,
     note: note.trim(),
-  }), [averagePrice, costFx, note, quantity]);
+  }), [averagePrice, note, quantity]);
   const currentFingerprint = JSON.stringify(payload);
   const preview = fingerprint === currentFingerprint ? previewMutation.data ?? null : null;
   const canConfirm = Boolean(preview && previewIdentityMatches(preview));
@@ -73,11 +71,10 @@ export function CorrectionDrawer({ holding, open, onClose, onUpdated }: Props) {
           <div className={styles.fieldGrid}>
             <FormField label="修正后份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
             <FormField label="修正后成本价" required><input type="text" inputMode="decimal" value={averagePrice} onChange={(event) => setAveragePrice(event.target.value)} /></FormField>
-            <FormField label="修正后成本汇率" required><input type="text" inputMode="decimal" value={costFx} onChange={(event) => setCostFx(event.target.value)} /></FormField>
           </div>
           <FormField label="修正原因" required error={noteError ? "请填写修正原因" : undefined}><textarea value={note} onChange={(event) => { setNote(event.target.value); setNoteError(false); }} /></FormField>
         </section>
-        <button className={styles.previewButton} type="button" disabled={!quantity || !averagePrice || !costFx || previewMutation.isPending} onClick={() => void generate()}><RefreshCw size={16} aria-hidden="true" />预览人工修正</button>
+        <button className={styles.previewButton} type="button" disabled={!quantity || !averagePrice || previewMutation.isPending} onClick={() => void generate()}><RefreshCw size={16} aria-hidden="true" />预览人工修正</button>
         {fingerprint && fingerprint !== currentFingerprint ? <p className={styles.staleNotice}>输入已变化，请重新预览人工修正</p> : null}
         {preview ? <CostBasisPreview preview={preview} /> : null}
       </div>

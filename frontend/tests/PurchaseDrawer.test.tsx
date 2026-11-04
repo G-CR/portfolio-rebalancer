@@ -26,14 +26,12 @@ const preview = {
   before: {
     quantity: "12.0000",
     average_cost_price: "510.25",
-    cost_fx_to_cny: "7.18",
-    total_cost_cny: "43963.14",
+    total_cost_trade_currency: "6123.00",
   },
   after: {
     quantity: "17.0000",
     average_cost_price: "551.478529411765",
-    cost_fx_to_cny: "7.181846190522",
-    total_cost_cny: "67330.78",
+    total_cost_trade_currency: "9375.14",
   },
   fee: { mode: "actual", currency: "USD", amount: "2.30", amount_cny: "16.53" },
   note: null,
@@ -50,7 +48,6 @@ async function fillTransaction(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByRole("textbox", { name: "新增份额" }), "5.000000000001");
   expect(screen.getByLabelText(/成交日期/)).toHaveValue(currentLocalDate());
   await user.type(screen.getByRole("textbox", { name: "成交价" }), "650.200000000001");
-  await user.type(screen.getByRole("textbox", { name: "本次汇率" }), "7.185000000001");
 }
 
 describe("PurchaseDrawer", () => {
@@ -82,7 +79,7 @@ describe("PurchaseDrawer", () => {
     const previewRegion = await screen.findByRole("region", { name: "成本预览" });
     expect(within(previewRegion).getByText("17.0000")).toBeInTheDocument();
     expect(screen.getByText("实际费用 2.30 USD")).toBeInTheDocument();
-    expect(screen.getByText("份额 × 成本价 × 成本汇率 = 人民币成本")).toBeInTheDocument();
+    expect(screen.getByText("份额 × 成本价 = 交易币种成本")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "更新 SPY 持仓" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "更新 SPY 持仓" }));
@@ -90,7 +87,6 @@ describe("PurchaseDrawer", () => {
     expect(previewBodies[0]).toMatchObject({
       quantity: "5.000000000001",
       price: "650.200000000001",
-      fx: "7.185000000001",
       actual_fee: "2.300000000001",
       commission_rate: "0.0005",
       minimum_commission: "1.00",

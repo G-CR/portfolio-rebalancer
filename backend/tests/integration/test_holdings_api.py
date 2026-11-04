@@ -24,8 +24,6 @@ def _holding_payload(asset_class_id: str, **overrides: object) -> dict[str, obje
         "trade_currency": "USD",
         "quantity": "10",
         "average_cost_price": "500",
-        "cost_fx_to_cny": "7.20",
-        "baseline_fx_to_cny": "7.20",
         "lot_size": "1",
         "quantity_precision": 0,
         "is_rebalance_preferred": True,
@@ -46,8 +44,6 @@ def _replacement_payload(
         "trade_currency": "USD",
         "quantity": "8",
         "average_cost_price": "625.40",
-        "cost_fx_to_cny": "7.18",
-        "baseline_fx_to_cny": "7.15",
         "lot_size": "1",
         "quantity_precision": 0,
         "preferred_data_source": "yahoo",
@@ -320,7 +316,6 @@ async def test_replace_rejects_source_in_inactive_asset_class_without_changing_s
     [
         ({"market": "MOON"}, "HOLDING_MARKET_INVALID"),
         ({"trade_currency": "USDT"}, "HOLDING_TRADE_CURRENCY_INVALID"),
-        ({"cost_fx_to_cny": "0"}, "FX_MUST_BE_POSITIVE"),
     ],
 )
 async def test_replace_rejects_invalid_target_fields_without_changing_source(
@@ -343,7 +338,7 @@ async def test_replace_rejects_invalid_target_fields_without_changing_source(
     await _assert_source_active_without_adjustments(api_client, source["id"])
 
 
-async def test_replace_cny_target_normalizes_fx_values(
+async def test_replace_accepts_cny_target(
     api_client, asset_class_id
 ) -> None:
     source = (
@@ -358,14 +353,12 @@ async def test_replace_cny_target_normalizes_fx_values(
             name="沪深 300 ETF",
             market="SH",
             trade_currency="CNY",
-            cost_fx_to_cny="7.18",
-            baseline_fx_to_cny="7.15",
         ),
     )
 
     assert response.status_code == 200
     target = response.json()["target"]
-    assert (target["cost_fx_to_cny"], target["baseline_fx_to_cny"]) == ("1", "1")
+    assert target["trade_currency"] == "CNY"
 
 
 async def test_replace_non_preferred_source_promotes_target(
@@ -468,19 +461,7 @@ async def test_list_holdings_returns_empty_when_none_created(api_client) -> None
     assert response.json() == []
 
 
-async def test_create_usd_holding_requires_positive_fx_values(
-    api_client, asset_class_id
-) -> None:
-    response = await api_client.post(
-        "/api/holdings",
-        json=_holding_payload(asset_class_id, cost_fx_to_cny="0"),
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "FX_MUST_BE_POSITIVE"
-
-
-async def test_create_cny_holding_normalizes_fx_and_sets_first_holding_preferred(
+async def test_create_cny_holding_sets_first_holding_preferred(
     api_client, asset_class_id
 ) -> None:
     response = await api_client.post(
@@ -493,16 +474,12 @@ async def test_create_cny_holding_normalizes_fx_and_sets_first_holding_preferred
             trade_currency="CNY",
             quantity="100",
             average_cost_price="3.4567",
-            cost_fx_to_cny="7.20",
-            baseline_fx_to_cny="6.80",
             is_rebalance_preferred=False,
         ),
     )
 
     assert response.status_code == 201
     assert response.json()["trade_currency"] == "CNY"
-    assert response.json()["cost_fx_to_cny"] == "1"
-    assert response.json()["baseline_fx_to_cny"] == "1"
     assert response.json()["is_rebalance_preferred"] is True
     assert response.json()["version"] == 1
 
@@ -567,14 +544,12 @@ async def test_patch_holding_updates_values_and_increments_version(
         json={
             "quantity": "12",
             "average_cost_price": "510.50",
-            "baseline_fx_to_cny": "7.15",
         },
     )
 
     assert response.status_code == 200
     assert response.json()["quantity"] == "12"
     assert response.json()["average_cost_price"] == "510.50"
-    assert response.json()["baseline_fx_to_cny"] == "7.15"
     assert response.json()["version"] == 2
 
     listed = (await api_client.get("/api/holdings")).json()

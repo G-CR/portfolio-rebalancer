@@ -25,7 +25,6 @@ function handlers() {
       status: "completed",
       before_snapshot_id: "30000000-0000-4000-8000-000000000010",
       after_snapshot_id: "30000000-0000-4000-8000-000000000011",
-      baseline_reset_at: "2026-07-14T00:20:00+00:00",
     })),
   ];
 }
@@ -43,11 +42,10 @@ it("saves, starts, and completes a formal rebalance plan", async () => {
   expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
   expect(screen.getByText("系统没有向券商提交订单")).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "人民币" })).toBeDisabled();
-  expect(screen.getByRole("radio", { name: "实际占比" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "重新测算" })).toBeDisabled();
 
   await user.click(screen.getByRole("button", { name: "完成再平衡并建立新基准" }));
-  expect(await screen.findByText("本次再平衡已完成，新汇率基准已建立")).toBeInTheDocument();
+  expect(await screen.findByText("本次再平衡已完成")).toBeInTheDocument();
 });
 
 it("shows four ordered execution steps and completion safeguards only while a plan is in progress", async () => {
@@ -67,8 +65,8 @@ it("shows four ordered execution steps and completion safeguards only while a pl
   expect(checklist).toHaveTextContent("按方案完成券商交易");
   expect(checklist).toHaveTextContent("更新实际持仓数量");
   expect(checklist).toHaveTextContent("核对调整结果");
-  expect(checklist).toHaveTextContent("完成再平衡并建立新基准");
-  expect(screen.getByText("完成后会创建调仓后快照，并将当前汇率重置为新的汇率基准；不会修改成本价或成本汇率。")).toBeInTheDocument();
+  expect(checklist).toHaveTextContent("完成再平衡");
+  expect(screen.getByText("完成后会创建调仓后快照；不会修改平均成本价、份额或当前汇率。")).toBeInTheDocument();
 });
 
 it("can start directly by creating a plan first", async () => {
@@ -90,7 +88,6 @@ it("restores an in-progress plan so it can be completed after returning to rebal
         items: [{
           ...rebalancePlanFixture,
           status: "in_progress",
-          valuation_basis: "fx_neutral",
           tolerance: "0.0075",
           available_cny: "12345.67",
           available_usd: "890.12",
@@ -108,7 +105,6 @@ it("restores an in-progress plan so it can be completed after returning to rebal
           status: "completed",
           before_snapshot_id: "30000000-0000-4000-8000-000000000010",
           after_snapshot_id: "30000000-0000-4000-8000-000000000011",
-          baseline_reset_at: "2026-07-14T00:20:00+00:00",
         });
       }),
       ...handlers(),
@@ -118,9 +114,6 @@ it("restores an in-progress plan so it can be completed after returning to rebal
 
   expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
   expect(screen.getByText("建议执行 4 笔交易")).toBeInTheDocument();
-  expect(screen.getByText("剔汇率模拟")).toBeInTheDocument();
-  expect(screen.getByRole("radio", { name: "剔汇率口径" })).toBeChecked();
-  expect(screen.getByRole("radio", { name: "剔汇率口径" })).toBeDisabled();
   expect(screen.getByRole("textbox", { name: "允许偏离" })).toHaveValue("0.75");
   expect(screen.getByRole("textbox", { name: "允许偏离" })).toBeDisabled();
   expect(screen.getByRole("textbox", { name: "人民币" })).toHaveValue("12345.67");
@@ -136,6 +129,6 @@ it("restores an in-progress plan so it can be completed after returning to rebal
   expect(screen.getAllByTestId("tolerance-band")[0]).toHaveAccessibleName("允许偏离目标正负 0.8 个百分点");
   await user.click(screen.getByRole("button", { name: "完成再平衡并建立新基准" }));
 
-  expect(await screen.findByText("本次再平衡已完成，新汇率基准已建立")).toBeInTheDocument();
+  expect(await screen.findByText("本次再平衡已完成")).toBeInTheDocument();
   expect(completed).toBe(true);
 });

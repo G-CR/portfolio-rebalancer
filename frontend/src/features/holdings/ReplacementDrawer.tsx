@@ -23,8 +23,6 @@ type ReplacementField =
   | "averageCost"
   | "accountName"
   | "market"
-  | "costFx"
-  | "baselineFx"
   | "lotSize"
   | "precision";
 
@@ -64,8 +62,6 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
     markets.some((option) => option.value === holding.market) ? holding.market : "US",
   );
   const [currency, setCurrency] = useState(holding.trade_currency);
-  const [costFx, setCostFx] = useState(holding.cost_fx_to_cny);
-  const [baselineFx, setBaselineFx] = useState(holding.baseline_fx_to_cny);
   const [lotSize, setLotSize] = useState(holding.lot_size);
   const [precision, setPrecision] = useState(String(holding.quantity_precision));
   const [preferredDataSource, setPreferredDataSource] = useState<ProviderName | "">(holding.preferred_data_source ?? "");
@@ -87,10 +83,6 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
     if (decimalSign(quantity) !== 1) errors.quantity = "请输入大于 0 的有效目标份额。";
     const averageCostSign = decimalSign(averageCost);
     if (averageCostSign === null || averageCostSign < 0) errors.averageCost = "请输入大于或等于 0 的有效平均成本价。";
-    if (currency !== "CNY") {
-      if (decimalSign(costFx) !== 1) errors.costFx = "请输入大于 0 的有效成本汇率。";
-      if (decimalSign(baselineFx) !== 1) errors.baselineFx = "请输入大于 0 的有效基准汇率。";
-    }
     const lotSizeSign = decimalSign(lotSize);
     if (lotSizeSign === null || lotSizeSign < 0) errors.lotSize = "请输入大于或等于 0 的有效最小交易单位。";
     const trimmedPrecision = precision.trim();
@@ -115,8 +107,6 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
           trade_currency: currency,
           quantity,
           average_cost_price: averageCost,
-          cost_fx_to_cny: currency === "CNY" ? "1" : costFx,
-          baseline_fx_to_cny: currency === "CNY" ? "1" : baselineFx,
           lot_size: lotSize,
           quantity_precision: parsedPrecision,
           preferred_data_source: preferredDataSource || null,
@@ -196,8 +186,6 @@ export function ReplacementDrawer({ holding, assetClassName, open, onClose, onRe
                   <option value="CNY">CNY</option><option value="USD">USD</option>
                 </select>
               </FormField>
-              <FormField label="成本汇率" error={fieldErrors.costFx}><input inputMode="decimal" value={currency === "CNY" ? "1" : costFx} disabled={currency === "CNY"} onChange={(event) => setCostFx(event.target.value)} /></FormField>
-              <FormField label="基准汇率" error={fieldErrors.baselineFx}><input inputMode="decimal" value={currency === "CNY" ? "1" : baselineFx} disabled={currency === "CNY"} onChange={(event) => setBaselineFx(event.target.value)} /></FormField>
               <FormField label="最小交易单位" error={fieldErrors.lotSize}><input inputMode="decimal" value={lotSize} onChange={(event) => setLotSize(event.target.value)} /></FormField>
               <FormField label="份额精度" error={fieldErrors.precision}><input inputMode="numeric" value={precision} onChange={(event) => setPrecision(event.target.value)} /></FormField>
               <FormField label="首选行情来源">

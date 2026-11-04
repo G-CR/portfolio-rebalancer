@@ -122,8 +122,6 @@ def build_digest_html(
                 _money(holding.market_value_cny),
                 _signed_money(holding.unrealized_pnl),
                 _percent(holding.unrealized_return),
-                _signed_money(holding.price_effect),
-                _signed_money(holding.fx_effect),
             ]
             for holding in holdings
         ]
@@ -136,8 +134,6 @@ def build_digest_html(
                     "市值 (CNY)",
                     "浮动盈亏 (CNY)",
                     "盈亏率",
-                    "价格影响",
-                    "汇率影响",
                 ],
                 rows,
             )

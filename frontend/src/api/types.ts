@@ -72,8 +72,6 @@ export interface Holding {
   trade_currency: "CNY" | "USD" | string;
   quantity: DecimalString;
   average_cost_price: DecimalString;
-  cost_fx_to_cny: DecimalString;
-  baseline_fx_to_cny: DecimalString;
   lot_size: DecimalString;
   quantity_precision: number;
   preferred_data_source: ProviderName | null;
@@ -91,8 +89,6 @@ export interface HoldingReplacementRequest {
   trade_currency: string;
   quantity: DecimalString;
   average_cost_price: DecimalString;
-  cost_fx_to_cny: DecimalString;
-  baseline_fx_to_cny: DecimalString;
   lot_size: DecimalString;
   quantity_precision: number;
   preferred_data_source: ProviderName | null;
@@ -133,11 +129,8 @@ export interface HoldingAnalytics {
   unrealized_pnl_trade_currency: DecimalString;
   cost_cny: DecimalString;
   market_value_cny: DecimalString;
-  fx_neutral_value_cny: DecimalString;
   unrealized_pnl: DecimalString;
   unrealized_return: DecimalString;
-  price_effect: DecimalString;
-  fx_effect: DecimalString;
 }
 
 export interface AssetClassAnalytics {
@@ -146,15 +139,10 @@ export interface AssetClassAnalytics {
   target_weight: DecimalString;
   display_order: number;
   actual_weight: DecimalString;
-  fx_neutral_weight: DecimalString;
   drift: DecimalString;
-  fx_weight_contribution: DecimalString;
   cost_cny: DecimalString;
   market_value_cny: DecimalString;
-  fx_neutral_value_cny: DecimalString;
   unrealized_pnl: DecimalString;
-  price_effect: DecimalString;
-  fx_effect: DecimalString;
 }
 
 export interface PortfolioDecision {
@@ -162,7 +150,6 @@ export interface PortfolioDecision {
   title: string;
   reason: string;
   max_drift: DecimalString;
-  fx_contribution: DecimalString;
   primary_action: "add_holding" | "simulate_contribution" | "view_rebalance";
 }
 
@@ -174,11 +161,8 @@ export interface PortfolioAnalytics {
   tolerance: DecimalString;
   cost_cny: DecimalString;
   market_value_cny: DecimalString;
-  fx_neutral_value_cny: DecimalString;
   unrealized_pnl: DecimalString;
   unrealized_return: DecimalString;
-  price_effect: DecimalString;
-  fx_effect: DecimalString;
   overseas_weight: DecimalString;
   decision: PortfolioDecision;
   asset_classes: AssetClassAnalytics[];
@@ -210,13 +194,9 @@ export interface SnapshotSummary {
   has_stale_data: boolean;
   has_manual_data: boolean;
   total_market_value_cny: DecimalString;
-  total_fx_neutral_value_cny: DecimalString;
   total_cost_value_cny: DecimalString;
   total_unrealized_pnl_cny: DecimalString;
-  total_price_effect_cny: DecimalString;
-  total_fx_effect_cny: DecimalString;
   actual_weight: DecimalString;
-  fx_neutral_weight: DecimalString;
   target_weight: DecimalString | null;
 }
 
@@ -231,19 +211,13 @@ export interface SnapshotItem {
   quantity: DecimalString;
   market_price: DecimalString | null;
   current_fx_to_cny: DecimalString | null;
-  baseline_fx_to_cny: DecimalString;
   average_cost_price: DecimalString;
-  cost_fx_to_cny: DecimalString;
   target_weight: DecimalString;
   market_value_cny: DecimalString | null;
-  fx_neutral_value_cny: DecimalString | null;
   cost_value_cny: DecimalString | null;
   unrealized_pnl_amount_cny: DecimalString | null;
   unrealized_pnl_rate: DecimalString | null;
-  price_effect_cny: DecimalString | null;
-  fx_effect_cny: DecimalString | null;
   actual_weight: DecimalString | null;
-  fx_neutral_weight: DecimalString | null;
   price_status: AnalyticsDataStatus;
   fx_status: AnalyticsDataStatus;
 }
@@ -273,15 +247,14 @@ export interface HoldingDefaults {
 export interface CostBasisState {
   quantity: DecimalString;
   average_cost_price: DecimalString;
-  cost_fx_to_cny: DecimalString;
-  total_cost_cny: DecimalString;
+  total_cost_trade_currency: DecimalString;
 }
 
 export interface FeePreview {
   mode: "estimated" | "actual";
   currency: string;
   amount: DecimalString;
-  amount_cny: DecimalString;
+  amount_cny: DecimalString | null;
 }
 
 export type CostOperation = "purchase" | "sell" | "manual_correction" | "restore";
@@ -317,7 +290,6 @@ export interface CostAdjustmentCollection {
 export interface PurchasePayload {
   quantity: DecimalString;
   price: DecimalString;
-  fx: DecimalString;
   fee_currency: string | null;
   commission_rate: DecimalString | null;
   minimum_commission: DecimalString | null;
@@ -336,7 +308,6 @@ export interface SellPayload {
 export interface CorrectionPayload {
   quantity: DecimalString;
   average_cost_price: DecimalString;
-  cost_fx_to_cny: DecimalString;
   note: string;
 }
 
@@ -351,7 +322,6 @@ export interface ConfirmAdjustmentRequest<TPayload> {
   payload: TPayload;
 }
 
-export type RebalanceValuationBasis = "actual" | "fx_neutral";
 export type RebalanceDataStatus = "valid" | "stale" | "manual";
 
 export interface RebalancePreviewPayload {
@@ -359,7 +329,6 @@ export interface RebalancePreviewPayload {
   request_token: string;
   available_cny: DecimalString;
   available_usd: DecimalString;
-  valuation_basis: RebalanceValuationBasis;
   allow_sell: boolean;
   allow_fx: boolean;
   tolerance: DecimalString;
@@ -403,11 +372,6 @@ export interface RebalanceResult {
   trades: RebalanceTradeSuggestion[];
 }
 
-export interface RebalanceComparison {
-  valuation_basis: RebalanceValuationBasis;
-  result: RebalanceResult;
-}
-
 export interface RebalancePreview {
   session_token: string;
   request_token: string;
@@ -415,9 +379,7 @@ export interface RebalancePreview {
   data_status: RebalanceDataStatus;
   acknowledge_stale_data: boolean;
   refresh_attempted: boolean;
-  valuation_basis: RebalanceValuationBasis;
   result: RebalanceResult;
-  fx_comparison: RebalanceComparison;
   input_signature?: string | null;
 }
 
@@ -450,7 +412,6 @@ export interface RebalancePlan extends Omit<RebalancePreview, "session_token" | 
   asset_class_targets: Record<string, string>;
   before_snapshot_id: string | null;
   after_snapshot_id: string | null;
-  baseline_reset_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -510,7 +471,6 @@ export interface GeneralSettingsUpdate {
 export interface RebalanceDefaults {
   available_cny: DecimalString;
   available_usd: DecimalString;
-  valuation_basis: RebalanceValuationBasis;
   tolerance: DecimalString;
   minimum_trade_cny: DecimalString;
   allow_sell: boolean;
@@ -521,7 +481,6 @@ export interface RebalanceDefaults {
 export interface RebalanceDefaultsUpdate {
   available_cny: DecimalString;
   available_usd: DecimalString;
-  valuation_basis: RebalanceValuationBasis;
   tolerance: DecimalString;
   allow_sell: boolean;
   allow_fx: boolean;

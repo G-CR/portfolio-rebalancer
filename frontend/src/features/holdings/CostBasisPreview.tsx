@@ -5,19 +5,18 @@ import { costBasisIdentityMatches } from "./decimalIdentity";
 import { formatDecimal } from "../analytics/format";
 import styles from "./Holdings.module.css";
 
-const COST_PRICE_KEYS = new Set(['average_cost_price']);
-const COST_FX_KEYS = new Set(['cost_fx_to_cny']);
-function fmtRawValue(key, value) {
+const COST_PRICE_KEYS = new Set(["average_cost_price"]);
+const MONEY_KEYS = new Set(["total_cost_trade_currency"]);
+function fmtRawValue(key: string, value: string) {
   if (COST_PRICE_KEYS.has(key)) return formatDecimal(value, 3);
-  if (COST_FX_KEYS.has(key)) return formatDecimal(value, 2);
+  if (MONEY_KEYS.has(key)) return formatDecimal(value, 2);
   return value;
 }
 
 const rows = [
   ["份额", "quantity"],
   ["平均成本价", "average_cost_price"],
-  ["成本汇率", "cost_fx_to_cny"],
-  ["人民币成本", "total_cost_cny"],
+  ["交易币种成本", "total_cost_trade_currency"],
 ] as const;
 
 export function previewIdentityMatches(preview: CostAdjustmentPreview | null) {
@@ -25,8 +24,7 @@ export function previewIdentityMatches(preview: CostAdjustmentPreview | null) {
   return costBasisIdentityMatches(
     preview.after.quantity,
     preview.after.average_cost_price,
-    preview.after.cost_fx_to_cny,
-    preview.after.total_cost_cny,
+    preview.after.total_cost_trade_currency,
   );
 }
 
@@ -59,7 +57,7 @@ export function CostBasisPreview({ preview }: { preview: CostAdjustmentPreview }
         {identityMatches ? <CheckCircle2 size={16} aria-hidden="true" /> : <XCircle size={16} aria-hidden="true" />}
         <div>
           <strong>{identityMatches ? "公式校验通过" : "公式校验未通过"}</strong>
-          <span>份额 × 成本价 × 成本汇率 = 人民币成本</span>
+          <span>份额 × 成本价 = 交易币种成本</span>
         </div>
       </div>
     </section>
