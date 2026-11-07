@@ -91,7 +91,7 @@ export function SnapshotsPage() {
             <button type="button" aria-pressed={range === "all"} onClick={() => setRange("all")}>全部时间</button>
           </div>
         </div>
-        <div className={styles.filterGroup}><label htmlFor="snapshot-type">快照类型</label><select id="snapshot-type" value={snapshotType} onChange={(event) => setSnapshotType(event.target.value as SnapshotType | "")}><option value="">全部类型</option><option value="daily">日终快照</option><option value="manual">手动快照</option><option value="rebalance_before">再平衡前</option><option value="rebalance_after">再平衡后</option></select></div>
+        <div className={styles.filterGroup}><label htmlFor="snapshot-type">快照类型</label><select id="snapshot-type" value={snapshotType} onChange={(event) => setSnapshotType(event.target.value as SnapshotType | "")}><option value="">全部类型</option><option value="daily">日终快照</option><option value="manual">手动快照</option></select></div>
         <div className={styles.filterGroup}><label htmlFor="snapshot-asset-class">资产类别</label><select id="snapshot-asset-class" value={assetClass} onChange={(event) => setAssetClass(event.target.value)}><option value="">全部类别</option>{assetClasses.data?.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></div>
       </div>
       <div className={styles.metrics} role="group" aria-label="主要分析口径">{metrics.map((item) => <button key={item.id} type="button" aria-pressed={metric === item.id} onClick={() => setMetric(item.id)}>{item.label}</button>)}</div>
