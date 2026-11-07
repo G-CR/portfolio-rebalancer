@@ -22,7 +22,10 @@
 .statusGrid span { color: var(--color-muted); font-size: 10px; }
 .statusGrid b { font-size: 11px; }
 .statusGrid small { overflow: hidden; color: var(--color-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.statusGrid em { position: absolute; top: var(--space-3); right: var(--space-4); font-family: var(--font-data); font-size: 10px; font-style: normal; }
+.statusLight { position: absolute; top: var(--space-3); right: var(--space-4); width: 10px; height: 10px; border-radius: 50%; background: #a3ada6; box-shadow: 0 0 0 4px rgb(163 173 166 / 12%); }
+.statusLight[data-status="valid"] { background: var(--color-planned); box-shadow: 0 0 0 4px rgb(46 116 88 / 12%), 0 0 10px rgb(46 116 88 / 25%); }
+.statusLight[data-status="stale"], .statusLight[data-status="manual"] { background: #b68622; box-shadow: 0 0 0 4px rgb(182 134 34 / 13%), 0 0 10px rgb(182 134 34 / 22%); }
+.statusLight[data-status="failed"], .statusLight[data-status="missing"] { background: var(--color-fx); box-shadow: 0 0 0 4px rgb(201 74 58 / 13%), 0 0 10px rgb(201 74 58 / 22%); }
 @keyframes pulse { to { opacity: .62; } }
 @media (max-width: 1200px) { .railGrid { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
 @media (max-width: 760px) { .rails, .dataStatus, .incomplete { padding: var(--space-4); } .railGrid, .statusGrid { grid-template-columns: 1fr; gap: 0; } .sectionHeading { align-items: flex-start; flex-direction: column; gap: var(--space-1); } .incomplete li { grid-template-columns: 80px 1fr; } .incomplete li em { grid-column: 2; } }

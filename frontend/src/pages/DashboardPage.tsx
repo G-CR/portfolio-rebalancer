@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import type { PortfolioIncompleteItem } from "../api/types";
 import { CalibrationRail } from "../components/CalibrationRail/CalibrationRail";
 import { DecisionBanner } from "../features/analytics/DecisionBanner";
-import { boundedRatioPercent, formatDataTime, formatDecimal, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
+import { boundedRatioPercent, formatDataTime, formatPercent, formatPercentagePoints, formatSignedPercentagePoints, statusLabel } from "../features/analytics/format";
 import { PortfolioMetrics } from "../features/analytics/PortfolioMetrics";
 import { usePortfolioAnalytics } from "../features/analytics/api";
 import styles from "./DashboardPage.module.css";
@@ -70,9 +70,9 @@ export function DashboardPage() {
       <section className={styles.dataStatus} aria-labelledby="data-status-title">
         <div className={styles.sectionHeading}><div><p>INPUT STATUS</p><h2 id="data-status-title">数据状态</h2></div>{data.has_stale_data ? <strong>数据已过期</strong> : data.has_manual_data ? <strong>包含手动值</strong> : <strong>数据有效</strong>}</div>
         <div className={styles.statusGrid}>{groups.map(([label, items]) => {
-          const attention = items.find((item) => item.status === "stale") ?? items.find((item) => item.status === "manual") ?? items[0];
+          const attention = items.find((item) => item.status === "failed" || item.status === "missing") ?? items.find((item) => item.status === "stale") ?? items.find((item) => item.status === "manual") ?? items[0];
           const source = attention?.source === "manual" ? "手动覆盖" : attention?.source ?? "本机";
-          return <div key={label}><span>{label}</span><b>{attention ? statusLabel(attention.status) : "未涉及"}</b><small>{attention ? `${source} · ${formatDataTime(attention.market_time)}` : "当前组合无此类数据"}</small>{attention?.value ? <em>{formatDecimal(attention.value, 6)}</em> : null}</div>;
+          return <div key={label}><span>{label}</span><b>{attention ? statusLabel(attention.status) : "未涉及"}</b><small>{attention ? `${source} · ${formatDataTime(attention.market_time)}` : "当前组合无此类数据"}</small><i className={styles.statusLight} data-status={attention?.status ?? "unused"} aria-hidden="true" /></div>;
         })}</div>
       </section>
     </section>

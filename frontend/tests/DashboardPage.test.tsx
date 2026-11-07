@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 
 import { DashboardPage } from "../src/pages/DashboardPage";
@@ -33,7 +33,12 @@ describe("DashboardPage", () => {
 
     expect((await screen.findAllByText("数据已过期")).length).toBeGreaterThan(0);
     expect(screen.getByText("1,268,420")).toBeInTheDocument();
-    expect(screen.getByText("590.42")).toBeInTheDocument();
+    const status = screen.getByRole("heading", { name: "数据状态" }).closest("section")!;
+    expect(within(status).queryByText("590.42")).not.toBeInTheDocument();
+    expect(within(status).getAllByText("数据已过期")).toHaveLength(2);
+    expect(status.querySelector('[data-status="stale"]')).toBeInTheDocument();
+    expect(status.querySelector('[data-status="manual"]')).toBeInTheDocument();
+    expect(status.querySelector('[data-status="unused"]')).toBeInTheDocument();
   });
 
   it("formats calibration percentage labels from exact decimal strings", async () => {
