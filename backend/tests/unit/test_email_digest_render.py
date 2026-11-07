@@ -150,6 +150,40 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "当前配置在容差内" not in html
 
 
+def test_digest_trade_totals_are_separate_and_rounded_after_summing() -> None:
+    trade = _result().trades[0]
+    trades = (
+        trade.model_copy(update={"amount_cny": "9007199254740993.005"}),
+        trade.model_copy(update={"amount_cny": "0.005"}),
+        trade.model_copy(update={"action": "sell", "amount_cny": "123.456"}),
+    )
+    result = _result().model_copy(update={"trades": trades})
+    rebalance = _rebalance().model_copy(update={"result": result})
+
+    html = build_digest_html(analytics=_analytics(), rebalance=rebalance, local_date=date(2026, 8, 3))
+
+    assert "预计买入金额：¥9,007,199,254,740,993.01" in html
+    assert "预计卖出金额：¥123.46" in html
+    assert "不含手续费；换汇不重复计入" in html
+
+
+def test_digest_buy_only_trade_total_has_no_sell_total() -> None:
+    html = build_digest_html(analytics=_analytics(), rebalance=_rebalance(), local_date=date(2026, 8, 3))
+
+    assert "预计买入金额：¥72.00" in html
+    assert "预计卖出金额" not in html
+
+
+def test_digest_sell_only_shows_zero_buys_and_sale_amount() -> None:
+    trade = _result().trades[0].model_copy(update={"action": "sell", "amount_cny": "123.45"})
+    result = _result().model_copy(update={"trades": (trade,)})
+    rebalance = _rebalance().model_copy(update={"result": result})
+    html = build_digest_html(analytics=_analytics(), rebalance=rebalance, local_date=date(2026, 8, 3))
+
+    assert "预计买入金额：¥0.00" in html
+    assert "预计卖出金额：¥123.45" in html
+
+
 def test_digest_html_omits_optimizer_trade_reason_column() -> None:
     optimizer_reason = "该交易用于降低投资组合的最大配置偏离。"
     trade = _result().trades[0].model_copy(
@@ -188,6 +222,7 @@ def test_digest_html_no_trades_shows_hold_copy() -> None:
     )
 
     assert "当前配置在容差内，无需调整" in html
+    assert "预计买入金额" not in html
 
 
 def _render_trade_label(

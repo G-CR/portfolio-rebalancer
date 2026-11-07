@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from html import escape
 import logging
 from zoneinfo import ZoneInfo
@@ -163,9 +163,26 @@ def build_digest_html(
                 _one_decimal(trade.quantity),
                 _money(trade.amount_cny),
             ])
-        rebalance_html = _table(
-            ["标的", "方向", "数量", "金额 (CNY)"],
-            trade_rows,
+        with localcontext() as context:
+            context.prec = 60
+            buy_total = sum(
+                (Decimal(trade.amount_cny) for trade in rebalance.result.trades if trade.action == "buy"),
+                Decimal("0"),
+            )
+            sell_trades = [trade for trade in rebalance.result.trades if trade.action == "sell"]
+            sell_total = sum(
+                (Decimal(trade.amount_cny) for trade in sell_trades), Decimal("0")
+            )
+            totals = f"<strong>预计买入金额：¥{_money(buy_total)}</strong>"
+            if sell_trades:
+                totals += f"<br><strong>预计卖出金额：¥{_money(sell_total)}</strong>"
+        rebalance_html = (
+            f'<p style="font-size:13px;line-height:1.6;">{totals}</p>'
+            '<p style="font-size:12px;color:#666;">按参考行情和汇率折算，不含手续费；换汇不重复计入。合计按未四舍五入的金额计算。</p>'
+            + _table(
+                ["标的", "方向", "数量", "金额 (CNY)"],
+                trade_rows,
+            )
         )
     elif rebalance is not None:
         rebalance_html = "<p style=\"font-size:13px;\">当前配置在容差内，无需调整。</p>"

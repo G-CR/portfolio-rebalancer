@@ -76,6 +76,11 @@
 .railGrid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); column-gap: var(--space-6); margin-top: var(--space-2); }
 .railItem { min-width: 0; }
 .tableWrap { margin-top: var(--space-4); overflow-x: auto; }
+.tradeTotals { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--space-3) var(--space-6); margin-top: var(--space-4); padding: var(--space-4); background: var(--color-ground); }
+.tradeTotals dl { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-6); margin: 0; }
+.tradeTotals dt { color: var(--color-muted); font-size: 11px; }
+.tradeTotals dd { margin: var(--space-1) 0 0; color: var(--color-ink); font-family: var(--font-data); font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.tradeTotals p { max-width: 420px; margin: 0; color: var(--color-muted); font-size: 11px; line-height: 1.5; }
 .trades table { width: 100%; min-width: 760px; border-collapse: collapse; }
 .trades th, .trades td { height: 48px; padding: 0 var(--space-3); border-bottom: 1px solid var(--color-rule); text-align: left; }
 .trades thead th { height: 34px; color: var(--color-muted); font-size: 10px; font-weight: 500; }

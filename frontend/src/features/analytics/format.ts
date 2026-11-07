@@ -25,6 +25,22 @@ function normalizedDigits(digits: number) {
   return Math.max(0, Math.trunc(digits));
 }
 
+export function sumDecimalStrings(values: readonly string[]): string {
+  const parsed = values.map((value) => {
+    const decimal = parseDecimal(value);
+    if (!decimal) throw new TypeError(`Invalid decimal: ${value}`);
+    return decimal;
+  });
+  const scale = parsed.reduce((max, value) => Math.max(max, value.scale), 0);
+  const total = parsed.reduce((sum, value) => {
+    const coefficient = value.negative ? -value.coefficient : value.coefficient;
+    return sum + coefficient * 10n ** BigInt(scale - value.scale);
+  }, 0n);
+  const magnitude = (total < 0n ? -total : total).toString().padStart(scale + 1, "0");
+  const sign = total < 0n ? "-" : "";
+  return scale ? `${sign}${magnitude.slice(0, -scale)}.${magnitude.slice(-scale)}` : `${sign}${magnitude}`;
+}
+
 function roundedCoefficient(value: ParsedDecimal, digits: number, decimalShift = 0) {
   const exponent = digits + decimalShift - value.scale;
   if (exponent >= 0) return value.coefficient * (10n ** BigInt(exponent));
