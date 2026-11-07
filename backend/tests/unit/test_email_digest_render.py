@@ -164,7 +164,8 @@ def test_digest_trade_totals_are_separate_and_rounded_after_summing() -> None:
 
     assert "预计买入金额：¥9,007,199,254,740,993.01" in html
     assert "预计卖出金额：¥123.46" in html
-    assert "不含手续费；换汇不重复计入" in html
+    assert "按参考行情和汇率折算" not in html
+    assert "再平衡建议基于当前默认约束计算" not in html
 
 
 def test_digest_buy_only_trade_total_has_no_sell_total() -> None:

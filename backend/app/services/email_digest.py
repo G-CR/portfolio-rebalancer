@@ -178,7 +178,6 @@ def build_digest_html(
                 totals += f"<br><strong>预计卖出金额：¥{_money(sell_total)}</strong>"
         rebalance_html = (
             f'<p style="font-size:13px;line-height:1.6;">{totals}</p>'
-            '<p style="font-size:12px;color:#666;">按参考行情和汇率折算，不含手续费；换汇不重复计入。合计按未四舍五入的金额计算。</p>'
             + _table(
                 ["标的", "方向", "数量", "金额 (CNY)"],
                 trade_rows,
@@ -204,7 +203,6 @@ def build_digest_html(
     {''.join(holding_sections) or '<p style="font-size:13px;">暂无持仓。</p>'}
     <h2 style="font-size:14px;margin-top:18px;">再平衡建议</h2>
     {rebalance_html}
-    <p style="margin-top:20px;color:#999;font-size:11px;">再平衡建议基于当前默认约束计算，仅供参考。</p>
   </div>
 </body>
 </html>"""
