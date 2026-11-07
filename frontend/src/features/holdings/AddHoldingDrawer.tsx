@@ -128,7 +128,7 @@ export function AddHoldingDrawer({ assetClasses, open, onClose, onCreated }: Pro
           </div>
         </section>
         <section className={styles.drawerSection}>
-          <div className={styles.sectionHeading}><span className={styles.step}>02</span><div><h3>初始成本状态</h3><p>新持仓默认从零份额、零成本开始；所有输入按十进制字符串提交。</p></div></div>
+          <div className={styles.sectionHeading}><span className={styles.step}>02</span><div><h3>初始成本状态</h3><p>可直接填写已有持仓的份额和平均成本；尚未持有时可保持为零。</p></div></div>
           <div className={styles.fieldGrid}>
             <FormField label="初始份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
             <FormField label="平均成本价" required><input type="text" inputMode="decimal" value={averageCost} onChange={(event) => setAverageCost(event.target.value)} /></FormField>

@@ -109,7 +109,8 @@ it("saves provider keys without rendering plaintext after the request", async ()
   renderWithProviders(<MarketDataPage />, {
     handlers: [
       ...pageHandlers(),
-      http.put("/api/settings/providers/tushare", async ({ request }) => {
+      http.put("/api/settings/providers/:provider", async ({ params, request }) => {
+        if (params.provider !== "tushare") return HttpResponse.json(providerSettingsFixture.find((item) => item.provider === params.provider)!);
         const payload = await request.json() as { api_key: string };
         receivedKey = payload.api_key;
         return HttpResponse.json({
@@ -125,7 +126,7 @@ it("saves provider keys without rendering plaintext after the request", async ()
 
   const provider = await screen.findByRole("group", { name: "Tushare 设置" });
   await user.type(within(provider).getByLabelText("API 密钥"), "tushare-secret-token");
-  await user.click(within(provider).getByRole("button", { name: "保存 Tushare" }));
+  await user.click(screen.getByRole("button", { name: "保存数据源设置" }));
 
   expect(await within(provider).findByText("****oken")).toBeInTheDocument();
   expect(receivedKey).toBe("tushare-secret-token");

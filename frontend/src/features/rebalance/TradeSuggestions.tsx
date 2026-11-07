@@ -13,14 +13,13 @@ export function TradeSuggestions({ trades, holdingNames }: { trades: RebalanceTr
         <dl><div><dt>预计买入金额</dt><dd>¥{formatAmount(buyTotal, 2)}</dd></div>{sellTrades.length ? <div><dt>预计卖出金额</dt><dd>¥{formatAmount(sellTotal, 2)}</dd></div> : null}</dl>
         <p>按参考行情和汇率折算，不含手续费；换汇不重复计入。合计按未四舍五入的金额计算。</p>
       </div><div className={styles.tableWrap} role="region" aria-label="再平衡建议交易表格" tabIndex={0}><table>
-        <thead><tr><th>标的</th><th>动作</th><th>建议份额</th><th>交易币种金额</th><th>人民币参考</th><th>原因</th></tr></thead>
+        <thead><tr><th>标的</th><th>动作</th><th>建议份额</th><th>交易币种金额</th><th>人民币参考</th></tr></thead>
         <tbody>{trades.map((trade, index) => <tr key={`${trade.symbol}-${trade.action}-${index}`} aria-label={`${trade.symbol} ${trade.action === "buy" ? "买入" : "卖出"}`}>
           <th scope="row" data-label="标的"><span className={styles.tradeIdentity}><strong>{trade.symbol}</strong>{holdingNames[trade.symbol] ? <small>{holdingNames[trade.symbol]}</small> : null}</span></th>
           <td data-label="动作"><strong className={trade.action === "buy" ? styles.buy : styles.sell}>{trade.action === "buy" ? "买入" : "卖出"}</strong></td>
           <td data-label="建议份额">{formatDecimal(trade.quantity, 6)}</td>
           <td data-label="交易币种金额">{formatAmount(trade.amount_trade_currency, 2)}</td>
           <td data-label="人民币参考">{formatAmount(trade.amount_cny, 2)}</td>
-          <td data-label="原因"><span className={styles.tradeReason}>{trade.reason}</span></td>
         </tr>)}</tbody>
       </table></div></>}
     </section>

@@ -1,4 +1,4 @@
-import { Check, RefreshCw } from "lucide-react";
+import { Check } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError } from "../../api/client";
@@ -11,6 +11,7 @@ import {
   usePurchasePreview,
   isStaleCostPreview,
 } from "./api";
+import { useAutomaticPreview } from "./useAutomaticPreview";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
 
@@ -52,7 +53,6 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
   const [saveDefaults, setSaveDefaults] = useState(false);
   const [note, setNote] = useState("");
   const [defaultsApplied, setDefaultsApplied] = useState(false);
-  const [previewFingerprint, setPreviewFingerprint] = useState<string | null>(null);
   const [clientError, setClientError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
@@ -85,23 +85,10 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
     save_fee_defaults: saveDefaults,
     note: note.trim() || null,
   }), [actualFee, commissionRate, feeCurrency, feeMode, fixedFee, minimumCommission, note, perShareFee, price, quantity, saveDefaults]);
-  const fingerprint = JSON.stringify(payload);
-  const stale = Boolean(previewFingerprint && previewFingerprint !== fingerprint);
-  const preview = stale ? null : previewMutation.data ?? null;
   const validInputs = Boolean(quantity && price && (feeMode === "estimated" || actualFee));
-  const canConfirm = Boolean(preview && previewIdentityMatches(preview) && !stale && !confirmMutation.isPending);
-
-  async function generatePreview() {
-    setClientError(null);
-    setSuccess(false);
-    try {
-      await previewMutation.mutateAsync(payload);
-      setPreviewFingerprint(fingerprint);
-    } catch (error) {
-      setPreviewFingerprint(null);
-      setClientError(messageFor(error));
-    }
-  }
+  const auto = useAutomaticPreview(payload, open && defaultsApplied && validInputs, previewMutation.mutateAsync);
+  const preview = auto.preview;
+  const canConfirm = Boolean(preview && previewIdentityMatches(preview) && !confirmMutation.isPending);
 
   async function confirm() {
     if (!preview || !canConfirm) return;
@@ -116,8 +103,7 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
       onUpdated?.();
     } catch (error) {
       if (isStaleCostPreview(error)) {
-        previewMutation.reset();
-        setPreviewFingerprint(null);
+        auto.invalidate();
       }
       setClientError(messageFor(error));
     }
@@ -181,11 +167,9 @@ export function PurchaseDrawer({ holding, open, onClose, onUpdated }: Props) {
           <FormField label="调整备注"><textarea value={note} onChange={(event) => setNote(event.target.value)} /></FormField>
         </section>
 
-        <button className={styles.previewButton} type="button" disabled={!validInputs || previewMutation.isPending} onClick={() => void generatePreview()}>
-          <RefreshCw size={16} aria-hidden="true" />
-          {previewMutation.isPending ? "正在计算" : "生成成本预览"}
-        </button>
-        {stale ? <p className={styles.staleNotice}>输入已变化，请重新生成成本预览</p> : null}
+        {auto.pending ? <p role="status">正在计算成本…</p> : null}
+        {auto.error ? <p className={styles.alert} role="alert">{messageFor(auto.error)}</p> : null}
+        {clientError && !preview ? <button type="button" onClick={() => { setClientError(null); auto.retry(); }}>重新预览</button> : null}
         {preview ? <CostBasisPreview preview={preview} /> : null}
       </div>
     </WorkDrawer>

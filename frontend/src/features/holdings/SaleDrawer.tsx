@@ -1,4 +1,4 @@
-import { Check, RefreshCw } from "lucide-react";
+import { Check } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { ApiError } from "../../api/client";
@@ -6,6 +6,7 @@ import type { Holding, SellPayload } from "../../api/types";
 import { FormField } from "../../components/FormField/FormField";
 import { WorkDrawer } from "../../components/WorkDrawer/WorkDrawer";
 import { isStaleCostPreview, useConfirmAdjustment, useSellPreview } from "./api";
+import { useAutomaticPreview } from "./useAutomaticPreview";
 import { CostBasisPreview, previewIdentityMatches } from "./CostBasisPreview";
 import styles from "./Holdings.module.css";
 
@@ -16,23 +17,11 @@ export function SaleDrawer({ holding, open, onClose, onUpdated }: Props) {
   const confirmMutation = useConfirmAdjustment<SellPayload>(holding.id);
   const [quantity, setQuantity] = useState("");
   const [note, setNote] = useState("");
-  const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const payload = useMemo<SellPayload>(() => ({ quantity, note: note.trim() || null }), [note, quantity]);
-  const currentFingerprint = JSON.stringify(payload);
-  const preview = fingerprint === currentFingerprint ? previewMutation.data ?? null : null;
+  const auto = useAutomaticPreview(payload, open && Boolean(quantity), previewMutation.mutateAsync);
+  const preview = auto.preview;
   const canConfirm = Boolean(preview && previewIdentityMatches(preview));
-
-  async function generate() {
-    setError(null);
-    try {
-      await previewMutation.mutateAsync(payload);
-      setFingerprint(currentFingerprint);
-    } catch (caught) {
-      setFingerprint(null);
-      setError(caught instanceof ApiError ? caught.message : "卖出调整预览失败。");
-    }
-  }
 
   async function confirm() {
     if (!preview) return;
@@ -42,9 +31,8 @@ export function SaleDrawer({ holding, open, onClose, onUpdated }: Props) {
       onUpdated?.();
     } catch (caught) {
       if (isStaleCostPreview(caught)) {
-        previewMutation.reset();
-        setFingerprint(null);
-        setError("持仓已发生变化，请重新生成卖出调整预览");
+        auto.invalidate();
+        setError("持仓已发生变化，请重新预览");
         return;
       }
       setError(caught instanceof ApiError ? caught.message : "卖出调整确认失败。");
@@ -66,8 +54,9 @@ export function SaleDrawer({ holding, open, onClose, onUpdated }: Props) {
           <FormField label="卖出份额" required><input type="text" inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></FormField>
           <FormField label="调整备注"><textarea value={note} onChange={(event) => setNote(event.target.value)} /></FormField>
         </section>
-        <button className={styles.previewButton} type="button" disabled={!quantity || previewMutation.isPending} onClick={() => void generate()}><RefreshCw size={16} aria-hidden="true" />预览卖出调整</button>
-        {fingerprint && fingerprint !== currentFingerprint ? <p className={styles.staleNotice}>输入已变化，请重新预览卖出调整</p> : null}
+        {auto.pending ? <p role="status">正在计算调整结果…</p> : null}
+        {auto.error ? <p className={styles.alert} role="alert">{auto.error instanceof Error ? auto.error.message : "预览失败，请检查输入。"}</p> : null}
+        {error && !preview ? <button type="button" onClick={() => { setError(null); auto.retry(); }}>重新预览</button> : null}
         {preview ? <CostBasisPreview preview={preview} /> : null}
       </div>
     </WorkDrawer>

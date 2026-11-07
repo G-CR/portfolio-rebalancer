@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, screen } from "@testing-library/react";
+import { act, renderHook, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import type { ReactNode } from "react";
@@ -72,4 +72,28 @@ it("whitelists settings PUT bodies when mutations receive response-shaped object
     allow_sell: rebalanceDefaultsFixture.allow_sell,
     allow_fx: rebalanceDefaultsFixture.allow_fx,
   });
+});
+
+
+it("saves multiple provider changes in the selected order with one action", async () => {
+  const requests: Array<{ provider: string; priority: number; enabled: boolean }> = [];
+  renderWithProviders(<ProviderSettings />, { handlers: [
+    http.get("/api/settings/providers", () => HttpResponse.json(providerSettingsFixture)),
+    http.get("/api/settings/general", () => HttpResponse.json(generalSettingsFixture)),
+    http.get("/api/settings/email", () => HttpResponse.json(emailSettingsFixture)),
+    http.put("/api/settings/providers/:provider", async ({ params, request }) => {
+      const body = await request.json() as { priority: number; enabled: boolean };
+      requests.push({ provider: String(params.provider), ...body });
+      return HttpResponse.json({ ...providerSettingsFixture.find((item) => item.provider === params.provider), ...body });
+    }),
+  ] });
+  const user = userEvent.setup();
+  const tushare = await screen.findByRole("group", { name: "Tushare 设置" });
+  await user.selectOptions(within(tushare).getByLabelText("优先级"), "1");
+  await user.click(within(tushare).getByRole("checkbox", { name: "启用" }));
+  await user.click(screen.getByRole("button", { name: "保存数据源设置" }));
+  expect(await screen.findByText("数据源设置已保存。")).toBeInTheDocument();
+  expect(requests).toHaveLength(providerSettingsFixture.length);
+  expect(requests[0]).toMatchObject({ provider: "tushare", priority: 1, enabled: true });
+  expect(requests.map((item) => item.priority)).toEqual([1, 2, 3, 4, 5]);
 });

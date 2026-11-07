@@ -74,7 +74,6 @@ describe("PurchaseDrawer", () => {
     await fillTransaction(user);
     await user.click(screen.getByRole("tab", { name: "录入实际费用" }));
     await user.type(screen.getByRole("textbox", { name: "实际费用" }), "2.300000000001");
-    await user.click(screen.getByRole("button", { name: "生成成本预览" }));
 
     const previewRegion = await screen.findByRole("region", { name: "成本预览" });
     expect(within(previewRegion).getByText("17.0000")).toBeInTheDocument();
@@ -84,7 +83,7 @@ describe("PurchaseDrawer", () => {
 
     await user.click(screen.getByRole("button", { name: "更新 SPY 持仓" }));
     await waitFor(() => expect(confirmBodies).toHaveLength(1));
-    expect(previewBodies[0]).toMatchObject({
+    expect(previewBodies.at(-1)).toMatchObject({
       quantity: "5.000000000001",
       price: "650.200000000001",
       actual_fee: "2.300000000001",
@@ -120,7 +119,6 @@ describe("PurchaseDrawer", () => {
     await screen.findByRole("textbox", { name: "佣金费率" });
     await fillTransaction(user);
     await user.click(screen.getByRole("checkbox", { name: "保存为 SPY 的费用默认值" }));
-    await user.click(screen.getByRole("button", { name: "生成成本预览" }));
 
     expect(await screen.findByText("预估费用 1.93 USD")).toBeInTheDocument();
     expect(body).toMatchObject({ actual_fee: null, save_fee_defaults: true });
@@ -138,11 +136,10 @@ describe("PurchaseDrawer", () => {
 
     await screen.findByRole("textbox", { name: "佣金费率" });
     await fillTransaction(user);
-    await user.click(screen.getByRole("button", { name: "生成成本预览" }));
-    expect(await screen.findByRole("button", { name: "更新 SPY 持仓" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "更新 SPY 持仓" })).toBeEnabled());
 
     await user.type(screen.getByRole("textbox", { name: "新增份额" }), "9");
-    expect(screen.getByText("输入已变化，请重新生成成本预览")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "成本预览" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "更新 SPY 持仓" })).toBeDisabled();
   });
 
@@ -161,8 +158,8 @@ describe("PurchaseDrawer", () => {
 
     await screen.findByRole("textbox", { name: "佣金费率" });
     await fillTransaction(user);
-    await user.click(screen.getByRole("button", { name: "生成成本预览" }));
-    await user.click(await screen.findByRole("button", { name: "更新 SPY 持仓" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "更新 SPY 持仓" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "更新 SPY 持仓" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("持仓已发生变化，请重新生成预览");
     expect(screen.getByRole("button", { name: "更新 SPY 持仓" })).toBeDisabled();

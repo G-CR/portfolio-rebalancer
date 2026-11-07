@@ -34,8 +34,7 @@ describe("sale, correction, and history drawers", () => {
     });
 
     await user.type(screen.getByRole("textbox", { name: "卖出份额" }), "2");
-    await user.click(screen.getByRole("button", { name: "预览卖出调整" }));
-    expect(await screen.findByRole("button", { name: "确认卖出调整" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认卖出调整" })).toBeEnabled());
     expect(screen.queryByText(/已实现|realized/i)).not.toBeInTheDocument();
   });
 
@@ -63,10 +62,10 @@ describe("sale, correction, and history drawers", () => {
     queryClient.setQueryData(costAdjustmentsQueryKey(holdingFixture.id), { items: [] });
 
     await user.type(screen.getByRole("textbox", { name: "卖出份额" }), "2");
-    await user.click(screen.getByRole("button", { name: "预览卖出调整" }));
-    await user.click(await screen.findByRole("button", { name: "确认卖出调整" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认卖出调整" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "确认卖出调整" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("持仓已发生变化，请重新生成卖出调整预览");
+    expect(await screen.findByRole("alert")).toHaveTextContent("持仓已发生变化，请重新预览");
     expect(screen.getByRole("button", { name: "确认卖出调整" })).toBeDisabled();
     expect(screen.queryByText("10.0000")).not.toBeInTheDocument();
     expect(queryClient.getQueryState(holdingsQueryKey(false))?.isInvalidated).toBe(true);
@@ -79,8 +78,7 @@ describe("sale, correction, and history drawers", () => {
 
     await user.clear(screen.getByRole("textbox", { name: "修正后份额" }));
     await user.type(screen.getByRole("textbox", { name: "修正后份额" }), "11");
-    await user.click(screen.getByRole("button", { name: "预览人工修正" }));
-    expect(screen.getByText("请填写修正原因")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "修正原因" })).toBeRequired();
     expect(screen.getByRole("button", { name: "确认人工修正" })).toBeDisabled();
     expect(screen.queryByText(/已实现|realized/i)).not.toBeInTheDocument();
   });
@@ -110,10 +108,10 @@ describe("sale, correction, and history drawers", () => {
     await user.clear(quantity);
     await user.type(quantity, "11.0000");
     await user.type(screen.getByRole("textbox", { name: "修正原因" }), "券商对账");
-    await user.click(screen.getByRole("button", { name: "预览人工修正" }));
-    await user.click(await screen.findByRole("button", { name: "确认人工修正" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认人工修正" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "确认人工修正" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("持仓已发生变化，请重新生成人工修正预览");
+    expect(await screen.findByRole("alert")).toHaveTextContent("持仓已发生变化，请重新预览");
     expect(screen.getByRole("button", { name: "确认人工修正" })).toBeDisabled();
     expect(screen.queryByText("11.0000")).not.toBeInTheDocument();
   });

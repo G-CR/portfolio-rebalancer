@@ -631,10 +631,12 @@ describe("HoldingsPage", () => {
     const user = userEvent.setup();
     let shouldFail = true;
     let created = false;
+    let createdPayload: Record<string, unknown> | null = null;
     renderWithProviders(<HoldingsPage />, { handlers: [
       http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
       http.get("/api/holdings", () => HttpResponse.json(created ? [holdingFixture] : [])),
-      http.post("/api/holdings", () => {
+      http.post("/api/holdings", async ({ request }) => {
+        createdPayload = await request.json() as Record<string, unknown>;
         if (shouldFail) {
           return HttpResponse.json({ detail: { code: "DUPLICATE_HOLDING", message: "该持仓已存在。" } }, { status: 409 });
         }
@@ -668,9 +670,14 @@ describe("HoldingsPage", () => {
     await user.type(screen.getByRole("textbox", { name: "标的名称" }), "SPDR S&P 500 ETF Trust");
     await user.selectOptions(screen.getByRole("combobox", { name: "上市市场" }), "US");
     await user.type(screen.getByRole("textbox", { name: "账户名称" }), "长期账户");
+    await user.clear(screen.getByRole("textbox", { name: "初始份额" }));
+    await user.type(screen.getByRole("textbox", { name: "初始份额" }), "3.25");
+    await user.clear(screen.getByRole("textbox", { name: "平均成本价" }));
+    await user.type(screen.getByRole("textbox", { name: "平均成本价" }), "120.50");
     shouldFail = false;
     await user.click(screen.getByRole("button", { name: "创建持仓" }));
     expect(await screen.findByText("SPY")).toBeInTheDocument();
+    expect(createdPayload).toMatchObject({ quantity: "3.25", average_cost_price: "120.50" });
 
     await user.click(screen.getByRole("button", { name: "添加持仓" }));
     expect(screen.getByRole("textbox", { name: "标的代码" })).toHaveValue("");

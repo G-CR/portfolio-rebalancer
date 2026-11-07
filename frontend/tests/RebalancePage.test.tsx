@@ -243,16 +243,6 @@ it("distinguishes current and projected allocation markers", async () => {
   expect(screen.getAllByLabelText(/预计占比/)).toHaveLength(5);
 });
 
-it("shows a reason for every sell suggestion", async () => {
-  renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
-  const user = userEvent.setup();
-
-  await user.click(await screen.findByRole("button", { name: "开始测算" }));
-
-  const sellRow = await screen.findByRole("row", { name: /SPY 卖出/ });
-  expect(within(sellRow).getByText("新增资金不足以消除高配")).toBeInTheDocument();
-});
-
 it("explains the certified drift path and net FX before execution", async () => {
   renderWithProviders(<RebalancePage />, { handlers: previewHandlers() });
   const user = userEvent.setup();
