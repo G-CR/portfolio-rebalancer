@@ -68,7 +68,7 @@ it("continues showing a background job after leaving and returning", async () =>
   expect(screen.getByLabelText("人民币")).toHaveValue("2468");
 });
 
-it("restores the last result and blocks formal actions when its inputs changed", async () => {
+it("restores the last result and warns when its inputs changed", async () => {
   renderWithProviders(<RebalancePage />, {
     handlers: [
       ...previewHandlers(),
@@ -79,8 +79,25 @@ it("restores the last result and blocks formal actions when its inputs changed",
   expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
   expect(screen.getByLabelText("人民币")).toHaveValue("2468");
   expect(screen.getByText(/上次测算结果/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "开始本次再平衡" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "保存方案" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "开始本次再平衡" })).not.toBeInTheDocument();
+});
+
+it("allows a new preview without loading or changing historical plans", async () => {
+  let planRequests = 0;
+  renderWithProviders(<RebalancePage />, {
+    handlers: [
+      ...previewHandlers(),
+      http.get("/api/rebalance/plans", () => { planRequests += 1; return HttpResponse.json({ items: [{ status: "in_progress" }] }); }),
+      http.post("/api/rebalance/preview-jobs", () => HttpResponse.json(succeededPreviewJob())),
+    ],
+  });
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "开始测算" }));
+  expect(await screen.findByText("建议执行 4 笔交易")).toBeInTheDocument();
+  expect(screen.getByLabelText("人民币")).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "开始本次再平衡" })).not.toBeInTheDocument();
+  expect(planRequests).toBe(0);
 });
 
 it("loads persisted defaults without starting a preview", async () => {
@@ -294,9 +311,9 @@ it("requires recalculation after any strategy input changes", async () => {
   await user.clear(screen.getByLabelText("人民币"));
   await user.type(screen.getByLabelText("人民币"), "30000");
 
-  expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
+  expect(screen.getByText(/参数已修改，请重新测算/)).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "重新测算" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "保存方案" })).toBeEnabled());
+  await waitFor(() => expect(screen.queryByText(/参数已修改，请重新测算/)).not.toBeInTheDocument());
 });
 
 it("has no serious accessibility violations", async () => {

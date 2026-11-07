@@ -2,24 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Calculator, RefreshCw } from "lucide-react";
 
 import { ApiError } from "../api/client";
-import type { ApiErrorDetail, RebalanceDefaultsUpdate, RebalancePlan, RebalancePreview, RebalancePreviewJobStatus, RebalancePreviewPayload } from "../api/types";
+import type { ApiErrorDetail, RebalanceDefaultsUpdate, RebalancePreview, RebalancePreviewJobStatus, RebalancePreviewPayload } from "../api/types";
 import { useAssetClasses } from "../features/assetClasses/api";
 import { useHoldings } from "../features/holdings/api";
 import { useMarketDataRefreshVersion } from "../features/marketData/api";
 import { useRebalanceDefaults, useSaveRebalanceDefaults } from "../features/settings/api";
-import {
-  useCancelRebalancePlan,
-  useCompleteRebalancePlan,
-  useCreateRebalancePlan,
-  useLatestRebalancePreviewJob,
-  useRebalancePlans,
-  useRebalancePreview,
-  useRebalancePreviewJob,
-  useStartRebalancePlan,
-} from "../features/rebalance/api";
+import { useLatestRebalancePreviewJob, useRebalancePreview, useRebalancePreviewJob } from "../features/rebalance/api";
 import { ProjectedAllocation } from "../features/rebalance/ProjectedAllocation";
 import { RebalanceInputs, type RebalanceFormState } from "../features/rebalance/RebalanceInputs";
-import { RebalanceLifecycle } from "../features/rebalance/RebalanceLifecycle";
 import { RebalanceSummary } from "../features/rebalance/RebalanceSummary";
 import { TradeSuggestions } from "../features/rebalance/TradeSuggestions";
 import styles from "../features/rebalance/Rebalance.module.css";
@@ -73,18 +63,6 @@ function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePr
   };
 }
 
-function previewFromPlan(plan: RebalancePlan): RebalancePreview {
-  return {
-    session_token: "",
-    request_token: "",
-    status: "ok",
-    data_status: plan.data_status,
-    acknowledge_stale_data: plan.data_status === "stale",
-    refresh_attempted: false,
-    result: plan.result,
-  };
-}
-
 function formFromPreviewPayload(payload: RebalancePreviewPayload): RebalanceFormState {
   return {
     availableCny: payload.available_cny,
@@ -106,8 +84,6 @@ export function RebalancePage() {
   const sessionToken = useRef(token("rebalance-session"));
   const [form, setForm] = useState(initialForm);
   const [isDirty, setIsDirty] = useState(false);
-  const [plan, setPlan] = useState<RebalancePlan | null>(null);
-  const [operationError, setOperationError] = useState<string | null>(null);
   const [defaultsWarning, setDefaultsWarning] = useState<string | null>(null);
   const [defaultsReady, setDefaultsReady] = useState(false);
   const preview = useRebalancePreview();
@@ -122,30 +98,13 @@ export function RebalancePage() {
   const restoredJobId = useRef<string | null>(null);
   const previewJob = useRebalancePreviewJob(previewJobId);
   const latestPreviewJob = useLatestRebalancePreviewJob();
-  const plans = useRebalancePlans();
   const refreshVersion = useMarketDataRefreshVersion().data;
   const observedRefreshVersion = useRef(refreshVersion);
-  const [planRestoreCompleted, setPlanRestoreCompleted] = useState(false);
   const defaults = useRebalanceDefaults();
   const saveDefaults = useSaveRebalanceDefaults();
   const defaultsHydrated = useRef(false);
   const assetClasses = useAssetClasses();
   const holdings = useHoldings();
-  const createPlan = useCreateRebalancePlan();
-  const startPlan = useStartRebalancePlan();
-  const cancelPlan = useCancelRebalancePlan();
-  const completePlan = useCompleteRebalancePlan();
-  const transitionPending = createPlan.isPending || startPlan.isPending || cancelPlan.isPending || completePlan.isPending;
-
-  useEffect(() => {
-    if (planRestoreCompleted || plans.isFetching || !plans.data) return;
-    if (!preview.data) {
-      const recoverablePlan = plans.data.items.find((item) => item.status === "in_progress") ?? null;
-      setPlan((current) => current ?? recoverablePlan);
-    }
-    setPlanRestoreCompleted(true);
-  }, [planRestoreCompleted, plans.data, plans.isFetching, preview.data]);
-
   useEffect(() => {
     if (refreshVersion === observedRefreshVersion.current) return;
     observedRefreshVersion.current = refreshVersion;
@@ -154,22 +113,20 @@ export function RebalancePage() {
     setPreviewJobId(null);
     setPreviewJobFailure(null);
     setRestoredOutdated(false);
-    setPlan((current) => current?.status === "in_progress" ? current : null);
     setIsDirty(false);
-    setOperationError(null);
     setDefaultsWarning(null);
   }, [refreshVersion]);
 
   useEffect(() => {
     if (
-      restoreHandledRef.current || !defaultsReady || !planRestoreCompleted
+      restoreHandledRef.current || !defaultsReady
       || latestPreviewJob.isFetching
       || (latestPreviewJob.data === undefined && !latestPreviewJob.isError)
     ) return;
     restoreHandledRef.current = true;
     setRestoreHandled(true);
     const job = latestPreviewJob.data;
-    if (hasSubmitted.current || plan?.status === "in_progress" || !job) return;
+    if (hasSubmitted.current || !job) return;
     if (job.payload) {
       sessionToken.current = job.payload.session_token;
       setForm(formFromPreviewPayload(job.payload));
@@ -183,7 +140,7 @@ export function RebalancePage() {
       restoredJobId.current = job.id;
       setPreviewJobId(job.id);
     }
-  }, [defaultsReady, latestPreviewJob.data, latestPreviewJob.isError, latestPreviewJob.isFetching, plan?.status, planRestoreCompleted]);
+  }, [defaultsReady, latestPreviewJob.data, latestPreviewJob.isError, latestPreviewJob.isFetching]);
 
   useEffect(() => {
     const job = previewJob.data;
@@ -219,7 +176,6 @@ export function RebalancePage() {
   }, [defaults.data, defaults.isError]);
 
   const runPreview = async (nextForm = form) => {
-    if ((!planRestoreCompleted && !plans.isError) || plan?.status === "in_progress") return;
     hasSubmitted.current = true;
     restoredJobId.current = null;
     setSubmitting(true);
@@ -227,7 +183,6 @@ export function RebalancePage() {
     setPreviewJobId(null);
     setPreviewJobFailure(null);
     setRestoredOutdated(false);
-    setOperationError(null);
     setDefaultsWarning(null);
     let defaultsSaveFailed = false;
     try {
@@ -246,62 +201,10 @@ export function RebalancePage() {
         setPreviewJobId(job.id);
       }
       if (defaultsSaveFailed) setDefaultsWarning("测算任务已提交，但默认配置保存失败。");
-      setPlan(null);
     } catch {
       // Mutation state renders the actionable API error.
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const save = async () => {
-    setOperationError(null);
-    try {
-      const saved = await createPlan.mutateAsync({
-        ...payloadFor(form, sessionToken.current),
-        idempotency_key: token("save-plan"),
-        expected_input_signature: previewResult?.input_signature ?? undefined,
-      });
-      setPlan(saved);
-      setPreviewResult(null);
-      setRestoredOutdated(false);
-      return saved;
-    } catch (error) {
-      setOperationError(error instanceof ApiError && error.code === "REBALANCE_PREVIEW_OUTDATED"
-        ? "持仓或行情已变化，请重新测算后再保存。"
-        : error instanceof Error ? error.message : "方案保存失败。");
-      return null;
-    }
-  };
-
-  const start = async () => {
-    const current = plan ?? await save();
-    if (!current) return;
-    setOperationError(null);
-    try {
-      setPlan(await startPlan.mutateAsync({ planId: current.id, idempotencyKey: token("start-plan") }));
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "方案开始失败。");
-    }
-  };
-
-  const cancel = async () => {
-    if (!plan) return;
-    setOperationError(null);
-    try {
-      setPlan(await cancelPlan.mutateAsync({ planId: plan.id, idempotencyKey: token("cancel-plan") }));
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "方案取消失败。");
-    }
-  };
-
-  const complete = async () => {
-    if (!plan) return;
-    setOperationError(null);
-    try {
-      setPlan(await completePlan.mutateAsync({ planId: plan.id, idempotencyKey: token("complete-plan") }));
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "方案完成失败。");
     }
   };
 
@@ -311,25 +214,12 @@ export function RebalancePage() {
   const generalError = previewJobError && !staleError
     ? previewJobError.message
     : (preview.error instanceof ApiError && !staleError ? preview.error.message : null);
-  const currentPreview = plan?.status === "in_progress"
-    ? previewFromPlan(plan)
-    : previewResult ?? (plan ? previewFromPlan(plan) : undefined);
-  const activePlan = plan?.status === "in_progress" ? plan : null;
-  const planLookupPending = (!planRestoreCompleted && !plans.isError) || !restoreHandled;
-  const displayedForm = activePlan ? {
-    ...form,
-    availableCny: activePlan.available_cny,
-    availableUsd: activePlan.available_usd,
-    tolerance: percentFromRatio(activePlan.tolerance),
-    allowSell: activePlan.allow_sell,
-    allowFx: activePlan.allow_fx,
-    acknowledgeStaleData: activePlan.acknowledge_stale_data,
-  } : form;
-  const displayedTolerance = activePlan?.tolerance ?? ratioFromPercent(form.tolerance);
+  const currentPreview = previewResult ?? undefined;
+  const displayedTolerance = ratioFromPercent(form.tolerance);
   const holdingNames = Object.fromEntries(
     (holdings.data ?? []).map((holding) => [holding.symbol, holding.name]),
   );
-  const lifecycleDisabled = planLookupPending || isDirty || restoredOutdated || !currentPreview || staleError || (currentPreview.data_status === "stale" && !plan && !form.acknowledgeStaleData);
+
 
   return (
     <section className={styles.page} aria-label="再平衡工作台">
@@ -338,7 +228,7 @@ export function RebalancePage() {
       </header>
       <div className={styles.workspace}>
         {!defaultsReady ? <div className={styles.defaultsLoading} role="status"><RefreshCw size={18} aria-hidden="true" />正在载入上次使用的资金与约束</div> : <>
-          <RebalanceInputs value={displayedForm} pending={submitting || preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={planLookupPending || Boolean(activePlan)} hasPreview={Boolean(currentPreview)} onChange={(next) => { if (activePlan) return; setForm(next); setIsDirty(Boolean(currentPreview)); setPlan(null); }} onSubmit={() => void runPreview()} />
+          <RebalanceInputs value={form} pending={submitting || preview.isPending || previewJob.isFetching || Boolean(previewJobId) || saveDefaults.isPending} disabled={!restoreHandled} hasPreview={Boolean(currentPreview)} onChange={(next) => { setForm(next); setIsDirty(Boolean(currentPreview)); }} onSubmit={() => void runPreview()} />
           <main className={styles.results}>
           {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
           {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
@@ -347,11 +237,11 @@ export function RebalancePage() {
           </div> : null}
           {(submitting || preview.isPending || previewJobId) && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />{previewJobMessage(previewJob.data?.status)}</div> : null}
           {staleError ? <section className={styles.stale} role="alert">
-            <AlertTriangle size={20} aria-hidden="true" /><div><h2>部分行情数据已过期</h2><p>保存正式方案前，需要明确确认使用当前旧值。重新测算后，结果会保留过期数据标记。</p><label><input type="checkbox" checked={form.acknowledgeStaleData} onChange={(event) => { setForm({ ...form, acknowledgeStaleData: event.target.checked }); setIsDirty(true); }} />我已了解数据时效风险</label></div>
+            <AlertTriangle size={20} aria-hidden="true" /><div><h2>部分行情数据已过期</h2><p>使用当前旧值测算前，需要明确确认。重新测算后，结果会保留过期数据标记。</p><label><input type="checkbox" checked={form.acknowledgeStaleData} onChange={(event) => { setForm({ ...form, acknowledgeStaleData: event.target.checked }); setIsDirty(true); }} />我已了解数据时效风险</label></div>
           </section> : null}
           {generalError ? <p className={styles.error} role="alert">{generalError}</p> : null}
-          {restoredOutdated && currentPreview ? <p className={styles.dirtyNotice}>上次测算结果仅供参考：持仓或行情已变化，请重新测算后再保存或开始方案。</p> : null}
-          {isDirty && currentPreview ? <p className={styles.dirtyNotice}>参数已修改，请重新测算后再保存或开始方案。</p> : null}
+          {restoredOutdated && currentPreview ? <p className={styles.dirtyNotice}>上次测算结果仅供参考：持仓或行情已变化，请重新测算。</p> : null}
+          {isDirty && currentPreview ? <p className={styles.dirtyNotice}>参数已修改，请重新测算。</p> : null}
           {assetClasses.isError ? <p className={styles.error} role="alert">资产类别名称载入失败。</p> : null}
           {currentPreview ? <>
             {currentPreview.data_status === "stale" ? <div className={styles.dataWarning}><AlertTriangle size={16} aria-hidden="true" />本方案使用了已确认的过期行情数据。</div> : null}
@@ -359,8 +249,6 @@ export function RebalancePage() {
             <ProjectedAllocation preview={currentPreview} assetClasses={assetClasses.data ?? []} tolerance={displayedTolerance} />
             <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} />
           </> : null}
-          {operationError ? <p className={styles.error} role="alert">{operationError}</p> : null}
-            {currentPreview || plan ? <RebalanceLifecycle plan={plan} disabled={lifecycleDisabled} pending={transitionPending} onSave={() => void save()} onStart={() => void start()} onCancel={() => void cancel()} onComplete={() => void complete()} /> : null}
           </main>
         </>}
       </div>

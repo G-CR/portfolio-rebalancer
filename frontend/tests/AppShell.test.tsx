@@ -8,7 +8,7 @@ import { FormField } from "../src/components/FormField/FormField";
 import type { MarketDataCollection } from "../src/api/types";
 import { formatDataTime } from "../src/features/analytics/format";
 import { RebalancePage } from "../src/pages/RebalancePage";
-import { assetClassFixtures, holdingFixture, marketDataCollectionFixture, rebalanceDefaultsFixture, rebalancePlanFixture, rebalancePreviewFixture } from "./fixtures";
+import { assetClassFixtures, holdingFixture, marketDataCollectionFixture, rebalanceDefaultsFixture, rebalancePreviewFixture } from "./fixtures";
 import { renderWithProviders } from "./testProviders";
 
 const mobileQuery = "(max-width: 760px)";
@@ -254,15 +254,12 @@ describe("AppShell", () => {
           http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
           http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
           http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
-          http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
         ],
       },
     );
 
     await user.click(await screen.findByRole("button", { name: "开始测算" }));
     await screen.findByText("建议执行 4 笔交易");
-    await user.click(screen.getByRole("button", { name: "保存方案" }));
-    await screen.findByText("方案已保存，尚未开始");
 
     await user.click(screen.getByRole("button", { name: "刷新" }));
 
@@ -270,88 +267,6 @@ describe("AppShell", () => {
     expect(screen.queryByText("建议执行 4 笔交易")).not.toBeInTheDocument();
     expect(screen.queryByText("方案已保存，尚未开始")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "保存方案" })).not.toBeInTheDocument();
-  });
-
-  it("keeps an in-progress rebalance available after a topbar market refresh", async () => {
-    installMatchMedia(false);
-    const user = userEvent.setup();
-    renderWithProviders(
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route path="rebalance" element={<RebalancePage />} />
-        </Route>
-      </Routes>,
-      {
-        route: "/rebalance",
-        handlers: [
-          http.get("/api/market-data", () => HttpResponse.json(marketDataCollectionFixture)),
-          http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
-          http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
-          http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
-          http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
-          http.get("/api/rebalance/plans", () => HttpResponse.json({ items: [] })),
-          http.post("/api/rebalance/preview", () => HttpResponse.json(rebalancePreviewFixture)),
-          http.post("/api/rebalance/plans", () => HttpResponse.json(rebalancePlanFixture, { status: 201 })),
-          http.post(`/api/rebalance/plans/${rebalancePlanFixture.id}/start`, () => HttpResponse.json({
-            ...rebalancePlanFixture,
-            status: "in_progress",
-            before_snapshot_id: "30000000-0000-4000-8000-000000000010",
-          })),
-        ],
-      },
-    );
-
-    await user.click(await screen.findByRole("button", { name: "开始测算" }));
-    await screen.findByText("建议执行 4 笔交易");
-    await user.click(screen.getByRole("button", { name: "开始本次再平衡" }));
-    await screen.findByText("再平衡进行中");
-
-    await user.click(screen.getByRole("button", { name: "刷新" }));
-
-    expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: "再平衡执行清单" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "完成再平衡并建立新基准" })).toBeEnabled();
-  });
-
-  it("waits for delayed plan restoration even when market refresh finishes first", async () => {
-    installMatchMedia(false);
-    const user = userEvent.setup();
-    let resolvePlans!: (response: Response) => void;
-    const delayedPlans = new Promise<Response>((resolve) => { resolvePlans = resolve; });
-    renderWithProviders(
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route path="rebalance" element={<RebalancePage />} />
-        </Route>
-      </Routes>,
-      {
-        route: "/rebalance",
-        handlers: [
-          http.get("/api/market-data", () => HttpResponse.json(marketDataCollectionFixture)),
-          http.post("/api/market-data/refresh", () => HttpResponse.json(marketDataCollectionFixture)),
-          http.get("/api/asset-classes", () => HttpResponse.json(assetClassFixtures)),
-          http.get("/api/holdings", () => HttpResponse.json([holdingFixture])),
-          http.get("/api/settings/rebalance-defaults", () => HttpResponse.json(rebalanceDefaultsFixture)),
-          http.get("/api/rebalance/plans", () => delayedPlans),
-        ],
-      },
-    );
-
-    expect(await screen.findByRole("button", { name: "开始测算" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "刷新" }));
-    await act(async () => {
-      resolvePlans(HttpResponse.json({
-        items: [{
-          ...rebalancePlanFixture,
-          status: "in_progress",
-          tolerance: "0.02",
-          before_snapshot_id: "30000000-0000-4000-8000-000000000010",
-        }],
-      }));
-    });
-
-    expect(await screen.findByText("再平衡进行中")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "完成再平衡并建立新基准" })).toBeEnabled();
   });
 
   it("links to data sources when refresh fails without discarding cached status", async () => {
