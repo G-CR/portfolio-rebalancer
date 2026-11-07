@@ -112,6 +112,8 @@ it("loads persisted defaults without starting a preview", async () => {
   expect(screen.getByRole("checkbox", { name: /允许卖出/ })).not.toBeChecked();
   expect(screen.getByRole("checkbox", { name: /允许换汇/ })).not.toBeChecked();
   expect(screen.getByText("人民币与美元可按需要双向净换汇")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "保存方案" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "开始本次再平衡" })).not.toBeInTheDocument();
   expect(previewRequests).toBe(0);
 });
 
@@ -190,7 +192,7 @@ it("waits for an explicit command before the first preview", async () => {
   const user = userEvent.setup();
 
   await waitFor(() => expect(screen.getByRole("button", { name: "开始测算" })).toBeEnabled());
-  expect(screen.getByText("配置本次资金与约束后开始测算")).toBeInTheDocument();
+  expect(screen.getByText("填写本次资金和约束条件后开始测算")).toBeInTheDocument();
   expect(previewRequests).toBe(0);
 
   await user.click(screen.getByRole("button", { name: "开始测算" }));
@@ -280,7 +282,7 @@ it("requires stale-data acknowledgement before saving", async () => {
   await user.click(await screen.findByRole("button", { name: "开始测算" }));
 
   expect(await screen.findByText("部分行情数据已过期")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "保存方案" })).not.toBeInTheDocument();
 });
 
 it("requires recalculation after any strategy input changes", async () => {

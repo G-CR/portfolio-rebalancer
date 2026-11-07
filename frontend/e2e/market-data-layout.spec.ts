@@ -15,6 +15,14 @@ test("provider controls align and effective-value row rules stay level", async (
   );
   expect(Math.max(...providerBottoms) - Math.min(...providerBottoms)).toBeLessThanOrEqual(2);
 
+  for (const name of ["priority", "credential", "status", "actions"]) {
+    const positions = await page.locator(`[data-provider-cell="${name}"]`).evaluateAll((elements) =>
+      elements.map((element) => element.getBoundingClientRect().left),
+    );
+    expect(positions).toHaveLength(5);
+    expect(Math.max(...positions) - Math.min(...positions)).toBeLessThanOrEqual(1);
+  }
+
   const row = page.getByRole("row", { name: /SPY/ });
   const rowCells = row.locator("th, td");
   const rowBottoms = await rowCells.evaluateAll((elements) =>

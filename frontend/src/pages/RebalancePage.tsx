@@ -343,7 +343,7 @@ export function RebalancePage() {
           {defaults.isError ? <p className={styles.defaultsWarning}>默认配置载入失败，当前使用内置默认值。</p> : null}
           {defaultsWarning ? <p className={styles.defaultsWarning}>{defaultsWarning}</p> : null}
           {!submitting && !preview.isPending && !previewJobId && !currentPreview && !preview.error && !previewJobError ? <div className={styles.previewPrompt}>
-            <Calculator size={18} aria-hidden="true" /><div><strong>配置本次资金与约束后开始测算</strong><span>行情刷新将在你点击开始测算后执行。</span></div>
+            <Calculator size={18} aria-hidden="true" /><div><strong>填写本次资金和约束条件后开始测算</strong><span>点击开始测算后，系统会刷新行情。</span></div>
           </div> : null}
           {(submitting || preview.isPending || previewJobId) && !currentPreview ? <div className={styles.loading} role="status"><RefreshCw size={18} aria-hidden="true" />{previewJobMessage(previewJob.data?.status)}</div> : null}
           {staleError ? <section className={styles.stale} role="alert">
@@ -360,7 +360,7 @@ export function RebalancePage() {
             <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} />
           </> : null}
           {operationError ? <p className={styles.error} role="alert">{operationError}</p> : null}
-            <RebalanceLifecycle plan={plan} disabled={lifecycleDisabled} pending={transitionPending} onSave={() => void save()} onStart={() => void start()} onCancel={() => void cancel()} onComplete={() => void complete()} />
+            {currentPreview || plan ? <RebalanceLifecycle plan={plan} disabled={lifecycleDisabled} pending={transitionPending} onSave={() => void save()} onStart={() => void start()} onCancel={() => void cancel()} onComplete={() => void complete()} /> : null}
           </main>
         </>}
       </div>

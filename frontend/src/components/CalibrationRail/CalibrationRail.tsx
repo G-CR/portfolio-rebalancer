@@ -15,7 +15,7 @@ type CalibrationRailProps = {
 
 type MarkerKind = "actual" | "planned";
 
-const HALF_RANGE = 4;
+const MIN_HALF_RANGE = 4;
 
 const markerLabels: Record<MarkerKind, string> = {
   actual: "实际",
@@ -31,31 +31,28 @@ function formatDeviation(value: number) {
   return `${normalized >= 0 ? "+" : ""}${normalized.toFixed(1)}pp`;
 }
 
-function markerPosition(value: number, target: number) {
-  const raw = ((value - (target - HALF_RANGE)) / (HALF_RANGE * 2)) * 100;
+function markerPosition(value: number, target: number, halfRange: number) {
+  const raw = ((value - (target - halfRange)) / (halfRange * 2)) * 100;
   return Math.min(100, Math.max(0, raw));
 }
 
-function overflowSide(value: number, target: number) {
-  if (value < target - HALF_RANGE) return "left";
-  if (value > target + HALF_RANGE) return "right";
+function overflowSide(value: number, target: number, halfRange: number) {
+  if (value < target - halfRange) return "left";
+  if (value > target + halfRange) return "right";
   return undefined;
 }
 
 function toleranceDescription(inputTolerance: number, displayedTolerance: number, inputText?: string) {
   const displayed = displayedTolerance.toFixed(1);
   const input = inputText ?? inputTolerance.toFixed(1);
-  if (inputTolerance > HALF_RANGE) {
-    return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${input} 个百分点超出可见刻度，已按正负 ${displayed} 个百分点显示`;
-  }
   if (inputTolerance < 0) {
     return `允许偏离目标正负 ${displayed} 个百分点；输入值 ${input} 个百分点已按 ${displayed} 个百分点显示`;
   }
   return `允许偏离目标正负 ${input} 个百分点`;
 }
 
-function Marker({ kind, value, target, valueText }: { kind: MarkerKind; value: number; target: number; valueText?: string }) {
-  const side = overflowSide(value, target);
+function Marker({ kind, value, target, halfRange, valueText }: { kind: MarkerKind; value: number; target: number; halfRange: number; valueText?: string }) {
+  const side = overflowSide(value, target, halfRange);
   const label = markerLabels[kind];
   const testId = `${kind}-marker`;
   const overflowLabel = side
@@ -65,7 +62,7 @@ function Marker({ kind, value, target, valueText }: { kind: MarkerKind; value: n
   return (
     <span
       className={`${styles.marker} ${styles[kind]} ${side ? styles.overflow : ""}`}
-      style={{ left: `${markerPosition(value, target)}%` }}
+      style={{ left: `${markerPosition(value, target, halfRange)}%` }}
       data-testid={testId}
       aria-label={overflowLabel}
     >
@@ -87,10 +84,11 @@ export function CalibrationRail({
   deviationText,
   toleranceValueText,
 }: CalibrationRailProps) {
-  const toleranceWidth = Math.min(HALF_RANGE, Math.max(0, tolerance));
+  const toleranceWidth = Math.max(0, tolerance);
+  const halfRange = Math.max(MIN_HALF_RANGE, Math.ceil(toleranceWidth * 10) / 10);
   const toleranceText = toleranceDescription(tolerance, toleranceWidth, toleranceValueText);
-  const bandLeft = markerPosition(target - toleranceWidth, target);
-  const bandRight = markerPosition(target + toleranceWidth, target);
+  const bandLeft = markerPosition(target - toleranceWidth, target, halfRange);
+  const bandRight = markerPosition(target + toleranceWidth, target, halfRange);
 
   return (
     <article className={styles.calibration} aria-label={`${assetName}资产校准尺`}>
@@ -103,9 +101,9 @@ export function CalibrationRail({
       </header>
 
       <div className={styles.scaleLabels} aria-hidden="true">
-        <span>{formatDeviation(-HALF_RANGE)}</span>
+        <span>{formatDeviation(-halfRange)}</span>
         <span>目标</span>
-        <span>{formatDeviation(HALF_RANGE)}</span>
+        <span>{formatDeviation(halfRange)}</span>
       </div>
       <div className={styles.rail}>
         <span
@@ -116,11 +114,11 @@ export function CalibrationRail({
           data-testid="tolerance-band"
         />
         <span className={styles.targetLine} aria-hidden="true" />
-        <Marker kind="actual" value={actual} target={target} valueText={actualText} />
-        {planned === undefined ? null : <Marker kind="planned" value={planned} target={target} valueText={plannedText} />}
+        <Marker kind="actual" value={actual} target={target} halfRange={halfRange} valueText={actualText} />
+        {planned === undefined ? null : <Marker kind="planned" value={planned} target={target} halfRange={halfRange} valueText={plannedText} />}
       </div>
 
-      <p className={styles.toleranceDescription}>{toleranceText}</p>
+      {tolerance < 0 ? <p className={styles.toleranceDescription}>{toleranceText}</p> : null}
 
       <div className={styles.values} aria-label="校准值">
         <div className={styles.valueActual}>

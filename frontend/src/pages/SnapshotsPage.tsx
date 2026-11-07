@@ -18,9 +18,8 @@ import { PageError } from "./PageState";
 
 const metrics: { id: SnapshotMetric; label: string }[] = [
   { id: "market", label: "核心池市值" },
-  { id: "cost", label: "人民币参考成本" },
+  { id: "cost", label: "参考成本" },
   { id: "pnl", label: "浮动盈亏" },
-  { id: "actual_weight", label: "实际占比" },
 ];
 const EVENT_PAGE_SIZE = 10;
 

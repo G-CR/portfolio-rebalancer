@@ -25,7 +25,7 @@ export function DecisionBanner({ decision }: { decision: PortfolioDecision }) {
     <section className={styles.decision} data-status={decision.status} aria-labelledby="decision-title">
       <Icon size={22} aria-hidden="true" />
       <div className={styles.decisionCopy}>
-        <p>当前行动判断</p>
+        <p>操作建议</p>
         <h2 id="decision-title">{decision.title}</h2>
         <span>{decision.reason}</span>
       </div>

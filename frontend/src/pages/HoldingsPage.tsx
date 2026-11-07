@@ -103,7 +103,7 @@ export function HoldingsPage() {
       {!showArchived && activeCount === 0 ? (
         <div className={styles.emptyState}>
           <strong>尚未添加持仓</strong>
-          <p>先记录一个标的及其初始成本状态，再维护买入、卖出和修正。</p>
+          <p>先添加持仓和初始成本，再记录买入、卖出或修正。</p>
           <button type="button" onClick={() => { setNotice(null); setAddOpen(true); }}><Plus size={16} aria-hidden="true" />添加第一个持仓</button>
         </div>
       ) : null}

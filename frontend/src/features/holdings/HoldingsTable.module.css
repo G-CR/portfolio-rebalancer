@@ -45,6 +45,10 @@
 .detailActions { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; gap: var(--space-1); padding: var(--space-2) var(--space-2) 0; }
 .priorityMarket { text-align: right; }
 .actions { display: flex; justify-content: flex-end; gap: var(--space-1); }
+@media (min-width: 760px) {
+  .table th.desktopActionsColumn, .table td.desktopActionsColumn { position: sticky; right: 0; z-index: 2; background: var(--color-surface); box-shadow: -1px 0 var(--color-rule); }
+  .table tr[data-archived="true"] td.desktopActionsColumn { background: linear-gradient(rgb(24 34 29 / 3%), rgb(24 34 29 / 3%)), var(--color-surface); }
+}
 .iconButton { display: inline-grid; width: 32px; min-height: 32px; place-items: center; padding: 0; border: 1px solid var(--color-rule); border-radius: 2px; background: var(--color-surface); cursor: pointer; }
 .addButton { border-color: var(--color-actual); color: var(--color-actual); }
 .portalMenu { position: fixed; z-index: 40; display: grid; width: 142px; padding: var(--space-1); border: 1px solid var(--color-rule); background: var(--color-surface); box-shadow: 0 8px 20px rgb(24 34 29 / 12%); }
@@ -65,13 +69,16 @@
 }
 @media (max-width: 759px) {
   .table { min-width: 360px; }
+  .table colgroup { display: none; }
   .secondaryColumn, .costColumn { display: none; }
   .table th:nth-child(2),
   .table th:nth-child(3),
   .table th:nth-child(5),
   .table th:nth-child(6),
-  .table th:nth-child(7),
-  .table th:nth-child(8) { display: none; }
+  .table th:nth-child(7) { display: none; }
+  .table th:first-child { width: 34%; }
+  .table th:nth-child(4) { width: 20%; }
+  .table th:nth-child(8), .table th:nth-child(9) { width: 23%; }
   .accountCol, .currencyCol, .costPriceCol, .currentPriceCol, .currentFxCol { width: 0; visibility: collapse; }
   .desktopActionsColumn { display: none; }
   .table th, .table td { padding-inline: var(--space-1); }

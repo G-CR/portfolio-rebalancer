@@ -17,7 +17,7 @@ export type AppRoute = {
 };
 
 export const APP_ROUTES: AppRoute[] = [
-  { path: "/", label: "总览", description: "核对组合偏离、配置比例与当前行动判断。", icon: Gauge },
+  { path: "/", label: "总览", description: "查看组合偏离、配置比例和操作建议。", icon: Gauge },
   { path: "/allocation", label: "资产配置", description: "维护核心资产类别、目标比例与启用顺序。", icon: Settings2 },
   { path: "/holdings", label: "持仓与成本", description: "维护份额、平均成本价与调整记录。", icon: TableProperties },
   { path: "/analysis", label: "盈亏分析", description: "查看原币盈亏与人民币参考盈亏。", icon: BarChart3 },

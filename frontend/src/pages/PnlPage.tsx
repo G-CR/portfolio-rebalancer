@@ -43,7 +43,7 @@ export function PnlPage() {
         <div><p>P&amp;L ANALYSIS</p><h2 id="pnl-title">盈亏分析</h2><span>当前持仓，不含已实现盈亏；人民币金额按当前汇率折算，仅供参考。</span></div>
       </header>
       <dl className={styles.metrics}>
-        <div><dt>人民币参考成本</dt><dd>{formatAmount(data.cost_cny, 2)}<small>CNY</small></dd></div>
+        <div><dt>参考成本</dt><dd>{formatAmount(data.cost_cny, 2)}<small>CNY</small></dd></div>
         <div><dt>当前市值</dt><dd>{formatAmount(data.market_value_cny, 2)}<small>CNY</small></dd></div>
         <div><dt>浮动盈亏</dt><dd className={totalPnlState.className}><em>{totalPnlState.label}</em>{formatSignedAmount(data.unrealized_pnl)}<small>{formatPercent(data.unrealized_return, 2)}</small></dd></div>
       </dl>

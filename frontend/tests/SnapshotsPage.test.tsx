@@ -144,11 +144,22 @@ function LocationProbe() {
 }
 
 describe("SnapshotsPage", () => {
+  it("does not offer an allocation chart, even for a selected asset class", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SnapshotsPage />, { handlers: handlers() });
+    await screen.findByRole("button", { name: "核心池市值" });
+    expect(screen.queryByRole("button", { name: "实际占比" })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("资产类别"), "标普 500");
+    await waitFor(() => expect(screen.getByLabelText("资产类别")).toHaveValue("标普 500"));
+    expect(screen.queryByRole("button", { name: "实际占比" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "核心池市值" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("presents snapshot metrics accurately and never calls them portfolio return", async () => {
     renderWithProviders(<SnapshotsPage />, { handlers: handlers() });
 
     expect(await screen.findByRole("button", { name: "核心池市值" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "人民币参考成本" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "参考成本" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "浮动盈亏" })).toBeInTheDocument();
     expect(screen.queryByText("组合收益率")).not.toBeInTheDocument();
     expect(screen.getByText("快照时点状态，不代表精确组合回报")).toBeInTheDocument();

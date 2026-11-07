@@ -266,10 +266,10 @@ describe("AppShell", () => {
 
     await user.click(screen.getByRole("button", { name: "刷新" }));
 
-    expect(await screen.findByText("配置本次资金与约束后开始测算")).toBeInTheDocument();
+    expect(await screen.findByText("填写本次资金和约束条件后开始测算")).toBeInTheDocument();
     expect(screen.queryByText("建议执行 4 笔交易")).not.toBeInTheDocument();
     expect(screen.queryByText("方案已保存，尚未开始")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "保存方案" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "保存方案" })).not.toBeInTheDocument();
   });
 
   it("keeps an in-progress rebalance available after a topbar market refresh", async () => {

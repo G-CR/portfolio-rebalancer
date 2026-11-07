@@ -5,7 +5,7 @@ import styles from "./Analytics.module.css";
 export function PortfolioMetrics({ portfolio }: { portfolio: PortfolioAnalytics }) {
   const metrics = [
     ["核心池市值", formatAmount(portfolio.market_value_cny)],
-    ["人民币参考成本", formatAmount(portfolio.cost_cny, 0)],
+    ["参考成本", formatAmount(portfolio.cost_cny, 0)],
     ["浮动盈亏", formatSignedAmount(portfolio.unrealized_pnl, 0)],
   ];
   return (

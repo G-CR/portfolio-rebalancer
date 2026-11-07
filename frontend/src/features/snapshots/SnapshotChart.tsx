@@ -2,21 +2,19 @@ import { ReferenceArea, ReferenceDot, Line, LineChart, CartesianGrid, Responsive
 
 import type { SnapshotSummary } from "../../api/types";
 import { normalizeDecimalSeries } from "../analytics/chartScale";
-import { formatAmount, formatPercent, formatSignedAmount } from "../analytics/format";
+import { formatAmount, formatSignedAmount } from "../analytics/format";
 import { formatSnapshotDate } from "./dateTime";
 import styles from "./Snapshots.module.css";
 
 export type SnapshotMetric =
   | "market"
   | "cost"
-  | "pnl"
-  | "actual_weight";
+  | "pnl";
 
-const metricConfig: Record<SnapshotMetric, { key: keyof SnapshotSummary; label: string; percent?: boolean; signed?: boolean }> = {
+const metricConfig: Record<SnapshotMetric, { key: keyof SnapshotSummary; label: string; signed?: boolean }> = {
   market: { key: "total_market_value_cny", label: "核心池市值" },
-  cost: { key: "total_cost_value_cny", label: "人民币参考成本" },
+  cost: { key: "total_cost_value_cny", label: "参考成本" },
   pnl: { key: "total_unrealized_pnl_cny", label: "浮动盈亏", signed: true },
-  actual_weight: { key: "actual_weight", label: "实际占比", percent: true },
 };
 
 function metricValue(snapshot: SnapshotSummary, metric: SnapshotMetric) {
@@ -49,9 +47,7 @@ export function SnapshotChart({ items, metric }: { items: SnapshotSummary[]; met
     }
   }
   const config = metricConfig[metric];
-  const format = (value: string) => config.percent
-    ? formatPercent(value, 2)
-    : config.signed ? formatSignedAmount(value, 2) : formatAmount(value, 2);
+  const format = (value: string) => config.signed ? formatSignedAmount(value, 2) : formatAmount(value, 2);
 
   return (
     <section className={styles.chartSection} aria-labelledby="snapshot-chart-title">
