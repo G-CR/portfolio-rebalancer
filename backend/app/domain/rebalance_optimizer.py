@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import (
     ROUND_CEILING,
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 OPTIMIZATION_EPSILON = Decimal("0.0001")
 NODE_BUDGET = 250_000
+CONTRIBUTION_SEARCH_SECONDS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +85,7 @@ class CertifiedPlan:
     best_open_lower_bound: Decimal
     optimality_gap: Decimal
     explored_nodes: int
+    certified: bool = True
 
 
 class OptimizationFailure(RuntimeError):
@@ -711,6 +713,7 @@ def continuous_relaxation(
     allow_sell: bool,
     allow_fx: bool,
     lot_bounds: tuple[tuple[int, int], ...] | None = None,
+    minimum_contribution_cny: Decimal = Decimal("0"),
 ) -> ContinuousBound:
     """Return a conservative minimax bound and a deterministic relaxed guide."""
     asset_tuple = tuple(assets)
@@ -728,7 +731,7 @@ def continuous_relaxation(
         ordered_assets = tuple(entry[0] for entry in ordered_entries)
         ordered_explicit_bounds = tuple(entry[1] for entry in ordered_entries)
 
-    decimal_inputs = [cash.cny, cash.usd, cash.usd_cny]
+    decimal_inputs = [cash.cny, cash.usd, cash.usd_cny, minimum_contribution_cny]
     for asset in ordered_assets:
         decimal_inputs.extend(
             (
@@ -783,6 +786,8 @@ def continuous_relaxation(
             resolved_bounds,
             allow_fx=allow_fx,
         )
+        if minimum_contribution_cny:
+            zero_total_lots = None
         zero_total_max_drift = (
             max(target_weights) if zero_total_lots is not None else None
         )
@@ -843,6 +848,12 @@ def continuous_relaxation(
                 Decimal("0"),
             )
         minimum_invested_total = sum(minimum_values, Decimal("0"))
+
+        if minimum_contribution_cny:
+            minimum_invested_total = max(
+                minimum_invested_total,
+                sum(current_by_currency.values()) + minimum_contribution_cny,
+            )
 
         if minimum_invested_total > maximum_invested_total:
             return _infeasible_continuous_bound(minimum_values, resolved_bounds)
@@ -1056,6 +1067,7 @@ def _seed_incumbent(
     root_bound: ContinuousBound,
     *,
     allow_fx: bool,
+    rank: Callable[[CandidatePlan], tuple[Decimal, PlanScore]] | None = None,
 ) -> CandidatePlan:
     roundings = tuple(
         _guide_lot_roundings(asset, guide_value, lot_bound)
@@ -1083,11 +1095,12 @@ def _seed_incumbent(
             neighboring_vector[index] = neighboring_lots
             add_seed(tuple(neighboring_vector))
 
+    rank_candidate = rank or (lambda candidate: (Decimal("0"), score_candidate(candidate)))
     incumbent: CandidatePlan | None = None
     for lot_counts in lot_vectors:
         candidate = _candidate_from_lots(assets, cash, lot_counts, allow_fx=allow_fx)
         if candidate is not None and (
-            incumbent is None or score_candidate(candidate) < score_candidate(incumbent)
+            incumbent is None or rank_candidate(candidate) < rank_candidate(incumbent)
         ):
             incumbent = candidate
     if incumbent is None:
@@ -1131,10 +1144,11 @@ def optimize_discrete(
     allow_sell: bool,
     allow_fx: bool,
     deadline: float | None = None,
+    minimum_contribution_cny: Decimal = Decimal("0"),
 ) -> CertifiedPlan:
     """Return a deterministic executable plan with a certified drift gap."""
     ordered_assets = tuple(sorted(assets, key=_asset_key))
-    decimal_inputs = [cash.cny, cash.usd, cash.usd_cny]
+    decimal_inputs = [cash.cny, cash.usd, cash.usd_cny, minimum_contribution_cny]
     for asset in ordered_assets:
         decimal_inputs.extend(
             (
@@ -1154,6 +1168,9 @@ def optimize_discrete(
                 explored_nodes=0,
                 gap=Decimal("0"),
             )
+        if minimum_contribution_cny:
+            contribution_deadline = monotonic() + CONTRIBUTION_SEARCH_SECONDS
+            deadline = contribution_deadline if deadline is None else min(deadline, contribution_deadline)
         root_bound = continuous_relaxation(
             ordered_assets,
             cash,
@@ -1161,55 +1178,112 @@ def optimize_discrete(
             allow_fx=allow_fx,
         )
         incumbent = _seed_incumbent(ordered_assets, cash, root_bound, allow_fx=allow_fx)
+
+        def score(candidate: CandidatePlan) -> tuple[Decimal, PlanScore]:
+            net_buy = candidate.total_traded_cny - 2 * candidate.total_sale_cny
+            shortfall = (
+                max(Decimal("0"), minimum_contribution_cny - net_buy)
+                if minimum_contribution_cny else Decimal("0")
+            )
+            return shortfall, score_candidate(candidate)
+
+        def lower_bound_shortfall(lot_bounds: tuple[tuple[int, int], ...]) -> Decimal:
+            if not minimum_contribution_cny:
+                return Decimal("0")
+            limits = {"CNY": Decimal("0"), "USD": Decimal("0")}
+            for asset, (_, upper) in zip(ordered_assets, lot_bounds, strict=True):
+                limits[asset.currency] += upper * _lot_value(asset)
+            usd_budget = cash.usd * cash.usd_cny
+            if allow_fx:
+                upper_net_buy = min(sum(limits.values()), cash.cny + usd_budget)
+            else:
+                upper_net_buy = min(limits["CNY"], cash.cny) + min(limits["USD"], usd_budget)
+            return max(Decimal("0"), minimum_contribution_cny - upper_net_buy)
+
+        if minimum_contribution_cny:
+            floor_guide = continuous_relaxation(
+                ordered_assets, cash, allow_sell=allow_sell, allow_fx=allow_fx,
+                minimum_contribution_cny=minimum_contribution_cny,
+            )
+            if floor_guide.max_drift.is_finite():
+                seed = _seed_incumbent(
+                    ordered_assets, cash, floor_guide, allow_fx=allow_fx, rank=score,
+                )
+                if score(seed) < score(incumbent):
+                    incumbent = seed
+
+            # Complete the relaxed seed with affordable lots before the bounded
+            # search refines it. Small USD lots can use cash left by CNY rounding.
+            for index in sorted(range(len(ordered_assets)), key=lambda i: _lot_value(ordered_assets[i])):
+                shortfall = score(incumbent)[0]
+                if shortfall == 0:
+                    break
+                lots = list(incumbent.lot_counts)
+                available_lots = root_bound.lot_bounds[index][1] - lots[index]
+                needed_lots = int((shortfall / _lot_value(ordered_assets[index])).to_integral_value(rounding=ROUND_CEILING))
+                left, right = 1, min(available_lots, needed_lots)
+                while left <= right:
+                    count = (left + right) // 2
+                    trial = lots.copy()
+                    trial[index] += count
+                    candidate = _candidate_from_lots(
+                        ordered_assets, cash, tuple(trial), allow_fx=allow_fx
+                    )
+                    if candidate is None:
+                        right = count - 1
+                    else:
+                        incumbent = candidate
+                        left = count + 1
+
         heap: list[
             tuple[
-                PlanScore,
+                tuple[Decimal, PlanScore],
                 tuple[tuple[int, int], ...],
                 _SearchNode,
             ]
         ] = []
 
         def push_node(lot_bounds: tuple[tuple[int, int], ...]) -> None:
+            shortfall = lower_bound_shortfall(lot_bounds)
+            if shortfall > score(incumbent)[0]:
+                return
             bound = continuous_relaxation(
                 ordered_assets,
                 cash,
                 allow_sell=allow_sell,
                 allow_fx=allow_fx,
                 lot_bounds=lot_bounds,
+                minimum_contribution_cny=(
+                    minimum_contribution_cny if score(incumbent)[0] == 0 else Decimal("0")
+                ),
             )
             if bound.max_drift.is_infinite():
                 return
             node = _SearchNode(lot_bounds, bound)
-            heappush(heap, (_optimistic_score(bound), lot_bounds, node))
+            heappush(heap, ((shortfall, _optimistic_score(bound)), lot_bounds, node))
 
         push_node(root_bound.lot_bounds)
         explored_nodes = 0
         while heap:
-            if deadline is not None and monotonic() >= deadline:
+            timed_out = deadline is not None and monotonic() >= deadline
+            if timed_out or explored_nodes == NODE_BUDGET:
                 best_open_bound = min(node.bound.max_drift for _, _, node in heap)
                 gap = max(Decimal("0"), incumbent.max_drift - best_open_bound)
-                raise OptimizationFailure(
-                    "REBALANCE_OPTIMIZATION_TIMEOUT", explored_nodes, gap
-                )
-            if explored_nodes == NODE_BUDGET:
-                best_open_bound = min(node.bound.max_drift for _, _, node in heap)
-                gap = max(Decimal("0"), incumbent.max_drift - best_open_bound)
-                raise OptimizationFailure(
-                    "REBALANCE_OPTIMIZATION_UNCERTIFIED", explored_nodes, gap
-                )
+                if minimum_contribution_cny:
+                    return CertifiedPlan(incumbent, best_open_bound, gap, explored_nodes, certified=False)
+                code = "REBALANCE_OPTIMIZATION_TIMEOUT" if timed_out else "REBALANCE_OPTIMIZATION_UNCERTIFIED"
+                raise OptimizationFailure(code, explored_nodes, gap)
 
             optimistic_score, _, node = heappop(heap)
             explored_nodes += 1
-            if optimistic_score >= score_candidate(incumbent):
+            if optimistic_score >= score(incumbent):
                 continue
             if node.is_singleton:
                 lot_counts = tuple(lower for lower, _ in node.lot_bounds)
                 candidate = _candidate_from_lots(
                     ordered_assets, cash, lot_counts, allow_fx=allow_fx
                 )
-                if candidate is not None and score_candidate(
-                    candidate
-                ) < score_candidate(incumbent):
+                if candidate is not None and score(candidate) < score(incumbent):
                     incumbent = candidate
             else:
                 left, right = _split_node(node, ordered_assets)

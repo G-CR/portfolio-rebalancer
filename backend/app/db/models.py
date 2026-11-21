@@ -433,6 +433,10 @@ class Setting(Base):
         default=utcnow,
         onupdate=utcnow,
     )
+    rebalance_minimum_contribution_cny: Mapped[Decimal] = mapped_column(
+        Numeric(28, 12), nullable=False, server_default="0"
+    )
+
 
 
 class EncryptedSecret(Base):

@@ -184,9 +184,22 @@ def build_digest_html(
             )
         )
     elif rebalance is not None:
-        rebalance_html = "<p style=\"font-size:13px;\">当前配置在容差内，无需调整。</p>"
+        rebalance_html = "<p style=\"font-size:13px;\">本次测算无建议交易。</p>"
     else:
         rebalance_html = "<p style=\"font-size:13px;\">再平衡建议暂不可用。</p>"
+
+    if rebalance is not None and Decimal(rebalance.result.minimum_contribution_cny) > 0:
+        result = rebalance.result
+        rebalance_html = (
+            f'<p style="font-size:13px;">最低净投入 ¥{_money(result.minimum_contribution_cny)}'
+            f' · 预计净投入 ¥{_money(result.net_contribution_cny)}'
+            + (
+                f' · 尚差 ¥{_money(result.contribution_shortfall_cny)}'
+                if Decimal(result.contribution_shortfall_cny) > 0 else ' · 已达到下限'
+            )
+            + ('' if result.optimization_certified else ' · 尚未确认最优性')
+            + '</p>' + rebalance_html
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">

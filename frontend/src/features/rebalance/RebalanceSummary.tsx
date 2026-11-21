@@ -17,6 +17,8 @@ function netFxText(direction: RebalancePreview["result"]["net_fx_direction"], am
 
 export function RebalanceSummary({ preview }: { preview: RebalancePreview }) {
   const result = preview.result;
+  const minimum = result.minimum_contribution_cny ?? "0";
+  const shortfall = result.contribution_shortfall_cny ?? "0";
   const before = formatPercentagePoints(result.max_drift_before, 2);
   const buyOnly = formatPercentagePoints(result.buy_only_max_drift, 2);
   const after = formatPercentagePoints(result.max_drift_after, 2);
@@ -27,7 +29,7 @@ export function RebalanceSummary({ preview }: { preview: RebalancePreview }) {
     : `最大偏离变化：测算前 ${before}，最终 ${after}`;
   const certificationAccessibleText = result.optimization_certified
     ? `优化器认证：已在 ${precision} 精度内认证；最优性差距 ${optimalityGap}`
-    : "历史方案未经过新优化器认证";
+    : "方案可供参考，尚未确认最优性";
 
   return (
     <section className={styles.summary} aria-label="再平衡方案摘要" data-feasible={result.feasible}>
@@ -52,13 +54,17 @@ export function RebalanceSummary({ preview }: { preview: RebalancePreview }) {
         <div className={styles.summaryFacts}>
           <div className={styles.certification} role="status" aria-label={certificationAccessibleText} data-certified={result.optimization_certified}>
             {result.optimization_certified ? <ShieldCheck size={17} aria-hidden="true" /> : <CircleAlert size={17} aria-hidden="true" />}
-            {result.optimization_certified ? <p><strong>{`已在 ${precision} 精度内认证`}</strong><small>{`最优性差距 ${optimalityGap}`}</small></p> : <p><strong>历史方案未经过新优化器认证</strong></p>}
+            {result.optimization_certified ? <p><strong>{`已在 ${precision} 精度内认证`}</strong><small>{`最优性差距 ${optimalityGap}`}</small></p> : <p><strong>方案可供参考，尚未确认最优性</strong></p>}
           </div>
           <p className={styles.netFx}>{netFxText(result.net_fx_direction, result.net_fx_amount_cny)}</p>
-          <dl className={styles.remainingCash}>
+          {Number(minimum) > 0 && <p className={styles.netFx}>
+            {`最低净投入 ¥${formatAmount(minimum, 2)} · 预计净投入 ¥${formatAmount(result.net_contribution_cny ?? "0", 2)}`}
+            {Number(shortfall) > 0 ? ` · 尚差 ¥${formatAmount(shortfall, 2)}` : " · 已达到下限"}
+          </p>}
+          {result.trades.length === 0 && <dl className={styles.remainingCash}>
             <div><dt>剩余人民币</dt><dd>¥{formatAmount(result.remaining_cny, 0)}</dd></div>
             <div><dt>剩余美元</dt><dd>${formatAmount(result.remaining_usd, 2)}</dd></div>
-          </dl>
+          </dl>}
         </div>
       </div>
     </section>

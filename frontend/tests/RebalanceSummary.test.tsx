@@ -77,7 +77,7 @@ it("labels historical results that lack optimizer certification", () => {
     optimization_certified: false,
   })} />);
 
-  expect(screen.getByText("历史方案未经过新优化器认证")).toBeInTheDocument();
-  expect(screen.getByRole("status", { name: "历史方案未经过新优化器认证" })).toBeInTheDocument();
+  expect(screen.getByText("方案可供参考，尚未确认最优性")).toBeInTheDocument();
+  expect(screen.getByRole("status", { name: "方案可供参考，尚未确认最优性" })).toBeInTheDocument();
   expect(screen.queryByText(/精度内认证/)).not.toBeInTheDocument();
 });

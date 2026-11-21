@@ -566,12 +566,16 @@ def test_rebalance_options_and_result_expose_the_minimax_contract() -> None:
         "tolerance",
         "allow_sell",
         "allow_fx",
+        "minimum_contribution_cny",
     }
     assert set(RebalanceResult.__dataclass_fields__) == {
         "feasible",
         "max_drift_before",
         "max_drift_after",
         "buy_only_max_drift",
+        "minimum_contribution_cny",
+        "net_contribution_cny",
+        "contribution_shortfall_cny",
         "optimization_precision",
         "optimization_certified",
         "optimality_gap",
@@ -629,3 +633,31 @@ def test_rebalance_rejects_duplicate_classes_symbols_and_invalid_weights() -> No
             valid_cash,
             options,
         )
+
+
+@pytest.mark.parametrize(
+    ("budget", "floor", "expected_net", "shortfall"),
+    [("100", "0", "0", "0"), ("100", "45", "50", "0"), ("45", "60", "40", "20")],
+)
+def test_minimum_contribution_prioritizes_feasible_net_buy(budget, floor, expected_net, shortfall):
+    asset = _asset("core", "CORE", "CNY", "100", "1", "10")
+    result = rebalance(
+        (asset,), CashInput(Decimal(budget), Decimal("0"), Decimal("7")),
+        RebalanceOptions(Decimal("0.02"), False, False, Decimal(floor)),
+    )
+    assert result.net_contribution_cny == Decimal(expected_net)
+    assert result.contribution_shortfall_cny == Decimal(shortfall)
+    assert result.remaining_cny == Decimal(budget) - Decimal(expected_net)
+
+
+def test_limited_contribution_search_returns_executable_uncertified_plan(monkeypatch):
+    monkeypatch.setattr("app.domain.rebalance_optimizer.CONTRIBUTION_SEARCH_SECONDS", 0)
+    asset = _asset("core", "CORE", "CNY", "100", "1", "10")
+    result = rebalance(
+        (asset,), CashInput(Decimal("100"), Decimal("0"), Decimal("7")),
+        RebalanceOptions(Decimal("0.02"), False, False, Decimal("45")),
+    )
+    assert result.net_contribution_cny == Decimal("50")
+    assert result.contribution_shortfall_cny == 0
+    assert result.remaining_cny == Decimal("50")
+    assert not result.optimization_certified

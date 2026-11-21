@@ -352,6 +352,7 @@ def _preview_source() -> tuple[dict[str, list[dict[str, object]]], str]:
         "allow_fx": True,
         "rebalance_available_cny": "0.000000000000",
         "rebalance_available_usd": "0.000000000000",
+        "rebalance_minimum_contribution_cny": "0.000000000000",
         "email_enabled": True,
         "email_recipient": "synthetic@example.test",
         "email_smtp_host": "smtp.example.test",

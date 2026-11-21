@@ -147,7 +147,7 @@ def test_digest_html_contains_summary_holdings_and_trades() -> None:
     assert "3.0" in html
     assert "100.0" in html
     assert "账户A" not in html
-    assert "当前配置在容差内" not in html
+    assert "本次测算无建议交易" not in html
 
 
 def test_digest_trade_totals_are_separate_and_rounded_after_summing() -> None:
@@ -222,7 +222,7 @@ def test_digest_html_no_trades_shows_hold_copy() -> None:
         local_date=date(2026, 8, 3),
     )
 
-    assert "当前配置在容差内，无需调整" in html
+    assert "本次测算无建议交易" in html
     assert "预计买入金额" not in html
 
 

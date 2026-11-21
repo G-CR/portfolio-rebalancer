@@ -96,6 +96,7 @@ export function useSaveRebalanceDefaults() {
       const request: RebalanceDefaultsUpdate = {
         available_cny: payload.available_cny,
         available_usd: payload.available_usd,
+        minimum_contribution_cny: payload.minimum_contribution_cny,
         tolerance: payload.tolerance,
         allow_sell: payload.allow_sell,
         allow_fx: payload.allow_fx,

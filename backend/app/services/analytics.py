@@ -356,7 +356,7 @@ def _decision(
 
     if max_drift <= tolerance:
         status = "hold"
-        title = "保持现状"
+        title = "配置在目标区间内"
         reason = f"全部资产仍在 ±{tolerance_pp} 个百分点策略区间内。"
         primary_action = "simulate_contribution"
     elif max_overweight <= tolerance:

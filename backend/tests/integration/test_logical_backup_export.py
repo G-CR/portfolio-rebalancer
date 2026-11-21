@@ -379,6 +379,7 @@ async def _seed_complete_logical_state(
             allow_fx=True,
             rebalance_available_cny=Decimal("1000.123456789012"),
             rebalance_available_usd=Decimal("200.123456789012"),
+            rebalance_minimum_contribution_cny=Decimal("10000"),
             email_enabled=True,
             email_recipient="synthetic@example.test",
             email_smtp_host="smtp.example.test",

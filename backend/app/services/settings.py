@@ -201,6 +201,8 @@ async def update_rebalance_defaults(
 ) -> RebalanceDefaultsResponse:
     setting = await _get_setting(session, lock=True)
     setting.rebalance_available_cny = payload.available_cny
+    if "minimum_contribution_cny" in payload.model_fields_set:
+        setting.rebalance_minimum_contribution_cny = payload.minimum_contribution_cny
     setting.rebalance_available_usd = payload.available_usd
     setting.default_tolerance = payload.tolerance
     setting.allow_sell = payload.allow_sell
@@ -275,6 +277,7 @@ def _rebalance_defaults_response(setting: Setting) -> RebalanceDefaultsResponse:
     return RebalanceDefaultsResponse(
         available_cny=setting.rebalance_available_cny,
         available_usd=setting.rebalance_available_usd,
+        minimum_contribution_cny=setting.rebalance_minimum_contribution_cny,
         tolerance=setting.default_tolerance,
         minimum_trade_cny=setting.minimum_trade_amount_cny,
         allow_sell=setting.allow_sell,

@@ -87,7 +87,7 @@ export const portfolioFixture = {
   overseas_weight: "0.524000000000",
   decision: {
     status: "hold",
-    title: "保持现状",
+    title: "配置在目标区间内",
     reason: "全部资产仍在 ±2.0 个百分点策略区间内。",
     max_drift: "0.01800000",
     primary_action: "simulate_contribution",

@@ -143,6 +143,7 @@ def _source() -> dict[str, list[dict[str, Any]]]:
         "minimum_trade_amount_cny": "100.000000000000", "allow_sell": True,
         "allow_fx": True, "rebalance_available_cny": "0.000000000000",
         "rebalance_available_usd": "0.000000000000",
+        "rebalance_minimum_contribution_cny": "0.000000000000",
         "email_enabled": True, "email_recipient": "synthetic@example.test",
         "email_smtp_host": "smtp.example.test", "email_smtp_port": 465,
         "email_smtp_security": "ssl", "email_smtp_username": "synthetic@example.test",

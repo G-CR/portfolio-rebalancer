@@ -646,7 +646,7 @@ async def test_downgrade_0003_refuses_duplicate_holding_identity_without_changes
         state = await _holding_migration_state()
         rows = {row["id"]: row for row in state["rows"]}
 
-        assert state["revision"] == "20261104_0012"
+        assert state["revision"] == "20261121_0013"
         assert "uq_holdings_active_symbol_account_name" in state["indexes"]
         assert "uq_holdings_symbol_account_name" not in state["constraints"]
         assert rows[archived_id] == {
@@ -736,7 +736,7 @@ async def test_downgrade_0003_restores_global_identity_constraint_for_compatible
         await _run_alembic_upgrade("head")
 
     restored_state = await _holding_migration_state()
-    assert restored_state["revision"] == "20261104_0012"
+    assert restored_state["revision"] == "20261121_0013"
 
 
 async def test_fx_attribution_drop_recomputes_snapshot_reference_cost(

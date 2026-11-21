@@ -34,11 +34,13 @@ class RebalancePreviewRequest(BaseModel):
     allow_sell: bool | None = None
     allow_fx: bool | None = None
     tolerance: DecimalString | None = None
+    minimum_contribution_cny: DecimalString = Decimal("0")
     acknowledge_stale_data: bool = False
 
     @field_validator(
         "available_cny",
         "available_usd",
+        "minimum_contribution_cny",
         "tolerance",
     )
     @classmethod
@@ -136,6 +138,9 @@ class RebalanceResultResponse(BaseModel):
     max_drift_before: DecimalString
     max_drift_after: DecimalString
     buy_only_max_drift: DecimalString
+    minimum_contribution_cny: DecimalString = Decimal("0")
+    contribution_shortfall_cny: DecimalString = Decimal("0")
+    net_contribution_cny: DecimalString = Decimal("0")
     optimization_precision: DecimalString
     optimization_certified: bool
     optimality_gap: DecimalString

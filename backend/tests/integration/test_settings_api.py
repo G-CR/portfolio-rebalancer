@@ -21,6 +21,7 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
         "available_usd": "0",
         "tolerance": "0.02",
         "minimum_trade_cny": "675",
+        "minimum_contribution_cny": "0",
         "allow_sell": True,
         "allow_fx": True,
         "updated_at": None,
@@ -38,6 +39,7 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
         "/api/settings/rebalance-defaults",
         json={
             "available_cny": "12000.50",
+            "minimum_contribution_cny": "10000",
             "available_usd": "800.25",
             "tolerance": "0.035",
             "allow_sell": False,
@@ -75,6 +77,7 @@ async def test_rebalance_defaults_round_trip_and_share_general_constraints(
     assert fetched.json()["available_usd"] == "800.25"
     assert fetched.json()["tolerance"] == "0.01"
     assert fetched.json()["minimum_trade_cny"] == "675"
+    assert fetched.json()["minimum_contribution_cny"] == "10000"
     assert fetched.json()["allow_sell"] is True
     assert fetched.json()["allow_fx"] is True
     assert stored.rebalance_available_cny == Decimal("12000.5")

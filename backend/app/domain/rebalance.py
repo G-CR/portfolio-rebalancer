@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal, localcontext
 from typing import Literal
 
@@ -125,9 +125,11 @@ class RebalanceOptions:
     tolerance: Decimal
     allow_sell: bool
     allow_fx: bool
+    minimum_contribution_cny: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         _require_nonnegative("tolerance", self.tolerance)
+        _require_nonnegative("minimum_contribution_cny", self.minimum_contribution_cny)
         if self.tolerance > 1:
             raise ValueError("tolerance must not exceed 1")
 
@@ -156,6 +158,9 @@ class RebalanceResult:
     max_drift_before: Decimal
     max_drift_after: Decimal
     buy_only_max_drift: Decimal
+    minimum_contribution_cny: Decimal
+    contribution_shortfall_cny: Decimal
+    net_contribution_cny: Decimal
     optimization_precision: Decimal
     optimization_certified: bool
     optimality_gap: Decimal
@@ -253,7 +258,7 @@ def rebalance(
     if len(symbols) != len(set(symbols)):
         raise ValueError("duplicate symbol")
 
-    decimal_values = [cash.cny, cash.usd, cash.usd_cny, options.tolerance]
+    decimal_values = [cash.cny, cash.usd, cash.usd_cny, options.tolerance, options.minimum_contribution_cny]
     for item in asset_list:
         decimal_values.extend(
             (
@@ -286,17 +291,36 @@ def rebalance(
             allow_sell=False,
             allow_fx=options.allow_fx,
             deadline=deadline,
+            minimum_contribution_cny=options.minimum_contribution_cny,
         )
         selected = buy_only
         sell_phase_used = False
         if options.allow_sell and buy_only.candidate.max_drift > options.tolerance:
-            selected = optimize_discrete(
+            sell_plan = optimize_discrete(
                 asset_list,
                 cash,
                 allow_sell=True,
                 allow_fx=options.allow_fx,
                 deadline=deadline,
+                minimum_contribution_cny=options.minimum_contribution_cny,
             )
+            # An interrupted search must not replace a better feasible buy-only plan.
+            if not sell_plan.certified:
+                def rank(plan):
+                    candidate = plan.candidate
+                    net_buy = candidate.total_traded_cny - 2 * candidate.total_sale_cny
+                    return (
+                        max(Decimal("0"), options.minimum_contribution_cny - net_buy),
+                        score_candidate(candidate),
+                    )
+
+                if rank(buy_only) < rank(sell_plan):
+                    sell_plan = replace(
+                        sell_plan,
+                        candidate=buy_only.candidate,
+                        optimality_gap=max(Decimal("0"), buy_only.candidate.max_drift - sell_plan.best_open_lower_bound),
+                    )
+            selected = sell_plan
             sell_phase_used = True
 
         candidate = selected.candidate
@@ -384,8 +408,14 @@ def rebalance(
             max_drift_before=max(original_drifts, default=Decimal("0")),
             max_drift_after=candidate.max_drift,
             buy_only_max_drift=buy_only.candidate.max_drift,
+            minimum_contribution_cny=options.minimum_contribution_cny,
+            net_contribution_cny=final_total - original_total,
+            contribution_shortfall_cny=(
+                max(Decimal("0"), options.minimum_contribution_cny - (final_total - original_total))
+                if options.minimum_contribution_cny else Decimal("0")
+            ),
             optimization_precision=OPTIMIZATION_EPSILON,
-            optimization_certified=True,
+            optimization_certified=selected.certified,
             optimality_gap=selected.optimality_gap,
             sell_phase_used=sell_phase_used,
             net_fx_direction=net_fx_direction,

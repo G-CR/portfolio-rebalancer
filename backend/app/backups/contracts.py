@@ -163,8 +163,9 @@ TABLE_CONTRACTS = (
             "rebalance_available_usd", "email_enabled",
             "email_recipient", "email_smtp_host", "email_smtp_port", "email_smtp_security",
             "email_smtp_username", "email_from", "created_at", "updated_at",
+            "rebalance_minimum_contribution_cny",
         ),
-        (U, I, I, J, D, D, B, B, D, D, B, SN, SN, I, S, SN, SN, DT, DT),
+        (U, I, I, J, D, D, B, B, D, D, B, SN, SN, I, S, SN, SN, DT, DT, D),
     ),
 )
 

@@ -130,11 +130,18 @@ def _v2_to_v3(member: str, row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _v3_to_v4(member: str, row: dict[str, Any]) -> dict[str, Any]:
+    if member == "data/settings.json":
+        row.setdefault("rebalance_minimum_contribution_cny", "0.000000000000")
+    return row
+
+
 # Each entry upgrades exactly one version.  Current-version archives need no
 # transform; older versions are streamed through these ordered row transforms.
 MIGRATIONS: dict[int, Migration] = {
     1: lambda member, row: row,
     2: _v2_to_v3,
+    3: _v3_to_v4,
 }
 
 

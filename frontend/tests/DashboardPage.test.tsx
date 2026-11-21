@@ -12,7 +12,7 @@ describe("DashboardPage", () => {
       handlers: [http.get("/api/analytics/portfolio", () => HttpResponse.json(portfolioFixture))],
     });
 
-    const decision = await screen.findByRole("heading", { name: "保持现状" });
+    const decision = await screen.findByRole("heading", { name: "配置在目标区间内" });
     const value = screen.getByText("1,268,420");
     expect(decision.compareDocumentPosition(value) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByLabelText(/资产校准尺$/)).toHaveLength(5);

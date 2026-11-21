@@ -17,6 +17,7 @@ import styles from "../features/rebalance/Rebalance.module.css";
 const initialForm: RebalanceFormState = {
   availableCny: "0",
   availableUsd: "0",
+  minimumContributionCny: "0",
   tolerance: "2",
   allowSell: true,
   allowFx: true,
@@ -44,6 +45,7 @@ function defaultsPayloadFor(form: RebalanceFormState): RebalanceDefaultsUpdate {
   return {
     available_cny: form.availableCny || "0",
     available_usd: form.availableUsd || "0",
+    minimum_contribution_cny: form.minimumContributionCny || "0",
     tolerance: ratioFromPercent(form.tolerance),
     allow_sell: form.allowSell,
     allow_fx: form.allowFx,
@@ -56,6 +58,7 @@ function payloadFor(form: RebalanceFormState, sessionToken: string): RebalancePr
     request_token: token("preview"),
     available_cny: form.availableCny || "0",
     available_usd: form.availableUsd || "0",
+    minimum_contribution_cny: form.minimumContributionCny || "0",
     allow_sell: form.allowSell,
     allow_fx: form.allowFx,
     tolerance: ratioFromPercent(form.tolerance),
@@ -67,6 +70,7 @@ function formFromPreviewPayload(payload: RebalancePreviewPayload): RebalanceForm
   return {
     availableCny: payload.available_cny,
     availableUsd: payload.available_usd,
+    minimumContributionCny: payload.minimum_contribution_cny ?? "0",
     tolerance: percentFromRatio(payload.tolerance),
     allowSell: payload.allow_sell,
     allowFx: payload.allow_fx,
@@ -166,6 +170,7 @@ export function RebalancePage() {
       setForm({
         availableCny: defaults.data.available_cny,
         availableUsd: defaults.data.available_usd,
+        minimumContributionCny: defaults.data.minimum_contribution_cny ?? "0",
         tolerance: percentFromRatio(defaults.data.tolerance),
         allowSell: defaults.data.allow_sell,
         allowFx: defaults.data.allow_fx,
@@ -247,7 +252,7 @@ export function RebalancePage() {
             {currentPreview.data_status === "stale" ? <div className={styles.dataWarning}><AlertTriangle size={16} aria-hidden="true" />本方案使用了已确认的过期行情数据。</div> : null}
             <RebalanceSummary preview={currentPreview} />
             <ProjectedAllocation preview={currentPreview} assetClasses={assetClasses.data ?? []} tolerance={displayedTolerance} />
-            <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} />
+            <TradeSuggestions trades={currentPreview.result.trades} holdingNames={holdingNames} remaining={{ cny: currentPreview.result.remaining_cny, usd: currentPreview.result.remaining_usd }} />
           </> : null}
           </main>
         </>}

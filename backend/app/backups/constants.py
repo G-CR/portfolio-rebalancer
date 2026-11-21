@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-CURRENT_FORMAT_VERSION = 3
+CURRENT_FORMAT_VERSION = 4
 
 MANIFEST_MEMBER = "manifest.json"
 CREDENTIALS_MEMBER = "credentials.json"

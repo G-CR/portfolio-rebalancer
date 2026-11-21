@@ -388,7 +388,7 @@ async def test_decision_uses_configured_tolerance_without_mutating_holdings(
     hold_response = await api_client.get("/api/analytics/portfolio")
     assert hold_response.status_code == 200
     assert hold_response.json()["decision"]["status"] == "hold"
-    assert hold_response.json()["decision"]["title"] == "保持现状"
+    assert hold_response.json()["decision"]["title"] == "配置在目标区间内"
 
     await db_session.execute(update(Setting).values(default_tolerance=Decimal("0.000000000001")))
     await db_session.execute(

@@ -225,7 +225,7 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         "minimum_trade_cny", "acknowledge_stale_data", "holding_versions",
         "market_data_record_ids",
     }
-    optional_summary = {"asset_class_targets", "resolved_constraints"}
+    optional_summary = {"asset_class_targets", "resolved_constraints", "minimum_contribution_cny"}
     if (
         not isinstance(summary, dict)
         or not required_summary.issubset(summary)
@@ -246,6 +246,8 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
         if summary[field] is not None and _decimal(summary[field]) < 0:
             raise _Incompatible
     if summary["tolerance"] is not None and _decimal(summary["tolerance"]) > 1:
+        raise _Incompatible
+    if _decimal(summary.get("minimum_contribution_cny", "0")) < 0:
         raise _Incompatible
     versions = summary["holding_versions"]
     if not isinstance(versions, dict):
@@ -322,7 +324,9 @@ def _rebalance_shapes(row: dict[str, JsonValue]) -> None:
             return None
         if set(value) == legacy_result_keys:
             return "legacy"
-        if set(value) == current_result_keys:
+        if set(value) in (current_result_keys, current_result_keys | {
+            "minimum_contribution_cny", "contribution_shortfall_cny", "net_contribution_cny",
+        }):
             return "current"
         return None
 
@@ -417,7 +421,7 @@ def _validate_scalars(member: str, row: dict[str, JsonValue]) -> None:
             raise _Incompatible
         if not 1 <= int(row["email_smtp_port"]) <= 65535:
             raise _Incompatible
-        for field in ("default_tolerance", "minimum_trade_amount_cny", "rebalance_available_cny", "rebalance_available_usd"):
+        for field in ("default_tolerance", "minimum_trade_amount_cny", "rebalance_available_cny", "rebalance_available_usd", "rebalance_minimum_contribution_cny"):
             if _decimal(row[field]) < 0:
                 raise _Incompatible
         if _decimal(row["default_tolerance"]) > 1:

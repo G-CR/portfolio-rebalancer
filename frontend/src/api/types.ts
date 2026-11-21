@@ -325,6 +325,7 @@ export interface ConfirmAdjustmentRequest<TPayload> {
 export type RebalanceDataStatus = "valid" | "stale" | "manual";
 
 export interface RebalancePreviewPayload {
+  minimum_contribution_cny?: DecimalString;
   session_token: string;
   request_token: string;
   available_cny: DecimalString;
@@ -359,6 +360,9 @@ export interface RebalanceResult {
   max_drift_before: DecimalString;
   max_drift_after: DecimalString;
   buy_only_max_drift: DecimalString;
+  minimum_contribution_cny?: DecimalString;
+  contribution_shortfall_cny?: DecimalString;
+  net_contribution_cny?: DecimalString;
   optimization_precision: DecimalString;
   optimization_certified: boolean;
   optimality_gap: DecimalString;
@@ -469,6 +473,7 @@ export interface GeneralSettingsUpdate {
 }
 
 export interface RebalanceDefaults {
+  minimum_contribution_cny?: DecimalString;
   available_cny: DecimalString;
   available_usd: DecimalString;
   tolerance: DecimalString;
@@ -479,6 +484,7 @@ export interface RebalanceDefaults {
 }
 
 export interface RebalanceDefaultsUpdate {
+  minimum_contribution_cny?: DecimalString;
   available_cny: DecimalString;
   available_usd: DecimalString;
   tolerance: DecimalString;

@@ -17,7 +17,7 @@ it("hides drift and FX facts for a hold decision", async () => {
     handlers: [http.get("/api/analytics/portfolio", () => HttpResponse.json(portfolioFixture))],
   });
 
-  await screen.findByRole("heading", { name: "保持现状" });
+  await screen.findByRole("heading", { name: "配置在目标区间内" });
 
   expect(screen.queryByText("最大偏离")).not.toBeInTheDocument();
   expect(screen.queryByText("汇率贡献")).not.toBeInTheDocument();
@@ -44,7 +44,7 @@ it("shows facts and its action for a contribute decision", async () => {
 });
 
 it.each([
-  ["dashboard", <DashboardPage />, "保持现状"],
+  ["dashboard", <DashboardPage />, "配置在目标区间内"],
   ["P&L", <PnlPage />, "盈亏分析"],
 ])("has no serious axe violations in the %s page", async (_name, page, heading) => {
   renderWithProviders(page, {

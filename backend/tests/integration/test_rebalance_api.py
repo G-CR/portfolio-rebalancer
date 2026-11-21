@@ -679,6 +679,7 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
         "allow_fx": True,
         "tolerance": "0.05",
         "minimum_trade_cny": None,
+        "minimum_contribution_cny": "0",
         "acknowledge_stale_data": False,
         "holding_versions": created["holding_versions"],
         "market_data_record_ids": created["market_data_record_ids"],
@@ -701,11 +702,15 @@ async def test_create_plan_persists_exact_preview_contract_and_supports_list_det
     legacy_input_summary = dict(plan.input_summary)
     legacy_input_summary.pop("resolved_constraints")
     legacy_input_summary.pop("asset_class_targets")
+    legacy_input_summary.pop("minimum_contribution_cny")
     legacy_input_summary["minimum_trade_cny"] = "275"
     plan.input_summary = legacy_input_summary
     legacy_projected = dict(plan.projected_result)
     legacy_result = dict(legacy_projected["result"])
     for field in (
+        "minimum_contribution_cny",
+        "net_contribution_cny",
+        "contribution_shortfall_cny",
         "buy_only_max_drift",
         "optimization_precision",
         "optimization_certified",

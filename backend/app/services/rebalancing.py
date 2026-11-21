@@ -494,6 +494,7 @@ async def _prepare_rebalance(
         effective_inputs=context["effective_inputs"],
         available_cny=payload.available_cny,
         available_usd=payload.available_usd,
+        minimum_contribution_cny=payload.minimum_contribution_cny,
         tolerance=resolved_constraints.tolerance,
         allow_sell=resolved_constraints.allow_sell,
         allow_fx=resolved_constraints.allow_fx,
@@ -795,6 +796,7 @@ def _run_engine(
     allow_sell: bool,
     allow_fx: bool,
     optimization_deadline: float | None = None,
+    minimum_contribution_cny: Decimal = Decimal("0"),
 ) -> RebalanceResult:
     holdings_by_class: dict[UUID, list[Holding]] = defaultdict(list)
     for holding in holdings:
@@ -850,6 +852,7 @@ def _run_engine(
             CashInput(cny=available_cny, usd=available_usd, usd_cny=usd_cny),
             RebalanceOptions(
                 tolerance=tolerance,
+                minimum_contribution_cny=minimum_contribution_cny,
                 allow_sell=allow_sell,
                 allow_fx=allow_fx,
             ),
@@ -877,6 +880,9 @@ def _serialize_result(result: RebalanceResult) -> RebalanceResultResponse:
         max_drift_before=result.max_drift_before,
         max_drift_after=result.max_drift_after,
         buy_only_max_drift=result.buy_only_max_drift,
+        minimum_contribution_cny=result.minimum_contribution_cny,
+        contribution_shortfall_cny=result.contribution_shortfall_cny,
+        net_contribution_cny=result.net_contribution_cny,
         optimization_precision=result.optimization_precision,
         optimization_certified=result.optimization_certified,
         optimality_gap=result.optimality_gap,
@@ -955,6 +961,7 @@ async def preview_rebalance_with_defaults(session: AsyncSession) -> RebalancePre
         request_token=uuid4().hex,
         available_cny=setting.rebalance_available_cny,
         available_usd=setting.rebalance_available_usd,
+        minimum_contribution_cny=setting.rebalance_minimum_contribution_cny,
         allow_sell=setting.allow_sell,
         allow_fx=setting.allow_fx,
         tolerance=setting.default_tolerance,

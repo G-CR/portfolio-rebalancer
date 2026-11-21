@@ -98,6 +98,7 @@ class RebalanceDefaultsUpdate(BaseModel):
 
     available_cny: DecimalString
     available_usd: DecimalString
+    minimum_contribution_cny: DecimalString = Decimal("0")
     tolerance: DecimalString
     allow_sell: bool
     allow_fx: bool
@@ -105,6 +106,7 @@ class RebalanceDefaultsUpdate(BaseModel):
     @field_validator(
         "available_cny",
         "available_usd",
+        "minimum_contribution_cny",
         "tolerance",
     )
     @classmethod
@@ -130,6 +132,7 @@ class RebalanceDefaultsResponse(RebalanceDefaultsUpdate):
     @field_serializer(
         "available_cny",
         "available_usd",
+        "minimum_contribution_cny",
         "tolerance",
         "minimum_trade_cny",
     )

@@ -149,7 +149,7 @@ def track_temporary_snapshots(
 
 
 def test_current_constants_freeze_exact_archive_limits_and_members() -> None:
-    assert CURRENT_FORMAT_VERSION == 3
+    assert CURRENT_FORMAT_VERSION == 4
     assert MAX_COMPRESSED_BYTES == 500 * 1024 * 1024
     assert MAX_UNCOMPRESSED_BYTES == 2 * 1024 * 1024 * 1024
     assert MAX_AGGREGATE_COMPRESSION_RATIO == 100
